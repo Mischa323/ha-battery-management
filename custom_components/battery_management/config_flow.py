@@ -64,7 +64,7 @@ from .const import (
     DOMAIN,
 )
 from .discovery import match_unit_entities
-from .validate import validate_unit
+from .validate import validate_shadow, validate_unit
 
 _SENSOR = selector.EntitySelector(selector.EntitySelectorConfig(domain="sensor"))
 _SELECT = selector.EntitySelector(selector.EntitySelectorConfig(domain="select"))
@@ -377,15 +377,20 @@ class BatteryManagementOptionsFlow(OptionsFlow):
     async def async_step_shadow(
         self, user_input: dict | None = None
     ) -> ConfigFlowResult:
-        if user_input is not None:
-            merged = {**self._entry.options}
-            merged.pop(CONF_BATTERY_POWER_SENSOR, None)
-            merged.update(user_input)
-            return self.async_create_entry(title="", data=merged)
-
         defaults = {**self._entry.data, **self._entry.options}
+        errors: dict[str, str] = {}
+
+        if user_input is not None:
+            errors = validate_shadow(user_input, defaults.get(CONF_GRID_POWER))
+            if not errors:
+                merged = {**self._entry.options}
+                merged.pop(CONF_BATTERY_POWER_SENSOR, None)
+                merged.update(user_input)
+                return self.async_create_entry(title="", data=merged)
+            defaults = {**defaults, **user_input}
+
         return self.async_show_form(
-            step_id="shadow", data_schema=_shadow_schema(defaults)
+            step_id="shadow", data_schema=_shadow_schema(defaults), errors=errors
         )
 
     async def async_step_units(self, user_input: dict | None = None) -> ConfigFlowResult:

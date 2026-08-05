@@ -116,7 +116,8 @@
       "duplicate_name": "Another unit already uses this name. Names must be unique, otherwise the two packs are treated as one.",
       "duplicate_entity": "This entity is already used for another field on this unit. Each field needs its own entity.",
       "limit_not_percentage": "This looks like a power entity, not a state-of-charge percentage. The limit fields expect a percentage (0-100); leave blank to use 100 % / 5 %.",
-      "missing_options": "This select does not offer the options the coordinator needs (self_consumption / third_party_control, or charge / discharge). Check the entity, or adjust the option strings in const.py if your firmware renamed them."
+      "missing_options": "This select does not offer the options the coordinator needs (self_consumption / third_party_control, or charge / discharge). Check the entity, or adjust the option strings in const.py if your firmware renamed them.",
+      "battery_power_is_grid": "That is the grid meter, not the batteries. The reconstruction adds the two together, so using the meter here counts it twice and the comparison becomes worthless. Leave this empty unless you have a sensor for the packs' own combined power - empty reads it back from the target entities, which is what you want."
     }
   },
   "entity": {

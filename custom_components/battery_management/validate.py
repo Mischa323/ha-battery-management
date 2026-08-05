@@ -140,3 +140,22 @@ def validate_unit(
                 errors[field] = "limit_not_percentage"
 
     return errors
+
+
+def validate_shadow(user_input: dict, grid_sensor: str | None) -> dict[str, str]:
+    """The shadow settings, which have one catastrophic-but-plausible mistake.
+
+    The reconstruction is `net demand = grid + battery`. Putting the grid meter
+    in the battery field double-counts it, the setpoint runs away, and a month
+    of comparison data is quietly worthless - quietly, because dry run writes
+    nothing that would look wrong.
+
+    It is also the obvious thing to pick, since it is the power sensor everyone
+    knows by name.
+    """
+    from .const import CONF_BATTERY_POWER_SENSOR
+
+    chosen = user_input.get(CONF_BATTERY_POWER_SENSOR)
+    if chosen and grid_sensor and chosen == grid_sensor:
+        return {CONF_BATTERY_POWER_SENSOR: "battery_power_is_grid"}
+    return {}

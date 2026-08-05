@@ -201,3 +201,37 @@ def test_a_select_that_publishes_no_options_is_accepted():
     quiet = FakeState("something", {})
 
     assert validate_unit(cfg, [], states({cfg[CONF_MODE_SELECT]: quiet})) == {}
+
+
+# -- the shadow settings ------------------------------------------------------
+
+
+def test_the_grid_meter_is_refused_as_battery_power():
+    """The obvious wrong pick: net demand = grid + battery, so this doubles it,
+    the setpoint runs away, and a month of shadow data is quietly worthless."""
+    from custom_components.battery_management.const import CONF_BATTERY_POWER_SENSOR
+    from custom_components.battery_management.validate import validate_shadow
+
+    errors = validate_shadow(
+        {CONF_BATTERY_POWER_SENSOR: "sensor.p1_meter_power"}, "sensor.p1_meter_power"
+    )
+
+    assert errors == {CONF_BATTERY_POWER_SENSOR: "battery_power_is_grid"}
+
+
+def test_a_real_battery_power_sensor_is_accepted():
+    from custom_components.battery_management.const import CONF_BATTERY_POWER_SENSOR
+    from custom_components.battery_management.validate import validate_shadow
+
+    assert (
+        validate_shadow(
+            {CONF_BATTERY_POWER_SENSOR: "sensor.packs_power"}, "sensor.p1_meter_power"
+        )
+        == {}
+    )
+
+
+def test_leaving_it_empty_is_the_normal_case():
+    from custom_components.battery_management.validate import validate_shadow
+
+    assert validate_shadow({}, "sensor.p1_meter_power") == {}
