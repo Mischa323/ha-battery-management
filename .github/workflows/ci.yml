@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+  schedule:
+    # hassfest and HACS rules change upstream; catch drift once a week
+    - cron: "0 4 * * 1"
+  workflow_dispatch:
+
+jobs:
+  hassfest:
+    name: hassfest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: home-assistant/actions/hassfest@master
+
+  hacs:
+    name: HACS
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hacs/action@main
+        with:
+          category: integration
+          # no home-assistant/brands entry yet - see the TODO in CLAUDE.md
+          ignore: brands
+
+  tests:
+    name: pytest (${{ matrix.name }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # the fast path the maintainer runs on Windows: HA stubbed out
+          - name: stubbed
+            requirements: requirements-test.txt
+          # proves the stub is not hiding a real API mismatch
+          - name: real Home Assistant
+            requirements: requirements-dev.txt
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install -r ${{ matrix.requirements }}
+      - run: python -m pytest

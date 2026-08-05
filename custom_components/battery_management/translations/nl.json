@@ -1,0 +1,105 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Battery Management",
+        "description": "Kies de netvermogen-sensor van je huis (+ = afname, - = teruglevering) en hoeveel accu-units je wilt coördineren. De regelparameters kun je later aanpassen onder Configureren.",
+        "data": {
+          "grid_power_sensor": "Netvermogen-sensor (W, + afname / - teruglevering)",
+          "unit_count": "Aantal accu-units",
+          "bias": "Import-marge (W) - mik op een kleine afname zodat je nooit teruglevert",
+          "deadband": "Deadband (W) - negeer fouten kleiner dan dit",
+          "kp": "Versterking (Kp) - lager is zachter/rustiger",
+          "interval": "Regelinterval (seconden)",
+          "min_output": "Minimaal vermogen per unit (W)",
+          "unit_max": "Maximaal vermogen per unit (W)"
+        }
+      },
+      "unit_device": {
+        "title": "Accu-unit {index} van {total}: kies het apparaat",
+        "description": "Kies het Anker-apparaat van deze unit, dan wordt het volgende scherm alvast ingevuld - je mag het daarna nog nakijken. Leeglaten betekent alle zes entiteiten met de hand kiezen.",
+        "data": {
+          "device_id": "Anker-apparaat (optioneel)"
+        }
+      },
+      "unit": {
+        "title": "Accu-unit {index} van {total}",
+        "description": "Selecteer de Modbus-stuurentiteiten van deze Anker SOLIX Max AC-unit. De twee limietvelden zijn optioneel en verwachten een percentage - laat ze leeg voor 100 % / 5 %.",
+        "data": {
+          "name": "Naam",
+          "operating_mode_select": "Modus-select (self_consumption / third_party_control)",
+          "grid_flow_select": "Richting-select (charge / discharge)",
+          "target_power_number": "Target grid power (number)",
+          "soc_sensor": "SoC-sensor (%)",
+          "charge_limit_number": "Laadlimiet (number, %, optioneel)",
+          "discharge_limit_number": "Ontlaadlimiet (number, %, optioneel)"
+        }
+      }
+    },
+    "error": {
+      "name_required": "Geef deze unit een naam.",
+      "duplicate_name": "Een andere unit gebruikt deze naam al. Namen moeten uniek zijn, anders worden beide accu's als één behandeld.",
+      "duplicate_entity": "Deze entiteit is al gekozen voor een ander veld van deze unit. Elk veld heeft zijn eigen entiteit nodig.",
+      "limit_not_percentage": "Dit lijkt een vermogens-entiteit, geen SoC-percentage. De limietvelden verwachten een percentage (0-100); leeglaten geeft 100 % / 5 %."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Battery Management",
+        "menu_options": {
+          "tuning": "Regelparameters",
+          "units": "Entiteiten van de accu-units"
+        }
+      },
+      "tuning": {
+        "title": "Coördinator afstellen",
+        "description": "Opslaan herlaadt de integratie. De units gaan even terug naar self-consumption, daarna hervat de coördinator vanzelf met het setpoint dat hij had.",
+        "data": {
+          "bias": "Import-marge (W)",
+          "deadband": "Deadband (W)",
+          "kp": "Versterking (Kp)",
+          "interval": "Regelinterval (seconden)",
+          "min_output": "Minimaal vermogen per unit (W)",
+          "unit_max": "Maximaal vermogen per unit (W)"
+        }
+      },
+      "units": {
+        "title": "Accu-unit {index} van {total}: {name}",
+        "description": "Corrigeer de stuurentiteiten van deze unit. De twee limietvelden verwachten een percentage - laat ze leeg voor 100 % / 5 %.",
+        "data": {
+          "name": "Naam",
+          "operating_mode_select": "Modus-select (self_consumption / third_party_control)",
+          "grid_flow_select": "Richting-select (charge / discharge)",
+          "target_power_number": "Target grid power (number)",
+          "soc_sensor": "SoC-sensor (%)",
+          "charge_limit_number": "Laadlimiet (number, %, optioneel)",
+          "discharge_limit_number": "Ontlaadlimiet (number, %, optioneel)"
+        }
+      }
+    },
+    "error": {
+      "name_required": "Geef deze unit een naam.",
+      "duplicate_name": "Een andere unit gebruikt deze naam al. Namen moeten uniek zijn, anders worden beide accu's als één behandeld.",
+      "duplicate_entity": "Deze entiteit is al gekozen voor een ander veld van deze unit. Elk veld heeft zijn eigen entiteit nodig.",
+      "limit_not_percentage": "Dit lijkt een vermogens-entiteit, geen SoC-percentage. De limietvelden verwachten een percentage (0-100); leeglaten geeft 100 % / 5 %."
+    }
+  },
+  "entity": {
+    "sensor": {
+      "active_policy": {
+        "name": "Actief beleid",
+        "state": {
+          "grid_zero": "Volgt de meter",
+          "deadband": "Verschil te klein om op te sturen",
+          "soc_reserve": "Houdt de SoC-reserve vast",
+          "packs_empty": "Accu's leeg",
+          "packs_full": "Accu's vol",
+          "fast_charge": "Snelladen",
+          "no_grid_data": "Geen meterstand",
+          "disabled": "Coördinator uit"
+        }
+      }
+    }
+  }
+}

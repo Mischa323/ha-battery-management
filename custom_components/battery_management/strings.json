@@ -1,0 +1,105 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Battery Management",
+        "description": "Pick the household grid-power sensor (+ = import, - = export) and how many battery units to coordinate. You can tune the control parameters later under Configure.",
+        "data": {
+          "grid_power_sensor": "Grid power sensor (W, + import / - export)",
+          "unit_count": "Number of battery units",
+          "bias": "Import bias (W) - aim for a small import so you never export",
+          "deadband": "Deadband (W) - ignore errors smaller than this",
+          "kp": "Gain (Kp) - lower is gentler/slower",
+          "interval": "Control interval (seconds)",
+          "min_output": "Minimum output per unit (W)",
+          "unit_max": "Max power per unit (W)"
+        }
+      },
+      "unit_device": {
+        "title": "Battery unit {index} of {total}: pick the device",
+        "description": "Pick the Anker device for this unit and the next screen is filled in for you - you still get to check it. Leave it empty to select all six entities by hand.",
+        "data": {
+          "device_id": "Anker device (optional)"
+        }
+      },
+      "unit": {
+        "title": "Battery unit {index} of {total}",
+        "description": "Select the Modbus control entities for this Anker SOLIX Max AC unit. The two limit fields are optional and expect a percentage - leave them blank to use 100 % / 5 %.",
+        "data": {
+          "name": "Name",
+          "operating_mode_select": "Operating-mode select (self_consumption / third_party_control)",
+          "grid_flow_select": "Grid-flow select (charge / discharge)",
+          "target_power_number": "Target grid power (number)",
+          "soc_sensor": "State of charge sensor (%)",
+          "charge_limit_number": "Charge limit (number, %, optional)",
+          "discharge_limit_number": "Discharge limit (number, %, optional)"
+        }
+      }
+    },
+    "error": {
+      "name_required": "Give this unit a name.",
+      "duplicate_name": "Another unit already uses this name. Names must be unique, otherwise the two packs are treated as one.",
+      "duplicate_entity": "This entity is already used for another field on this unit. Each field needs its own entity.",
+      "limit_not_percentage": "This looks like a power entity, not a state-of-charge percentage. The limit fields expect a percentage (0-100); leave blank to use 100 % / 5 %."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Battery Management",
+        "menu_options": {
+          "tuning": "Control parameters",
+          "units": "Battery unit entities"
+        }
+      },
+      "tuning": {
+        "title": "Tune the coordinator",
+        "description": "Saving reloads the integration. The units are briefly handed back to self-consumption, then the coordinator resumes on its own with the setpoint it had.",
+        "data": {
+          "bias": "Import bias (W)",
+          "deadband": "Deadband (W)",
+          "kp": "Gain (Kp)",
+          "interval": "Control interval (seconds)",
+          "min_output": "Minimum output per unit (W)",
+          "unit_max": "Max power per unit (W)"
+        }
+      },
+      "units": {
+        "title": "Battery unit {index} of {total}: {name}",
+        "description": "Correct the control entities for this unit. The two limit fields expect a percentage - leave them blank to use 100 % / 5 %.",
+        "data": {
+          "name": "Name",
+          "operating_mode_select": "Operating-mode select (self_consumption / third_party_control)",
+          "grid_flow_select": "Grid-flow select (charge / discharge)",
+          "target_power_number": "Target grid power (number)",
+          "soc_sensor": "State of charge sensor (%)",
+          "charge_limit_number": "Charge limit (number, %, optional)",
+          "discharge_limit_number": "Discharge limit (number, %, optional)"
+        }
+      }
+    },
+    "error": {
+      "name_required": "Give this unit a name.",
+      "duplicate_name": "Another unit already uses this name. Names must be unique, otherwise the two packs are treated as one.",
+      "duplicate_entity": "This entity is already used for another field on this unit. Each field needs its own entity.",
+      "limit_not_percentage": "This looks like a power entity, not a state-of-charge percentage. The limit fields expect a percentage (0-100); leave blank to use 100 % / 5 %."
+    }
+  },
+  "entity": {
+    "sensor": {
+      "active_policy": {
+        "name": "Active policy",
+        "state": {
+          "grid_zero": "Following the meter",
+          "deadband": "Difference too small to act on",
+          "soc_reserve": "Holding the SoC reserve",
+          "packs_empty": "Packs empty",
+          "packs_full": "Packs full",
+          "fast_charge": "Fast charging",
+          "no_grid_data": "No grid reading",
+          "disabled": "Coordinator off"
+        }
+      }
+    }
+  }
+}

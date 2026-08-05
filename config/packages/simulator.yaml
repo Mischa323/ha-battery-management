@@ -1,0 +1,255 @@
+# Fake grid meter and two fake Max AC units, so the whole integration can be
+# set up and watched in the devcontainer without any hardware.
+#
+# This is a CLOSED loop: sensor.p1_meter_power is the house load minus whatever
+# the packs are currently commanded to do, so the coordinator can actually
+# regulate it to ~0 and you can watch the setpoint settle instead of ramping
+# into the clamp.
+#
+# You drive it with two things:
+#   input_number.sim_house_load   what the house draws, W (negative = PV export)
+#   input_number.sim_0X_soc       each pack's state of charge
+#
+# The coordinator writes to the template select/number entities exactly as it
+# would to the real Modbus ones.
+
+input_number:
+  sim_house_load:
+    name: Sim house load
+    min: -6000
+    max: 6000
+    step: 10
+    unit_of_measurement: W
+    initial: 800
+  sim_01_soc:
+    name: Sim 01 SoC
+    min: 0
+    max: 100
+    step: 1
+    unit_of_measurement: "%"
+    initial: 80
+  sim_02_soc:
+    name: Sim 02 SoC
+    min: 0
+    max: 100
+    step: 1
+    unit_of_measurement: "%"
+    initial: 60
+  # SoC limits, in PERCENT - the hardware backstop the coordinator steers within
+  sim_01_charging_limit:
+    name: Sim 01 charging limit store
+    min: 0
+    max: 100
+    step: 1
+    initial: 100
+  sim_02_charging_limit:
+    name: Sim 02 charging limit store
+    min: 0
+    max: 100
+    step: 1
+    initial: 100
+  sim_01_discharge_limit:
+    name: Sim 01 discharge limit store
+    min: 0
+    max: 100
+    step: 1
+    initial: 5
+  sim_02_discharge_limit:
+    name: Sim 02 discharge limit store
+    min: 0
+    max: 100
+    step: 1
+    initial: 5
+  # written by the coordinator
+  sim_01_target_grid_power:
+    name: Sim 01 target store
+    min: 0
+    max: 3500
+    step: 1
+    initial: 0
+  sim_02_target_grid_power:
+    name: Sim 02 target store
+    min: 0
+    max: 3500
+    step: 1
+    initial: 0
+
+input_select:
+  sim_01_operating_mode:
+    name: Sim 01 operating mode store
+    options: [self_consumption, third_party_control]
+    initial: self_consumption
+  sim_02_operating_mode:
+    name: Sim 02 operating mode store
+    options: [self_consumption, third_party_control]
+    initial: self_consumption
+  sim_01_grid_flow:
+    name: Sim 01 grid flow store
+    options: [charge, discharge]
+    initial: discharge
+  sim_02_grid_flow:
+    name: Sim 02 grid flow store
+    options: [charge, discharge]
+    initial: discharge
+
+template:
+  - sensor:
+      # matches the primary site's entity id on purpose. + = import, - = export,
+      # and the packs' commanded output is subtracted so the loop closes.
+      - name: P1 meter power
+        unique_id: sim_p1_meter_power
+        unit_of_measurement: W
+        device_class: power
+        state_class: measurement
+        state: >-
+          {% set load = states('input_number.sim_house_load') | float(0) %}
+          {% set t1 = states('input_number.sim_01_target_grid_power') | float(0) %}
+          {% set t2 = states('input_number.sim_02_target_grid_power') | float(0) %}
+          {% set b1 = t1 if states('input_select.sim_01_grid_flow') == 'discharge' else -t1 %}
+          {% set b2 = t2 if states('input_select.sim_02_grid_flow') == 'discharge' else -t2 %}
+          {{ load - b1 - b2 }}
+
+      - name: Sim 01 soc
+        unique_id: sim_01_soc_sensor
+        unit_of_measurement: "%"
+        device_class: battery
+        state: "{{ states('input_number.sim_01_soc') | float(0) }}"
+
+      - name: Sim 02 soc
+        unique_id: sim_02_soc_sensor
+        unit_of_measurement: "%"
+        device_class: battery
+        state: "{{ states('input_number.sim_02_soc') | float(0) }}"
+
+  - select:
+      - name: Sim 01 operating mode
+        unique_id: sim_01_operating_mode_select
+        state: "{{ states('input_select.sim_01_operating_mode') }}"
+        options: "{{ ['self_consumption', 'third_party_control'] }}"
+        select_option:
+          - service: input_select.select_option
+            target:
+              entity_id: input_select.sim_01_operating_mode
+            data:
+              option: "{{ option }}"
+
+      - name: Sim 02 operating mode
+        unique_id: sim_02_operating_mode_select
+        state: "{{ states('input_select.sim_02_operating_mode') }}"
+        options: "{{ ['self_consumption', 'third_party_control'] }}"
+        select_option:
+          - service: input_select.select_option
+            target:
+              entity_id: input_select.sim_02_operating_mode
+            data:
+              option: "{{ option }}"
+
+      - name: Sim 01 grid flow
+        unique_id: sim_01_grid_flow_select
+        state: "{{ states('input_select.sim_01_grid_flow') }}"
+        options: "{{ ['charge', 'discharge'] }}"
+        select_option:
+          - service: input_select.select_option
+            target:
+              entity_id: input_select.sim_01_grid_flow
+            data:
+              option: "{{ option }}"
+
+      - name: Sim 02 grid flow
+        unique_id: sim_02_grid_flow_select
+        state: "{{ states('input_select.sim_02_grid_flow') }}"
+        options: "{{ ['charge', 'discharge'] }}"
+        select_option:
+          - service: input_select.select_option
+            target:
+              entity_id: input_select.sim_02_grid_flow
+            data:
+              option: "{{ option }}"
+
+  - number:
+      - name: Sim 01 target grid power
+        unique_id: sim_01_target_grid_power_number
+        unit_of_measurement: W
+        min: 0
+        max: 3500
+        step: 1
+        state: "{{ states('input_number.sim_01_target_grid_power') | float(0) }}"
+        set_value:
+          - service: input_number.set_value
+            target:
+              entity_id: input_number.sim_01_target_grid_power
+            data:
+              value: "{{ value }}"
+
+      - name: Sim 02 target grid power
+        unique_id: sim_02_target_grid_power_number
+        unit_of_measurement: W
+        min: 0
+        max: 3500
+        step: 1
+        state: "{{ states('input_number.sim_02_target_grid_power') | float(0) }}"
+        set_value:
+          - service: input_number.set_value
+            target:
+              entity_id: input_number.sim_02_target_grid_power
+            data:
+              value: "{{ value }}"
+
+      # These are PERCENTAGES. Never point the wizard's limit fields at a watt
+      # entity: the coordinator would compare a SoC against watts, and if you
+      # pick the target-power entity it also feeds its own output back in.
+      - name: Sim 01 charging limit
+        unique_id: sim_01_charging_limit_number
+        unit_of_measurement: "%"
+        min: 0
+        max: 100
+        step: 1
+        state: "{{ states('input_number.sim_01_charging_limit') | float(100) }}"
+        set_value:
+          - service: input_number.set_value
+            target:
+              entity_id: input_number.sim_01_charging_limit
+            data:
+              value: "{{ value }}"
+
+      - name: Sim 02 charging limit
+        unique_id: sim_02_charging_limit_number
+        unit_of_measurement: "%"
+        min: 0
+        max: 100
+        step: 1
+        state: "{{ states('input_number.sim_02_charging_limit') | float(100) }}"
+        set_value:
+          - service: input_number.set_value
+            target:
+              entity_id: input_number.sim_02_charging_limit
+            data:
+              value: "{{ value }}"
+
+      - name: Sim 01 discharge limit
+        unique_id: sim_01_discharge_limit_number
+        unit_of_measurement: "%"
+        min: 0
+        max: 100
+        step: 1
+        state: "{{ states('input_number.sim_01_discharge_limit') | float(5) }}"
+        set_value:
+          - service: input_number.set_value
+            target:
+              entity_id: input_number.sim_01_discharge_limit
+            data:
+              value: "{{ value }}"
+
+      - name: Sim 02 discharge limit
+        unique_id: sim_02_discharge_limit_number
+        unit_of_measurement: "%"
+        min: 0
+        max: 100
+        step: 1
+        state: "{{ states('input_number.sim_02_discharge_limit') | float(5) }}"
+        set_value:
+          - service: input_number.set_value
+            target:
+              entity_id: input_number.sim_02_discharge_limit
+            data:
+              value: "{{ value }}"

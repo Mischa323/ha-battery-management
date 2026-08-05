@@ -1,0 +1,54 @@
+set_setpoint:
+  name: Set setpoint
+  description: >-
+    Force the integrator's stored setpoint. Positive discharges, negative
+    charges. The next control tick clamps it to what the packs can actually
+    deliver, and normal regulation carries on from there.
+  fields:
+    config_entry_id:
+      name: Coordinator
+      description: Which coordinator to act on. Leave empty to act on all of them.
+      required: false
+      selector:
+        config_entry:
+          integration: battery_management
+    setpoint:
+      name: Setpoint
+      description: Watts. Positive = discharge, negative = charge.
+      required: true
+      example: -1500
+      selector:
+        number:
+          min: -21000
+          max: 21000
+          step: 10
+          unit_of_measurement: W
+          mode: box
+
+start_fast_charge:
+  name: Start fast charge
+  description: >-
+    Charge every unit at full power until it reaches its charge limit, then
+    switch off automatically. Draws from the grid if there is no surplus.
+  fields:
+    config_entry_id:
+      name: Coordinator
+      description: Which coordinator to act on. Leave empty to act on all of them.
+      required: false
+      selector:
+        config_entry:
+          integration: battery_management
+
+stop_fast_charge:
+  name: Stop fast charge
+  description: >-
+    End fast charging. If the coordinator switch is off, the units are handed
+    back to self-consumption.
+  fields:
+    config_entry_id:
+      name: Coordinator
+      description: Which coordinator to act on. Leave empty to act on all of them.
+      required: false
+      selector:
+        config_entry:
+          integration: battery_management

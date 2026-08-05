@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# Run the test suite. Works with or without Home Assistant installed
+# (see conftest.py at the repo root).
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+
+exec python -m pytest "$@"

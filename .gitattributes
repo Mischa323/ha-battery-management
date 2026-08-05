@@ -1,0 +1,3 @@
+# Keep LF everywhere: the devcontainer and CI are Linux, and CRLF would break
+# the shebang in scripts/ and .devcontainer/setup.sh.
+* text=auto eol=lf

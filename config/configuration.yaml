@@ -1,0 +1,24 @@
+# Throwaway Home Assistant instance used only to develop this integration.
+# Everything it creates (.storage, the database, logs) is gitignored.
+homeassistant:
+  name: Battery Management Dev
+  packages: !include_dir_named packages
+
+# Deliberately NOT `default_config:`. That pulls in go2rtc, bluetooth and usb,
+# which need binaries this image does not ship - they fail, take default_config
+# down with them and leave a red "invalid config" banner, all for features this
+# integration never touches.
+#
+# `frontend` already brings in config, lovelace, onboarding, auth and the
+# websocket API: everything the setup wizard and the dashboard need.
+frontend:
+
+# so you can graph the setpoint and the per-unit targets over time
+recorder:
+history:
+logbook:
+
+logger:
+  default: info
+  logs:
+    custom_components.battery_management: debug

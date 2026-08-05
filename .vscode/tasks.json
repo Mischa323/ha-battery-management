@@ -1,0 +1,42 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Start Home Assistant",
+      "detail": "Runs HA against config/ and forwards port 8123",
+      "type": "shell",
+      "command": "scripts/develop",
+      "group": { "kind": "build", "isDefault": true },
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": true
+      }
+    },
+    {
+      "label": "Run tests",
+      "detail": "pytest - works with or without Home Assistant installed",
+      "type": "shell",
+      "command": "scripts/test",
+      "group": { "kind": "test", "isDefault": true },
+      "problemMatcher": []
+    },
+    {
+      "label": "Trace the control loop",
+      "detail": "Print a per-tick trace against a fake house, no HA needed",
+      "type": "shell",
+      "command": "python scripts/trace.py --load ${input:houseLoad}",
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "panel": "dedicated" }
+    }
+  ],
+  "inputs": [
+    {
+      "id": "houseLoad",
+      "type": "promptString",
+      "description": "House load in W (negative = PV export)",
+      "default": "800"
+    }
+  ]
+}

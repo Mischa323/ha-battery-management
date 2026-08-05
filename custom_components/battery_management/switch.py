@@ -8,13 +8,13 @@ from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import DOMAIN
-from .coordinator import SolarbankCoordinator
+from .coordinator import BatteryCoordinator
 
 
 async def async_setup_entry(
     hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
 ) -> None:
-    coordinator: SolarbankCoordinator = hass.data[DOMAIN][entry.entry_id]
+    coordinator: BatteryCoordinator = hass.data[DOMAIN][entry.entry_id]
     async_add_entities(
         [
             CoordinatorEnableSwitch(coordinator, entry),
@@ -27,13 +27,13 @@ class _BaseSwitch(SwitchEntity):
     _attr_has_entity_name = True
     _attr_should_poll = False
 
-    def __init__(self, coordinator: SolarbankCoordinator, entry: ConfigEntry) -> None:
+    def __init__(self, coordinator: BatteryCoordinator, entry: ConfigEntry) -> None:
         self.coordinator = coordinator
         self._entry = entry
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, entry.entry_id)},
-            name="Solarbank Coordinator",
-            manufacturer="Solarbank Coordinator",
+            name="Battery Management",
+            manufacturer="Battery Management",
         )
 
     async def async_added_to_hass(self) -> None:

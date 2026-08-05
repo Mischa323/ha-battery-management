@@ -1,0 +1,10 @@
+# Full devcontainer / CI environment: a real Home Assistant to run the
+# integration against, plus the test tooling.
+-r requirements-test.txt
+
+# unpinned upper bound on purpose - develop against the version you actually run
+homeassistant>=2024.6.0
+
+# drives the config flow through Home Assistant itself; tests that need it are
+# skipped where it cannot be installed (see tests/test_config_flow.py)
+pytest-homeassistant-custom-component

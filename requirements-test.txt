@@ -1,0 +1,9 @@
+# Enough to run the test suite anywhere, including Windows / Python 3.14,
+# where Home Assistant itself cannot be installed. conftest.py stubs the few
+# HA symbols the coordinator imports when the real package is absent.
+pytest>=8
+pytest-asyncio>=0.24
+
+# a genuine dependency of the integration (service + config-flow schemas), and
+# pure Python, so it installs anywhere - stubbing it would prove nothing
+voluptuous>=0.13

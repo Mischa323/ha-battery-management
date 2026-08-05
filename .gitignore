@@ -1,0 +1,25 @@
+# Home Assistant runtime files (the dev instance under config/)
+config/.storage/
+config/.cloud/
+config/.HA_VERSION
+config/.uuid
+config/.ha_run.lock
+config/home-assistant.log*
+config/home-assistant_v2.db*
+config/deps/
+config/tts/
+config/image/
+config/backups/
+config/blueprints/
+# created by .devcontainer/setup.sh
+config/custom_components/
+
+# VS Code: share the tasks, ignore per-user settings
+.vscode/*
+!.vscode/tasks.json
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/

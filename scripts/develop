@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# Run Home Assistant against the repo's throwaway config/ instance.
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+
+# ensure the integration is linked in (setup.sh does this, but a fresh clone or
+# a wiped config/ should not need a container rebuild)
+mkdir -p config/custom_components
+ln -sfn ../../custom_components/battery_management \
+  config/custom_components/battery_management
+
+exec hass --config config --debug
