@@ -155,6 +155,15 @@
           "dynamic_hold": "Holding the charge for dearer hours",
           "solar_headroom": "Not buying, the sun still fits"
         }
+      },
+      "solar_remaining": {
+        "name": "Solar remaining"
+      },
+      "charge_ceiling": {
+        "name": "Charge ceiling"
+      },
+      "plan": {
+        "name": "Plan"
       }
     },
     "select": {
@@ -173,6 +182,14 @@
     "switch": {
       "dry_run": {
         "name": "Dry run"
+      }
+    },
+    "number": {
+      "buy_ceiling_min": {
+        "name": "Buy at least to"
+      },
+      "buy_ceiling_max": {
+        "name": "Buy at most to"
       }
     }
   },

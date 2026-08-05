@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from homeassistant.components.sensor import SensorDeviceClass, SensorEntity, SensorStateClass
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import UnitOfPower, UnitOfTime
+from homeassistant.const import PERCENTAGE, UnitOfEnergy, UnitOfPower, UnitOfTime
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -22,6 +22,9 @@ async def async_setup_entry(
             StatusSensor(coordinator, entry),
             ActivePolicySensor(coordinator, entry),
             MinutesToFullSensor(coordinator, entry),
+            SolarRemainingSensor(coordinator, entry),
+            ChargeCeilingSensor(coordinator, entry),
+            PlanSensor(coordinator, entry),
         ]
         + [
             UnitTargetSensor(coordinator, entry, index, unit)
@@ -135,6 +138,81 @@ class MinutesToFullSensor(_BaseSensor):
     @property
     def native_value(self) -> int | None:
         return self.coordinator.minutes_to_full()
+
+
+class SolarRemainingSensor(_BaseSensor):
+    """Sun still to come today. What the buy ceiling is computed from."""
+
+    _attr_name = "Solar remaining"
+    _attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
+    _attr_device_class = SensorDeviceClass.ENERGY_STORAGE
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_icon = "mdi:weather-sunny"
+
+    def __init__(self, coordinator, entry) -> None:
+        super().__init__(coordinator, entry)
+        self._attr_unique_id = f"{entry.entry_id}_solar_remaining"
+
+    @property
+    def available(self) -> bool:
+        return self.coordinator.solar_remaining() is not None
+
+    @property
+    def native_value(self):
+        return self.coordinator.solar_remaining()
+
+
+class ChargeCeilingSensor(_BaseSensor):
+    """How full it is worth buying to, after the hand-set bounds.
+
+    Unavailable until the empty-to-full time is measured: without a capacity
+    there is no way to turn kWh of expected sun into a percentage.
+    """
+
+    _attr_name = "Charge ceiling"
+    _attr_native_unit_of_measurement = PERCENTAGE
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_icon = "mdi:battery-arrow-up"
+
+    def __init__(self, coordinator, entry) -> None:
+        super().__init__(coordinator, entry)
+        self._attr_unique_id = f"{entry.entry_id}_charge_ceiling"
+
+    @property
+    def available(self) -> bool:
+        return self.coordinator.charge_ceiling() is not None
+
+    @property
+    def native_value(self):
+        ceiling = self.coordinator.charge_ceiling()
+        return None if ceiling is None else round(ceiling)
+
+
+class PlanSensor(_BaseSensor):
+    """Today's intentions, for a dashboard to render.
+
+    A summary of the inputs and the hours they pick out - not a prediction of
+    the setpoint. That depends on the house minute by minute, and a graph
+    claiming otherwise would look authoritative and be wrong.
+    """
+
+    _attr_name = "Plan"
+    _attr_icon = "mdi:calendar-clock"
+
+    def __init__(self, coordinator, entry) -> None:
+        super().__init__(coordinator, entry)
+        self._attr_unique_id = f"{entry.entry_id}_plan"
+
+    @property
+    def native_value(self) -> str:
+        plan = self.coordinator.plan()
+        if not plan["has_prices"]:
+            return "no prices"
+        return f"{len(plan['cheap_hours'])} cheap, {len(plan['dear_hours'])} dear"
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        return self.coordinator.plan()
 
 
 class UnitTargetSensor(_BaseSensor):

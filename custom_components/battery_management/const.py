@@ -73,6 +73,13 @@ DEFAULT_EXPENSIVE_HOURS = 4
 CONF_DISCHARGE_ANYWAY_SOC = "discharge_anyway_soc"
 DEFAULT_DISCHARGE_ANYWAY_SOC = 90
 
+# Bounds the user puts around the computed buy-up-to ceiling. The calculation is
+# only as good as the solar forecast behind it - the primary site's under-reads
+# by half - so both ends must be reachable without waiting for a code change.
+# The defaults are wide open, so the computed value passes through untouched.
+DEFAULT_BUY_CEILING_MIN = 0
+DEFAULT_BUY_CEILING_MAX = 100
+
 DEFAULT_CHEAP_HOURS = 3
 DEFAULT_CHARGE_BELOW_SOC = 40
 DEFAULT_SOLAR_FORECAST_MAX = 0        # 0 = ignore the forecast entirely

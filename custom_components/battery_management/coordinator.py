@@ -23,7 +23,7 @@ from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
-from .prices import is_cheap_now, is_dear_now, parse_forecast
+from .prices import cheapest_slots, dearest_slots, is_cheap_now, is_dear_now, parse_forecast
 from .const import (
     CONF_BIAS,
     CONF_CHARGE_LIMIT,
@@ -63,6 +63,8 @@ from .const import (
     DEFAULT_FAST_CHARGE_HOLD,
     DEFAULT_CHARGE_BELOW_SOC,
     DEFAULT_CHEAP_HOURS,
+    DEFAULT_BUY_CEILING_MAX,
+    DEFAULT_BUY_CEILING_MIN,
     DEFAULT_DISCHARGE_ANYWAY_SOC,
     DEFAULT_EXPENSIVE_HOURS,
     DEFAULT_FULL_CHARGE_MINUTES,
@@ -259,6 +261,8 @@ class BatteryCoordinator:
         self.setpoint: float = 0.0          # + = total discharge, - = total charge (W)
         self.status: str = "idle"           # idle | charging | discharging | fast_charge | off | degraded
         self.soc_reserve: float = float(DEFAULT_SOC_RESERVE)
+        self.buy_ceiling_min: float = float(DEFAULT_BUY_CEILING_MIN)
+        self.buy_ceiling_max: float = float(DEFAULT_BUY_CEILING_MAX)
         self.mode: str = DEFAULT_MODE
         self.active_policy: str = POLICY_DISABLED
         self.last_tick = None
@@ -293,6 +297,8 @@ class BatteryCoordinator:
             "enabled": self.enabled,
             "setpoint": self.setpoint,
             "soc_reserve": self.soc_reserve,
+            "buy_ceiling_min": self.buy_ceiling_min,
+            "buy_ceiling_max": self.buy_ceiling_max,
             "dry_run": self.dry_run,
             "mode": self.mode,
             "saved_at": time.time(),
@@ -323,6 +329,9 @@ class BatteryCoordinator:
             self.dry_run = bool(stored["dry_run"])
         if stored and stored.get("mode") in self.available_modes:
             self.mode = stored["mode"]
+        for key in ("buy_ceiling_min", "buy_ceiling_max"):
+            if stored and stored.get(key) is not None:
+                setattr(self, key, float(stored[key]))
         if stored and stored.get("soc_reserve") is not None:
             # a user setting, not runtime state: restore it even when the
             # coordinator was switched off, and regardless of age
@@ -535,6 +544,54 @@ class BatteryCoordinator:
                 total -= produced
         return max(total, 0.0)
 
+    def charge_ceiling(self) -> float | None:
+        """How full it is worth buying to right now, after the user's bounds."""
+        computed = self._solar_headroom_ceiling()
+        if computed is None:
+            return None
+        return self._bound_ceiling(computed)
+
+    def plan(self) -> dict:
+        """What it expects and intends today, for the dashboard.
+
+        Deliberately a plain summary of the inputs and the resulting hours -
+        not a forecast of what it will command. The setpoint depends on the
+        house minute by minute, and pretending otherwise would be a graph that
+        looks authoritative and is wrong.
+        """
+        now = dt_util.utcnow()
+        slots = self._price_forecast()
+
+        def describe(chosen):
+            return [
+                {
+                    "start": slot.start.isoformat(),
+                    "end": slot.end.isoformat(),
+                    "price": round(slot.price, 4),
+                }
+                for slot in chosen
+            ]
+
+        cheap = describe(
+            cheapest_slots(slots, now, self._cheap_hours, PRICE_WINDOW_HOURS)
+        ) if slots else []
+        dear = describe(
+            dearest_slots(slots, now, self._expensive_hours, PRICE_WINDOW_HOURS)
+        ) if slots else []
+
+        return {
+            "has_prices": slots is not None,
+            "cheap_hours": cheap,
+            "dear_hours": dear,
+            "solar_remaining_kwh": self.solar_remaining(),
+            "usable_capacity_kwh": self.usable_capacity_kwh(),
+            "charge_ceiling": self.charge_ceiling(),
+            "buy_ceiling_min": self.buy_ceiling_min,
+            "buy_ceiling_max": self.buy_ceiling_max,
+            "soc_reserve": self.soc_reserve,
+            "mode": self.mode,
+        }
+
     def usable_capacity_kwh(self) -> float | None:
         """Roughly what the packs hold, from the measured empty-to-full time.
 
@@ -600,6 +657,7 @@ class BatteryCoordinator:
                 return False, None
             ceiling = self._charge_below_soc
 
+        ceiling = self._bound_ceiling(ceiling)
         if ceiling <= 0:
             # more sun coming than the packs could hold: buying nothing is right
             return False, POLICY_SOLAR_HEADROOM if blame_the_sun else None
@@ -693,6 +751,28 @@ class BatteryCoordinator:
         self._notify()
         if self.enabled:
             await self._async_tick(dt_util.utcnow())
+
+    async def async_set_buy_ceiling(self, *, low=None, high=None) -> None:
+        """Bound the computed buy-up-to ceiling by hand.
+
+        The calculation leans on the solar forecast, and a site whose forecast
+        reads half the real production would otherwise buy far too much. Both
+        ends are adjustable live rather than through a reload, because this is
+        the number you tune while watching what actually happened.
+        """
+        if low is not None:
+            self.buy_ceiling_min = max(0.0, min(100.0, float(low)))
+        if high is not None:
+            self.buy_ceiling_max = max(0.0, min(100.0, float(high)))
+        await self._store.async_save(self._state_to_save())
+        self._notify()
+        if self.enabled:
+            await self._async_tick(dt_util.utcnow())
+
+    def _bound_ceiling(self, ceiling: float) -> float:
+        """Apply the user's floor and ceiling; the floor never wins outright."""
+        low = min(self.buy_ceiling_min, self.buy_ceiling_max)
+        return max(low, min(ceiling, self.buy_ceiling_max))
 
     async def async_set_soc_reserve(self, value: float) -> None:
         """Set the reserve floor (%). Applies in every mode."""
@@ -838,6 +918,8 @@ class BatteryCoordinator:
                 "solar_remaining_kwh": self.solar_remaining(),
                 "usable_capacity_kwh": self.usable_capacity_kwh(),
                 "solar_headroom_ceiling_soc": self._solar_headroom_ceiling(),
+                "buy_ceiling_min": self.buy_ceiling_min,
+                "buy_ceiling_max": self.buy_ceiling_max,
                 "external_setpoint_w": self.external_setpoint,
                 "external_plan_age_s": self.external_plan_age(),
                 "external_timeout_min": self._external_timeout,

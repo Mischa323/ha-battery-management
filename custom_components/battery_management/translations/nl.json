@@ -155,6 +155,15 @@
           "dynamic_hold": "Bewaart de lading voor duurdere uren",
           "solar_headroom": "Koopt niet in, de zon past er nog in"
         }
+      },
+      "solar_remaining": {
+        "name": "Zon nog te komen"
+      },
+      "charge_ceiling": {
+        "name": "Laadplafond"
+      },
+      "plan": {
+        "name": "Plan"
       }
     },
     "select": {
@@ -173,6 +182,14 @@
     "switch": {
       "dry_run": {
         "name": "Proefdraaien"
+      }
+    },
+    "number": {
+      "buy_ceiling_min": {
+        "name": "Minstens inkopen tot"
+      },
+      "buy_ceiling_max": {
+        "name": "Hoogstens inkopen tot"
       }
     }
   },

@@ -191,6 +191,54 @@ Deliberately *not* a scheduler inside the integration: less to maintain, and
 anything the blueprints did not anticipate you can still build with an ordinary
 automation.
 
+## Seeing today's plan
+
+`sensor.battery_management_plan` carries the day's intentions as attributes:
+which hours it picked as cheap and dear, how much sun is still expected, the
+usable capacity, and the resulting charge ceiling. A markdown card renders it:
+
+```yaml
+type: markdown
+title: Plan for today
+content: >-
+  {% set p = state_attr('sensor.battery_management_plan','cheap_hours') %}
+  {% set d = state_attr('sensor.battery_management_plan','dear_hours') %}
+  {% set sun = state_attr('sensor.battery_management_plan','solar_remaining_kwh') %}
+  {% set cap = state_attr('sensor.battery_management_plan','usable_capacity_kwh') %}
+  {% set ceil = state_attr('sensor.battery_management_plan','charge_ceiling') %}
+
+  **Sun still to come:** {{ sun if sun is not none else '?' }} kWh
+  {%- if cap %} of {{ cap | round(1) }} kWh storage{% endif %}
+
+  **Buy up to:** {{ ceil | round(0) if ceil is not none else 'not computed' }} %
+
+  {% if p %}**Cheap hours** — buy here
+  {% for h in p %}
+  - {{ as_timestamp(h.start) | timestamp_custom('%H:%M') }} · {{ h.price }}
+  {%- endfor %}
+  {% endif %}
+
+  {% if d %}**Dear hours** — the charge is saved for these
+  {% for h in d %}
+  - {{ as_timestamp(h.start) | timestamp_custom('%H:%M') }} · {{ h.price }}
+  {%- endfor %}
+  {% endif %}
+```
+
+Two sliders bound the computed ceiling, because it is only as good as the solar
+forecast behind it: **Buy at least to** and **Buy at most to**. Leave them at
+0 and 100 and the calculation passes through untouched. They only limit buying
+from the grid — charging from your own surplus is never capped, since that would
+be throwing sun away.
+
+`sensor.battery_management_solar_remaining` and
+`sensor.battery_management_charge_ceiling` carry the same two numbers on their
+own, so they can be graphed.
+
+The plan deliberately does **not** predict the setpoint. That depends on the
+house minute by minute, and a graph claiming otherwise would look authoritative
+and be wrong.
+
 ## External plan (EMHASS)
 
 The **External plan** mode does not plan anything itself. It executes a plan
