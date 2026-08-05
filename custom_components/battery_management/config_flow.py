@@ -30,7 +30,10 @@ from .const import (
     CONF_PRICE_SENSOR,
     CONF_SOLAR_FORECAST_MAX,
     CONF_SHADOW_SIMULATE,
-    CONF_SOLAR_FORECAST_SENSOR,
+    CONF_DISCHARGE_ANYWAY_SOC,
+    CONF_EXPENSIVE_HOURS,
+    CONF_SOLAR_FORECAST_SENSORS,
+    CONF_SOLAR_PRODUCED_SENSOR,
     CONF_DISCHARGE_LIMIT,
     CONF_FLOW_SELECT,
     CONF_GRID_POWER,
@@ -54,6 +57,8 @@ from .const import (
     DEFAULT_EXTERNAL_TIMEOUT,
     DEFAULT_FULL_CHARGE_MINUTES,
     DEFAULT_SHADOW_SIMULATE,
+    DEFAULT_DISCHARGE_ANYWAY_SOC,
+    DEFAULT_EXPENSIVE_HOURS,
     DEFAULT_SOLAR_FORECAST_MAX,
     DEFAULT_INTERVAL,
     DEFAULT_KP,
@@ -175,9 +180,28 @@ def _dynamic_schema(defaults: dict) -> vol.Schema:
                 default=defaults.get(CONF_CHARGE_BELOW_SOC, DEFAULT_CHARGE_BELOW_SOC),
             ): int,
             vol.Optional(
-                CONF_SOLAR_FORECAST_SENSOR,
+                CONF_EXPENSIVE_HOURS,
+                default=defaults.get(CONF_EXPENSIVE_HOURS, DEFAULT_EXPENSIVE_HOURS),
+            ): vol.Coerce(float),
+            vol.Optional(
+                CONF_DISCHARGE_ANYWAY_SOC,
+                default=defaults.get(
+                    CONF_DISCHARGE_ANYWAY_SOC, DEFAULT_DISCHARGE_ANYWAY_SOC
+                ),
+            ): int,
+            # several: Forecast.Solar publishes one sensor per roof plane
+            vol.Optional(
+                CONF_SOLAR_FORECAST_SENSORS,
                 description={
-                    "suggested_value": defaults.get(CONF_SOLAR_FORECAST_SENSOR)
+                    "suggested_value": defaults.get(CONF_SOLAR_FORECAST_SENSORS)
+                },
+            ): selector.EntitySelector(
+                selector.EntitySelectorConfig(domain="sensor", multiple=True)
+            ),
+            vol.Optional(
+                CONF_SOLAR_PRODUCED_SENSOR,
+                description={
+                    "suggested_value": defaults.get(CONF_SOLAR_PRODUCED_SENSOR)
                 },
             ): _SENSOR,
             vol.Optional(
@@ -366,7 +390,11 @@ class BatteryManagementOptionsFlow(OptionsFlow):
         if user_input is not None:
             # an emptied picker must actually clear, not fall back to the old one
             merged = {**self._entry.options}
-            for key in (CONF_PRICE_SENSOR, CONF_SOLAR_FORECAST_SENSOR):
+            for key in (
+                CONF_PRICE_SENSOR,
+                CONF_SOLAR_FORECAST_SENSORS,
+                CONF_SOLAR_PRODUCED_SENSOR,
+            ):
                 merged.pop(key, None)
             merged.update(user_input)
             return self.async_create_entry(title="", data=merged)

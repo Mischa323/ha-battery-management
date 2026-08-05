@@ -169,6 +169,34 @@ def cheapest_slots(
     return sorted(ranked[:wanted], key=lambda slot: slot.start)
 
 
+def dearest_slots(
+    slots: list[Slot], now: datetime, hours: float, window_hours: float = 24.0
+) -> list[Slot]:
+    """The most expensive `hours` worth of slots in the window ahead."""
+    if hours <= 0:
+        return []
+    horizon = now + timedelta(hours=window_hours)
+    upcoming = [slot for slot in slots if slot.end > now and slot.start < horizon]
+    if not upcoming:
+        return []
+    span_minutes = min(
+        (slot.end - slot.start).total_seconds() / 60 for slot in upcoming
+    )
+    wanted = max(1, round(hours * 60 / span_minutes))
+    ranked = sorted(upcoming, key=lambda slot: (-slot.price, slot.start))
+    return sorted(ranked[:wanted], key=lambda slot: slot.start)
+
+
+def is_dear_now(
+    slots: list[Slot], now: datetime, hours: float, window_hours: float = 24.0
+) -> bool:
+    """Is the slot we are in one of the dearest ahead?"""
+    current = slot_at(slots, now)
+    if current is None:
+        return False
+    return current in dearest_slots(slots, now, hours, window_hours)
+
+
 def is_cheap_now(
     slots: list[Slot], now: datetime, cheap_hours: float, window_hours: float = 24.0
 ) -> bool:

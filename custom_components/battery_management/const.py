@@ -50,8 +50,28 @@ DEFAULT_FULL_CHARGE_MINUTES = 0
 CONF_PRICE_SENSOR = "price_sensor"
 CONF_CHEAP_HOURS = "cheap_hours"                # hours per day to grid-charge on
 CONF_CHARGE_BELOW_SOC = "charge_below_soc"      # only top up when emptier than this
-CONF_SOLAR_FORECAST_SENSOR = "solar_forecast_sensor"   # kWh expected today
-CONF_SOLAR_FORECAST_MAX = "solar_forecast_max"  # skip if more sun than this
+# Several sensors, summed: Forecast.Solar publishes one per roof plane, and the
+# primary site has three (west, south, north).
+#
+# Prefer the "remaining today" variants. A whole-day total is right at 02:00 and
+# wrong at 17:00, when most of it has already been produced - and 17:00 is
+# exactly when topping up for the evening matters.
+CONF_SOLAR_FORECAST_SENSORS = "solar_forecast_sensors"
+# Optional: subtract what is already in, turning a day total into a remainder.
+CONF_SOLAR_PRODUCED_SENSOR = "solar_produced_sensor"
+CONF_SOLAR_FORECAST_SENSOR = "solar_forecast_sensor"   # single, kept for old entries
+CONF_SOLAR_FORECAST_MAX = "solar_forecast_max"  # fallback when capacity is unknown
+
+# How many of the day's dearest hours to keep the packs' charge for. A pack
+# smaller than a day's consumption is not short of cheap hours to fill on - the
+# question is where the stored kWh are spent.
+CONF_EXPENSIVE_HOURS = "expensive_hours"
+DEFAULT_EXPENSIVE_HOURS = 4
+# Above this state of charge, discharge anyway: refusing would leave no room for
+# the sun that is still coming, and spilling free energy to save a few cents is
+# a bad trade.
+CONF_DISCHARGE_ANYWAY_SOC = "discharge_anyway_soc"
+DEFAULT_DISCHARGE_ANYWAY_SOC = 90
 
 DEFAULT_CHEAP_HOURS = 3
 DEFAULT_CHARGE_BELOW_SOC = 40
@@ -87,6 +107,8 @@ POLICY_MODE_CHARGE_ONLY = "mode_charge_only"        # mode forbids discharging
 POLICY_MODE_DISCHARGE_ONLY = "mode_discharge_only"  # mode forbids charging
 POLICY_MODE_PAUSE = "mode_pause"                    # mode holds everything at 0
 POLICY_DYNAMIC_CHARGE = "dynamic_charge"      # buying now because it is cheap
+POLICY_DYNAMIC_HOLD = "dynamic_hold"          # holding the charge for dearer hours
+POLICY_SOLAR_HEADROOM = "solar_headroom"      # not buying, the sun still fits
 POLICY_EXTERNAL = "external_plan"             # following someone else's plan
 POLICY_EXTERNAL_STALE = "external_stale"      # plan went quiet, regulating ourselves
 POLICY_DYNAMIC_NO_PRICES = "dynamic_no_prices"  # dynamic, but the sensor is mute
@@ -100,6 +122,8 @@ POLICIES = [
     POLICY_MODE_DISCHARGE_ONLY,
     POLICY_MODE_PAUSE,
     POLICY_DYNAMIC_CHARGE,
+    POLICY_DYNAMIC_HOLD,
+    POLICY_SOLAR_HEADROOM,
     POLICY_EXTERNAL,
     POLICY_EXTERNAL_STALE,
     POLICY_DYNAMIC_NO_PRICES,

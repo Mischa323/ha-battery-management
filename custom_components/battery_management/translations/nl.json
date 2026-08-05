@@ -98,8 +98,11 @@
           "price_sensor": "Prijssensor (elke integratie die toekomstprijzen publiceert)",
           "cheap_hours": "Uren per dag om op het net te laden",
           "charge_below_soc": "Alleen kopen als een accu onder deze SoC zit (%)",
-          "solar_forecast_sensor": "Zonverwachting-sensor (kWh verwacht, optioneel)",
-          "solar_forecast_max": "Niet kopen als er meer zon verwacht wordt dan dit (kWh, 0 = negeren)"
+          "solar_forecast_max": "Terugval: niet kopen boven zoveel kWh verwacht (0 = negeren; niet meer gebruikt zodra de laadduur gemeten is)",
+          "expensive_hours": "Uren per dag om de lading voor te bewaren (de duurste)",
+          "discharge_anyway_soc": "Tóch ontladen boven deze SoC (%) - houdt ruimte voor de zon die nog komt",
+          "solar_forecast_sensors": "Zonverwachting-sensoren (kies elk dakvlak; liefst de 'resterend vandaag'-varianten)",
+          "solar_produced_sensor": "Vandaag al geproduceerd (optioneel; alleen nodig als hierboven een dagtotaal staat)"
         }
       },
       "shadow": {
@@ -148,7 +151,9 @@
           "dynamic_charge": "Koopt nu in, prijzen zijn laag",
           "dynamic_no_prices": "Dynamisch, maar geen prijzen beschikbaar",
           "external_plan": "Volgt een extern plan",
-          "external_stale": "Extern plan is stilgevallen, regelt zelf"
+          "external_stale": "Extern plan is stilgevallen, regelt zelf",
+          "dynamic_hold": "Bewaart de lading voor duurdere uren",
+          "solar_headroom": "Koopt niet in, de zon past er nog in"
         }
       }
     },

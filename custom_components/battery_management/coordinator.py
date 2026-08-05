@@ -23,7 +23,7 @@ from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
-from .prices import is_cheap_now, parse_forecast
+from .prices import is_cheap_now, is_dear_now, parse_forecast
 from .const import (
     CONF_BIAS,
     CONF_CHARGE_LIMIT,
@@ -43,12 +43,16 @@ from .const import (
     CONF_BATTERY_POWER_SENSOR,
     CONF_CHARGE_BELOW_SOC,
     CONF_CHEAP_HOURS,
+    CONF_DISCHARGE_ANYWAY_SOC,
+    CONF_EXPENSIVE_HOURS,
     CONF_EXTERNAL_TIMEOUT,
     CONF_FULL_CHARGE_MINUTES,
     CONF_PRICE_SENSOR,
     CONF_SOLAR_FORECAST_MAX,
     CONF_SHADOW_SIMULATE,
     CONF_SOLAR_FORECAST_SENSOR,
+    CONF_SOLAR_FORECAST_SENSORS,
+    CONF_SOLAR_PRODUCED_SENSOR,
     CONF_UNIT_MAX,
     CONF_UNIT_NAME,
     CONF_UNITS,
@@ -59,6 +63,8 @@ from .const import (
     DEFAULT_FAST_CHARGE_HOLD,
     DEFAULT_CHARGE_BELOW_SOC,
     DEFAULT_CHEAP_HOURS,
+    DEFAULT_DISCHARGE_ANYWAY_SOC,
+    DEFAULT_EXPENSIVE_HOURS,
     DEFAULT_FULL_CHARGE_MINUTES,
     DEFAULT_INTERVAL,
     DEFAULT_KP,
@@ -86,6 +92,8 @@ from .const import (
     POLICY_DEADBAND,
     POLICY_DISABLED,
     POLICY_DYNAMIC_CHARGE,
+    POLICY_DYNAMIC_HOLD,
+    POLICY_SOLAR_HEADROOM,
     POLICY_DYNAMIC_NO_PRICES,
     POLICY_EXTERNAL,
     POLICY_EXTERNAL_STALE,
@@ -208,8 +216,20 @@ class BatteryCoordinator:
         self._charge_below_soc: float = float(
             data.get(CONF_CHARGE_BELOW_SOC, DEFAULT_CHARGE_BELOW_SOC)
         )
-        self._solar_forecast_sensor: str | None = (
-            data.get(CONF_SOLAR_FORECAST_SENSOR) or None
+        forecast = data.get(CONF_SOLAR_FORECAST_SENSORS)
+        if not forecast:
+            # entries made before several planes could be picked
+            single = data.get(CONF_SOLAR_FORECAST_SENSOR)
+            forecast = [single] if single else []
+        self._solar_forecast_sensors: list[str] = list(forecast)
+        self._solar_produced_sensor: str | None = (
+            data.get(CONF_SOLAR_PRODUCED_SENSOR) or None
+        )
+        self._expensive_hours: float = float(
+            data.get(CONF_EXPENSIVE_HOURS, DEFAULT_EXPENSIVE_HOURS)
+        )
+        self._discharge_anyway_soc: float = float(
+            data.get(CONF_DISCHARGE_ANYWAY_SOC, DEFAULT_DISCHARGE_ANYWAY_SOC)
         )
         self._solar_forecast_max: float = float(
             data.get(CONF_SOLAR_FORECAST_MAX, DEFAULT_SOLAR_FORECAST_MAX)
@@ -489,14 +509,69 @@ class BatteryCoordinator:
         slots = parse_forecast(dict(state.attributes), dt_util.utcnow())
         return slots or None
 
+    def solar_remaining(self) -> float | None:
+        """kWh of sun still to come today, or None when unknown.
+
+        Several sensors are summed: Forecast.Solar publishes one per roof plane.
+        Prefer its "remaining today" entities - a whole-day total is right at
+        02:00 and wrong at 17:00, when most of it has already been produced, and
+        17:00 is exactly when topping up for the evening matters. Where only a
+        day total exists, subtract what has already been produced instead.
+        """
+        if not self._solar_forecast_sensors:
+            return None
+        total = 0.0
+        seen = False
+        for entity_id in self._solar_forecast_sensors:
+            value = self._read_float(entity_id)
+            if value is not None:
+                total += value
+                seen = True
+        if not seen:
+            return None
+        if self._solar_produced_sensor:
+            produced = self._read_float(self._solar_produced_sensor)
+            if produced is not None:
+                total -= produced
+        return max(total, 0.0)
+
+    def usable_capacity_kwh(self) -> float | None:
+        """Roughly what the packs hold, from the measured empty-to-full time.
+
+        No pack reports its capacity, but charging at `unit_max` for the
+        measured duration is exactly that energy - so the number the owner has
+        to measure anyway gives this for free.
+        """
+        if self._full_charge_minutes <= 0:
+            return None
+        total = 0.0
+        for cfg in self._units:
+            unit = self._unit_snapshot(cfg)
+            if unit.online:
+                total += unit.unit_max * self._full_charge_minutes / 60.0 / 1000.0
+        return total or None
+
+    def _solar_headroom_ceiling(self) -> float | None:
+        """How full it is worth buying to, given the sun still coming.
+
+        Do not buy what arrives free: filling to 100 % at 02:00 leaves nowhere
+        to put the day's production, while at 17:00 there is nothing left to
+        wait for and topping up is exactly right.
+        """
+        remaining = self.solar_remaining()
+        capacity = self.usable_capacity_kwh()
+        if remaining is None or capacity is None or capacity <= 0:
+            return None
+        return max(0.0, min(100.0, 100.0 - remaining / capacity * 100.0))
+
     def _sun_is_enough(self) -> bool:
-        """True when enough sun is expected that buying would be wasteful."""
-        if not self._solar_forecast_sensor or self._solar_forecast_max <= 0:
+        """Fallback for when the capacity is not known yet: a plain threshold."""
+        if not self._solar_forecast_sensors or self._solar_forecast_max <= 0:
             return False
-        expected = self._read_float(self._solar_forecast_sensor)
-        if expected is None:
+        remaining = self.solar_remaining()
+        if remaining is None:
             return False  # no forecast is not a reason to skip a cheap hour
-        return expected >= self._solar_forecast_max
+        return remaining >= self._solar_forecast_max
 
     def _dynamic_should_charge(self, online: dict) -> tuple[bool, str | None]:
         """Buy from the grid right now? Returns (yes/no, policy when it matters).
@@ -512,14 +587,48 @@ class BatteryCoordinator:
             slots, dt_util.utcnow(), self._cheap_hours, PRICE_WINDOW_HOURS
         ):
             return False, None
-        if self._sun_is_enough():
-            return False, None
-        # only the packs that are actually low; a full one is not a reason to buy
-        if not any(
-            s.soc < min(self._charge_below_soc, s.charge_limit) for s in online.values()
-        ):
-            return False, None
+        # How full is it worth buying to? Prefer the solar-aware ceiling: it
+        # answers "how much can I still get free" instead of guessing with a
+        # fixed threshold. Falls back while the capacity is unmeasured.
+        ceiling = self._solar_headroom_ceiling()
+        # only name the sun when the sun is actually why: with no forecast the
+        # plain threshold is doing the work, and saying otherwise would send
+        # someone hunting through Forecast.Solar for nothing
+        blame_the_sun = ceiling is not None
+        if ceiling is None:
+            if self._sun_is_enough():
+                return False, None
+            ceiling = self._charge_below_soc
+
+        if ceiling <= 0:
+            # more sun coming than the packs could hold: buying nothing is right
+            return False, POLICY_SOLAR_HEADROOM if blame_the_sun else None
+        if not any(s.soc < min(ceiling, s.charge_limit) for s in online.values()):
+            return False, POLICY_SOLAR_HEADROOM if blame_the_sun else None
         return True, POLICY_DYNAMIC_CHARGE
+
+    def _dynamic_should_hold(self, online: dict) -> bool:
+        """Refuse to discharge now, to spend the charge on a dearer hour.
+
+        The packs hold less than a day's consumption, so the question is not
+        whether they can be filled but where the stored kWh are spent. Covering
+        a cheap midday hour from the battery and then buying at the evening peak
+        is the expensive way round.
+
+        Two exceptions, both about not wasting what is free: a nearly full pack
+        discharges anyway - refusing leaves nowhere for the sun still coming -
+        and without prices there is nothing to be clever with.
+        """
+        if self._expensive_hours <= 0:
+            return False
+        slots = self._price_forecast()
+        if slots is None:
+            return False
+        if is_dear_now(slots, dt_util.utcnow(), self._expensive_hours, PRICE_WINDOW_HOURS):
+            return False
+        if any(s.soc >= self._discharge_anyway_soc for s in online.values()):
+            return False
+        return True
 
     def minutes_to_full(self) -> int | None:
         """How long a fast charge would take from right now, in minutes.
@@ -705,8 +814,11 @@ class BatteryCoordinator:
                 "price_sensor": self._price_sensor,
                 "cheap_hours": self._cheap_hours,
                 "charge_below_soc": self._charge_below_soc,
-                "solar_forecast_sensor": self._solar_forecast_sensor,
+                "solar_forecast_sensors": self._solar_forecast_sensors,
+                "solar_produced_sensor": self._solar_produced_sensor,
                 "solar_forecast_max": self._solar_forecast_max,
+                "expensive_hours": self._expensive_hours,
+                "discharge_anyway_soc": self._discharge_anyway_soc,
             },
             "state": {
                 # dry run first: every other number means something different
@@ -723,6 +835,9 @@ class BatteryCoordinator:
                 "active_policy": self.active_policy,
                 "soc_reserve": self.soc_reserve,
                 "minutes_to_full": self.minutes_to_full(),
+                "solar_remaining_kwh": self.solar_remaining(),
+                "usable_capacity_kwh": self.usable_capacity_kwh(),
+                "solar_headroom_ceiling_soc": self._solar_headroom_ceiling(),
                 "external_setpoint_w": self.external_setpoint,
                 "external_plan_age_s": self.external_plan_age(),
                 "external_timeout_min": self._external_timeout,
@@ -970,6 +1085,12 @@ class BatteryCoordinator:
             if self.mode == MODE_DYNAMIC:
                 dynamic_charge, dynamic_policy = self._dynamic_should_charge(online)
 
+            hold_policy = None
+            if self.mode == MODE_DYNAMIC and not dynamic_charge:
+                if self._dynamic_should_hold(online):
+                    upper = min(upper, 0.0)
+                    hold_policy = POLICY_DYNAMIC_HOLD
+
             external_sp, external_policy = (None, None)
             if self.mode == MODE_EXTERNAL:
                 external_sp, external_policy = self._external_target()
@@ -991,7 +1112,7 @@ class BatteryCoordinator:
 
             umax = {n: s.unit_max for n, s in online.items()}
 
-            self.active_policy = dynamic_policy or external_policy or self._classify(
+            self.active_policy = dynamic_policy or hold_policy or external_policy or self._classify(
                 error, sp, online, maxdis, maxchg
             )
 

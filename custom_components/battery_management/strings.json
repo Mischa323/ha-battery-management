@@ -98,8 +98,11 @@
           "price_sensor": "Price sensor (any integration publishing upcoming prices)",
           "cheap_hours": "Hours per day to charge from the grid on",
           "charge_below_soc": "Only buy when a pack is below this state of charge (%)",
-          "solar_forecast_sensor": "Solar forecast sensor (kWh expected, optional)",
-          "solar_forecast_max": "Skip buying when more sun than this is expected (kWh, 0 = ignore)"
+          "solar_forecast_max": "Fallback: skip buying above this many kWh expected (0 = ignore; unused once the charge time is measured)",
+          "expensive_hours": "Hours a day to keep the charge for (the dearest ones)",
+          "discharge_anyway_soc": "Discharge anyway above this state of charge (%) - leaves room for the sun still coming",
+          "solar_forecast_sensors": "Solar forecast sensors (pick every roof plane; prefer the 'remaining today' ones)",
+          "solar_produced_sensor": "Produced so far today (optional; only needed if the forecast above is a day total)"
         }
       },
       "shadow": {
@@ -148,7 +151,9 @@
           "dynamic_charge": "Buying now, prices are low",
           "dynamic_no_prices": "Dynamic, but no prices available",
           "external_plan": "Following an external plan",
-          "external_stale": "External plan went quiet, regulating on its own"
+          "external_stale": "External plan went quiet, regulating on its own",
+          "dynamic_hold": "Holding the charge for dearer hours",
+          "solar_headroom": "Not buying, the sun still fits"
         }
       }
     },

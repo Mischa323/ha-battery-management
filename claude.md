@@ -246,6 +246,26 @@ Build order, and why:
       production the threshold can be set against the site's own measured bias.
     Optional like everything else: no sensor, no change.
 
+15. ~~**Price-aware discharge, and solar headroom**~~ — **done.** Two halves of
+    one idea, both from the owner.
+    *Discharge:* the packs hold less than a day's consumption, so the question is
+    where the stored kWh are spent. In dynamic mode the setpoint's upper bound
+    goes to 0 outside the dearest `expensive_hours`, so a cheap midday hour is
+    bought from the grid and the charge is kept for the peak. Two escapes, both
+    about not wasting free energy: a pack above `discharge_anyway_soc` (90 %)
+    discharges regardless, and without prices there is nothing to be clever with.
+    *Charging:* a whole-day solar forecast is right at 02:00 and wrong at 17:00,
+    when most of it is already produced — the old veto read that as "lots of sun
+    coming, do not buy" exactly when topping up for the evening was right. So it
+    is now a ceiling instead: buy up to `100 % - remaining sun / capacity`. At
+    02:00 with more sun coming than the packs hold that is zero; at 17:00 with an
+    hour left it is ~93 %. Capacity is not configured — it falls out of the
+    empty-to-full time that has to be measured anyway.
+    Several forecast sensors can be picked and are summed (Forecast.Solar
+    publishes one per roof plane; the primary site has three). Prefer the
+    "remaining today" ones, or add a "produced so far" sensor to subtract.
+    Falls back to the old threshold while the capacity is unmeasured.
+
 ### C. Proving it on real hardware before it touches anything
 
 The owner runs a working YAML setup on live batteries. The plan is a month of
