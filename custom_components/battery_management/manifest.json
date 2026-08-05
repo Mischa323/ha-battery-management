@@ -5,7 +5,7 @@
     "@Mischa323"
   ],
   "config_flow": true,
-  "dependencies": [
+  "after_dependencies": [
     "http",
     "frontend"
   ],
