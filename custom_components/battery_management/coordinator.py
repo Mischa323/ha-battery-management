@@ -597,6 +597,32 @@ class BatteryCoordinator:
             "mode": self.mode,
         }
 
+    def solar_breakdown(self) -> dict:
+        """Every number behind the remaining-sun figure, for checking it.
+
+        "0.0 kWh remaining" is correct at midnight and alarming at noon, and
+        from the figure alone there is no telling which sensor is at fault - a
+        forecast that is not reading, or a production sensor that is too high.
+        So show the parts.
+        """
+        per_sensor = {
+            entity_id: self._read_float(entity_id)
+            for entity_id in self._solar_forecast_sensors
+        }
+        values = [v for v in per_sensor.values() if v is not None]
+        produced = (
+            self._read_float(self._solar_produced_sensor)
+            if self._solar_produced_sensor
+            else None
+        )
+        return {
+            "forecast_per_sensor": per_sensor,
+            "forecast_total_kwh": round(sum(values), 2) if values else None,
+            "produced_today_sensor": self._solar_produced_sensor,
+            "produced_today_kwh": produced,
+            "remaining_kwh": self.solar_remaining(),
+        }
+
     def usable_capacity_kwh(self) -> float | None:
         """Roughly what the packs hold, from the measured empty-to-full time.
 
@@ -921,6 +947,7 @@ class BatteryCoordinator:
                 "soc_reserve": self.soc_reserve,
                 "minutes_to_full": self.minutes_to_full(),
                 "solar_remaining_kwh": self.solar_remaining(),
+                "solar_breakdown": self.solar_breakdown(),
                 "usable_capacity_kwh": self.usable_capacity_kwh(),
                 "solar_headroom_ceiling_soc": self._solar_headroom_ceiling(),
                 "buy_ceiling_min": self.buy_ceiling_min,

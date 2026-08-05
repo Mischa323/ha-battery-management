@@ -138,3 +138,42 @@ def test_without_a_measured_capacity_there_is_no_ceiling(build_system):
     set_forecast(system, 7.2, 3.6, 4.1)
 
     assert system.coordinator._solar_headroom_ceiling() is None
+
+
+# -- checking the configuration ----------------------------------------------
+
+
+def test_the_breakdown_shows_every_part(build_system):
+    """"0 kWh remaining" is right at midnight and alarming at noon, and the
+    figure alone does not say which sensor is at fault."""
+    system = build_system(
+        **THREE_PLANES, **{CONF_SOLAR_PRODUCED_SENSOR: PRODUCED}
+    )
+    set_forecast(system, 7.2, 3.6, 4.1, produced=12.0)
+
+    parts = system.coordinator.solar_breakdown()
+
+    assert parts["forecast_per_sensor"] == {WEST: 7.2, SOUTH: 3.6, NORTH: 4.1}
+    assert parts["forecast_total_kwh"] == pytest.approx(14.9)
+    assert parts["produced_today_sensor"] == PRODUCED
+    assert parts["produced_today_kwh"] == 12.0
+    assert parts["remaining_kwh"] == pytest.approx(2.9)
+
+
+def test_a_sensor_that_is_not_reading_shows_up_as_none(build_system):
+    """Names the culprit instead of quietly lowering the total."""
+    system = build_system(**THREE_PLANES)
+    set_forecast(system, 7.2, "unavailable", 4.1)
+
+    parts = system.coordinator.solar_breakdown()
+
+    assert parts["forecast_per_sensor"][SOUTH] is None
+    assert parts["forecast_total_kwh"] == pytest.approx(11.3)
+
+
+def test_the_breakdown_survives_nothing_being_configured(build_system):
+    parts = build_system().coordinator.solar_breakdown()
+
+    assert parts["forecast_per_sensor"] == {}
+    assert parts["forecast_total_kwh"] is None
+    assert parts["produced_today_kwh"] is None

@@ -245,6 +245,12 @@ class SolarRemainingSensor(_BaseSensor):
     def native_value(self):
         return self.coordinator.solar_remaining()
 
+    @property
+    def extra_state_attributes(self) -> dict:
+        # the parts, so "0 kWh remaining" can be told apart from a sensor that
+        # simply is not reading
+        return self.coordinator.solar_breakdown()
+
 
 class ChargeCeilingSensor(_BaseSensor):
     """How full it is worth buying to, after the hand-set bounds.
