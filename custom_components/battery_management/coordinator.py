@@ -266,6 +266,11 @@ class BatteryCoordinator:
         self.mode: str = DEFAULT_MODE
         self.active_policy: str = POLICY_DISABLED
         self.last_tick = None
+        # what it read, what it regulated against, and what the other
+        # controller was doing - the three numbers a shadow run is checked with
+        self.last_grid_observed: float | None = None
+        self.last_grid_used: float | None = None
+        self.last_other_power: float | None = None
         self.unit_status: dict[str, UnitStatus] = {
             u.name: UnitStatus() for u in self._units
         }
@@ -1067,8 +1072,10 @@ class BatteryCoordinator:
         if not self.enabled and not self.fast_charge:
             self.active_policy = POLICY_DISABLED
             # keep looking even while idle: "disconnected" has to mean the pack
-            # cannot be reached, not merely that nobody asked
+            # cannot be reached, not merely that nobody asked, and the meter
+            # reading is worth checking before anything is switched on
             self._refresh_observations()
+            self.last_grid_observed = self._read_float(self._grid_sensor)
             self._notify()
             return
         try:
@@ -1129,6 +1136,7 @@ class BatteryCoordinator:
                 )
                 self.status = "degraded"
                 self.active_policy = POLICY_NO_GRID_DATA
+                self.last_grid_observed = None
                 self._notify()
                 return
 
@@ -1137,6 +1145,9 @@ class BatteryCoordinator:
             observed_grid, other_power = grid, None
             if self.dry_run and self._shadow_simulate:
                 grid, other_power = self._shadow_grid(grid)
+            self.last_grid_observed = observed_grid
+            self.last_grid_used = grid
+            self.last_other_power = other_power
 
             error = grid - self._bias
             online = {n: s for n, s in snaps.items() if s.online}

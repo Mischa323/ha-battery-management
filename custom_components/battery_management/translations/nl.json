@@ -164,6 +164,15 @@
       },
       "plan": {
         "name": "Plan"
+      },
+      "grid_observed": {
+        "name": "Netvermogen (zoals uitgelezen)"
+      },
+      "grid_used": {
+        "name": "Netvermogen (waarop geregeld)"
+      },
+      "other_controller": {
+        "name": "Ander systeem"
       }
     },
     "select": {

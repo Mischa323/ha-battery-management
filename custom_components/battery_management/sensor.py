@@ -25,6 +25,9 @@ async def async_setup_entry(
             SolarRemainingSensor(coordinator, entry),
             ChargeCeilingSensor(coordinator, entry),
             PlanSensor(coordinator, entry),
+            GridObservedSensor(coordinator, entry),
+            GridUsedSensor(coordinator, entry),
+            OtherControllerSensor(coordinator, entry),
         ]
         + [
             UnitTargetSensor(coordinator, entry, index, unit)
@@ -138,6 +141,87 @@ class MinutesToFullSensor(_BaseSensor):
     @property
     def native_value(self) -> int | None:
         return self.coordinator.minutes_to_full()
+
+
+class _GridSensor(_BaseSensor):
+    _attr_native_unit_of_measurement = UnitOfPower.WATT
+    _attr_device_class = SensorDeviceClass.POWER
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
+
+class GridObservedSensor(_GridSensor):
+    """The meter reading as the coordinator actually read it.
+
+    A mirror of your own P1 sensor, and that is the point: it proves the right
+    entity was picked, that it parses, and that the sign convention matches
+    (+ import). If this disagrees with your meter, nothing downstream can be
+    trusted. Goes unavailable the moment the meter cannot be read, which is the
+    fastest way to notice.
+    """
+
+    _attr_name = "Grid power (as read)"
+    _attr_icon = "mdi:transmission-tower"
+
+    def __init__(self, coordinator, entry) -> None:
+        super().__init__(coordinator, entry)
+        self._attr_unique_id = f"{entry.entry_id}_grid_observed"
+
+    @property
+    def available(self) -> bool:
+        return self.coordinator.last_grid_observed is not None
+
+    @property
+    def native_value(self):
+        return self.coordinator.last_grid_observed
+
+
+class GridUsedSensor(_GridSensor):
+    """What it actually regulated against.
+
+    Equal to the reading above when live. During a shadow run it is the
+    reconstruction - the meter as it would read if this coordinator were in
+    charge instead of the site's own automations - and comparing the two is how
+    you check the reconstruction is sane.
+    """
+
+    _attr_name = "Grid power (regulated against)"
+    _attr_icon = "mdi:transmission-tower-import"
+
+    def __init__(self, coordinator, entry) -> None:
+        super().__init__(coordinator, entry)
+        self._attr_unique_id = f"{entry.entry_id}_grid_used"
+
+    @property
+    def available(self) -> bool:
+        return self.coordinator.last_grid_used is not None
+
+    @property
+    def native_value(self):
+        return self.coordinator.last_grid_used
+
+
+class OtherControllerSensor(_GridSensor):
+    """What the packs are being told to do by whoever is in charge.
+
+    Only meaningful during a shadow run: it is read back from the target and
+    flow entities, so it is the *other* system's command. Signed like our own
+    targets, + discharging.
+    """
+
+    _attr_name = "Other controller"
+    _attr_icon = "mdi:account-arrow-left"
+
+    def __init__(self, coordinator, entry) -> None:
+        super().__init__(coordinator, entry)
+        self._attr_unique_id = f"{entry.entry_id}_other_controller"
+
+    @property
+    def available(self) -> bool:
+        return self.coordinator.last_other_power is not None
+
+    @property
+    def native_value(self):
+        return self.coordinator.last_other_power
 
 
 class SolarRemainingSensor(_BaseSensor):

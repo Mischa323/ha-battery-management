@@ -122,3 +122,56 @@ async def test_simulation_never_applies_to_a_live_run(build_system):
 
     assert system.coordinator.setpoint == 500
     assert system.coordinator.tick_log[-1]["other_controller_w"] is None
+
+
+# -- what a shadow run is checked with ---------------------------------------
+
+
+async def test_all_three_meter_readings_are_published(build_system):
+    """Real reading, what was regulated against, and the other controller.
+
+    Comparing the first two is how the reconstruction is checked; without them
+    it can only be seen in a diagnostics download.
+    """
+    system = build_system(grid=20, dry_run=True)
+    other_controller(system, watts=900)
+
+    await system.coordinator._async_tick(None)
+
+    assert system.coordinator.last_grid_observed == 20
+    assert system.coordinator.last_grid_used == 920
+    assert system.coordinator.last_other_power == 900
+
+
+async def test_a_live_run_regulates_against_the_real_reading(build_system):
+    system = build_system(grid=500)
+
+    await system.coordinator._async_tick(None)
+
+    assert system.coordinator.last_grid_observed == 500
+    assert system.coordinator.last_grid_used == 500
+    assert system.coordinator.last_other_power is None
+
+
+async def test_the_reading_is_published_before_anything_is_switched_on(
+    build_system,
+):
+    """Check the meter is read correctly without committing to anything."""
+    system = build_system(grid=740, enabled=False)
+
+    await system.coordinator._async_tick(None)
+
+    assert system.coordinator.last_grid_observed == 740
+
+
+async def test_an_unreadable_meter_shows_as_nothing_rather_than_stale(
+    build_system,
+):
+    system = build_system(grid=500)
+    await system.coordinator._async_tick(None)
+    assert system.coordinator.last_grid_observed == 500
+
+    system.hass.states.set("sensor.p1_meter_power", "unavailable")
+    await system.coordinator._async_tick(None)
+
+    assert system.coordinator.last_grid_observed is None

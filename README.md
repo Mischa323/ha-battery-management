@@ -191,6 +191,44 @@ Deliberately *not* a scheduler inside the integration: less to maintain, and
 anything the blueprints did not anticipate you can still build with an ordinary
 automation.
 
+## Checking the meter is read correctly
+
+Three sensors, which together are how a shadow run is verified:
+
+| Sensor | What it is |
+| --- | --- |
+| `…_grid_power_as_read` | the meter reading as this integration read it |
+| `…_grid_power_regulated_against` | what it actually steered on |
+| `…_other_controller` | what the site's own automations are commanding, signed |
+
+The first should track your own P1 sensor exactly — same value, same sign
+(+ import). If it does not, the entity or the sign convention is wrong and
+nothing downstream can be trusted. It goes **unavailable** the moment the meter
+cannot be read, which is the fastest way to notice a dropout.
+
+During a shadow run the second is the *reconstruction*: the meter as it would
+read if this coordinator were in charge instead of the site's automations. It
+should differ from the first — that difference is roughly what the other
+controller is doing. When running live the two are identical.
+
+```yaml
+type: history-graph
+title: Is the meter read correctly?
+hours_to_show: 6
+entities:
+  - entity: sensor.p1_meter_power
+    name: Your own P1 sensor
+  - entity: sensor.battery_management_grid_power_as_read
+    name: What the integration read
+  - entity: sensor.battery_management_grid_power_regulated_against
+    name: What it steered on (reconstructed)
+  - entity: sensor.battery_management_other_controller
+    name: What your automations command
+```
+
+The first two lines should sit exactly on top of each other. If they ever
+separate, that is a bug worth reporting.
+
 ## Seeing today's plan
 
 `sensor.battery_management_plan` carries the day's intentions as attributes:

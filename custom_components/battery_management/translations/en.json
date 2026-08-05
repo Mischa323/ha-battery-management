@@ -164,6 +164,15 @@
       },
       "plan": {
         "name": "Plan"
+      },
+      "grid_observed": {
+        "name": "Grid power (as read)"
+      },
+      "grid_used": {
+        "name": "Grid power (regulated against)"
+      },
+      "other_controller": {
+        "name": "Other controller"
       }
     },
     "select": {
