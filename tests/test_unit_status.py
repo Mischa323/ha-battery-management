@@ -67,3 +67,30 @@ async def test_reverting_clears_every_recorded_target(build_system):
     for status in system.coordinator.unit_status.values():
         assert status.target == 0
         assert status.flow is None
+
+
+async def test_reachability_stays_current_while_switched_off(build_system):
+    """"Disconnected" must mean unreachable, not merely unchecked.
+
+    With the coordinator off the tick returns early, so the per-unit sensors
+    used to sit at their initial "disconnected" — alarming on a device page
+    where nothing is actually wrong.
+    """
+    system = build_system(grid=500, enabled=False)
+
+    await system.coordinator._async_tick(None)
+
+    assert system.coordinator.unit_status["Batterij 1"].online is True
+    assert system.coordinator.unit_status["Batterij 1"].soc == 80
+    assert system.hass.services.calls == []  # still commands nothing
+
+
+async def test_an_unreachable_pack_still_reads_as_offline_while_switched_off(
+    build_system,
+):
+    system = build_system(grid=500, units=(("093", 80.0), ("052", None)), enabled=False)
+
+    await system.coordinator._async_tick(None)
+
+    assert system.coordinator.unit_status["Batterij 1"].online is True
+    assert system.coordinator.unit_status["Batterij 2"].online is False

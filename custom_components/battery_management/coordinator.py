@@ -786,6 +786,19 @@ class BatteryCoordinator:
             }
         )
 
+    def _refresh_observations(self, snaps: dict | None = None) -> None:
+        """Update what we can see, without touching what we last commanded.
+
+        Reachability is an observation and must stay current even when the
+        coordinator is switched off. The last commanded target is deliberately
+        left alone: the pack is still executing it (gotcha 1).
+        """
+        if snaps is None:
+            snaps = {u.name: self._unit_snapshot(u) for u in self._units}
+        for name, snap in snaps.items():
+            self.unit_status[name].online = snap.online
+            self.unit_status[name].soc = snap.soc if snap.online else None
+
     def _record(self, name: str, flow: str, watts: int) -> None:
         """Remember what we just commanded, signed like the Setpoint sensor."""
         status = self.unit_status[name]
@@ -851,16 +864,16 @@ class BatteryCoordinator:
     async def _async_tick(self, _now) -> None:
         if not self.enabled and not self.fast_charge:
             self.active_policy = POLICY_DISABLED
+            # keep looking even while idle: "disconnected" has to mean the pack
+            # cannot be reached, not merely that nobody asked
+            self._refresh_observations()
+            self._notify()
             return
         try:
             snaps = {u.name: self._unit_snapshot(u) for u in self._units}
             cfg_by_name = {u.name: u for u in self._units}
 
-            # reachability is refreshed every tick; the last commanded target is
-            # not cleared here, see UnitStatus
-            for name, s in snaps.items():
-                self.unit_status[name].online = s.online
-                self.unit_status[name].soc = s.soc if s.online else None
+            self._refresh_observations(snaps)
 
             # ---- FAST CHARGE override --------------------------------------
             if self.fast_charge:
