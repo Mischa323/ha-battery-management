@@ -134,10 +134,13 @@ Build order, and why:
    all evening at peak. It is also the first feature that makes a pack *refuse*
    to do something, so the "why" sensor earns its keep immediately instead of
    being a nice-to-have. Independent of everything else below.
-5. **Hold after fast charge.** Small, and it closes a real gap in a feature that
-   already exists: fast charge switches off at full, the mode resumes, and the
-   packs discharge again before the storm arrives. Charge-then-hold is what the
-   button is actually for.
+5. ~~**Hold after fast charge**~~ — **done.** Once every pack is full the switch
+   stays *on* and holds them there (target 0, no discharge) until the user
+   releases it; it tops up again if a pack drifts down. Switching off at full
+   handed control straight back to the mode, which discharged the packs again -
+   defeating the reason you pressed it before a storm. `fast_charge_hold` in the
+   tuning options restores the old auto-release. Not resumed after a restart,
+   same reasoning as fast charge itself.
 6. **Mode select**: Grid-zero · Charge only · Discharge only · Pause · Dynamic.
    Nearly free once 4 exists — the middle three are setpoint bounds, no new
    control logic. Dynamic is only listed when a price sensor is configured.

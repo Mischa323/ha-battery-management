@@ -11,6 +11,7 @@ import pytest
 
 from custom_components.battery_management.const import (
     CONF_DEADBAND,
+    CONF_FAST_CHARGE_HOLD,
     CONF_KP,
     FLOW_CHARGE,
     FLOW_DISCHARGE,
@@ -174,8 +175,25 @@ async def test_fast_charge_drives_both_units_to_maximum(build_system):
     assert system.allocation() == {"Batterij 1": 3500, "Batterij 2": 3500}
 
 
-async def test_fast_charge_switches_itself_off_when_full(build_system):
+async def test_fast_charge_holds_the_packs_full_by_default(build_system):
+    """You pressed this before a storm; do not hand the charge straight back."""
     system = build_system(units=(("093", 100.0), ("052", 100.0)), enabled=False)
+    system.coordinator.fast_charge = True
+
+    await system.coordinator._async_tick(None)
+
+    assert system.coordinator.fast_charge is True
+    assert system.coordinator.fast_charge_holding is True
+    assert system.coordinator.status == "hold"
+    assert system.allocation() == {"Batterij 1": 0, "Batterij 2": 0}
+
+
+async def test_fast_charge_can_still_release_itself_when_configured(build_system):
+    system = build_system(
+        units=(("093", 100.0), ("052", 100.0)),
+        enabled=False,
+        **{CONF_FAST_CHARGE_HOLD: False},
+    )
     system.coordinator.fast_charge = True
 
     await system.coordinator._async_tick(None)

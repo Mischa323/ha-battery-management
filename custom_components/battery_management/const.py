@@ -25,6 +25,12 @@ CONF_KP = "kp"                     # proportional gain for the integrator
 CONF_INTERVAL = "interval"         # seconds between control ticks
 CONF_MIN_OUTPUT = "min_output"     # W, below this a unit is idled (avoid micro-cycling)
 CONF_UNIT_MAX = "unit_max"         # W, hard ceiling per unit (Max AC ~3500)
+CONF_FAST_CHARGE_HOLD = "fast_charge_hold"   # keep the packs full once charged
+
+# Fast charge exists to prepare for something - a storm, an outage. Switching
+# itself off at full and letting the packs discharge again defeats that, so the
+# default is to hold. Set to False for the old "top up, then carry on" behaviour.
+DEFAULT_FAST_CHARGE_HOLD = True
 
 # --- SoC reserve -------------------------------------------------------------
 # A floor the user keeps in reserve, e.g. for the evening peak. Applies in every
@@ -39,6 +45,7 @@ DEFAULT_SOC_RESERVE = 0
 POLICY_DISABLED = "disabled"            # kill-switch off
 POLICY_NO_GRID_DATA = "no_grid_data"    # grid sensor unreadable
 POLICY_FAST_CHARGE = "fast_charge"      # emergency override running
+POLICY_FAST_CHARGE_HOLD = "fast_charge_hold"  # charged, now kept full on purpose
 POLICY_SOC_RESERVE = "soc_reserve"      # would discharge, but the reserve says no
 POLICY_PACKS_EMPTY = "packs_empty"      # would discharge, but nothing left
 POLICY_PACKS_FULL = "packs_full"        # would charge, but nowhere to put it
@@ -52,6 +59,7 @@ POLICIES = [
     POLICY_PACKS_EMPTY,
     POLICY_PACKS_FULL,
     POLICY_FAST_CHARGE,
+    POLICY_FAST_CHARGE_HOLD,
     POLICY_NO_GRID_DATA,
     POLICY_DISABLED,
 ]

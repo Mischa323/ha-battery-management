@@ -34,11 +34,13 @@ from .const import (
     CONF_MODE_SELECT,
     CONF_SOC_SENSOR,
     CONF_TARGET_NUMBER,
+    CONF_FAST_CHARGE_HOLD,
     CONF_UNIT_MAX,
     CONF_UNIT_NAME,
     CONF_UNITS,
     DEFAULT_BIAS,
     DEFAULT_DEADBAND,
+    DEFAULT_FAST_CHARGE_HOLD,
     DEFAULT_INTERVAL,
     DEFAULT_KP,
     DEFAULT_MIN_OUTPUT,
@@ -55,6 +57,7 @@ from .const import (
     POLICY_DEADBAND,
     POLICY_DISABLED,
     POLICY_FAST_CHARGE,
+    POLICY_FAST_CHARGE_HOLD,
     POLICY_GRID_ZERO,
     POLICY_NO_GRID_DATA,
     POLICY_PACKS_EMPTY,
@@ -146,10 +149,14 @@ class BatteryCoordinator:
         self._interval: int = int(data.get(CONF_INTERVAL, DEFAULT_INTERVAL))
         self._min_output: float = float(data.get(CONF_MIN_OUTPUT, DEFAULT_MIN_OUTPUT))
         self._unit_ceiling: float = float(data.get(CONF_UNIT_MAX, DEFAULT_UNIT_MAX))
+        self._fast_charge_hold: bool = bool(
+            data.get(CONF_FAST_CHARGE_HOLD, DEFAULT_FAST_CHARGE_HOLD)
+        )
 
         # runtime state
         self.enabled: bool = False
         self.fast_charge: bool = False
+        self.fast_charge_holding: bool = False   # charged, now being kept full
         self.setpoint: float = 0.0          # + = total discharge, - = total charge (W)
         self.status: str = "idle"           # idle | charging | discharging | fast_charge | off | degraded
         self.soc_reserve: float = float(DEFAULT_SOC_RESERVE)
@@ -284,6 +291,7 @@ class BatteryCoordinator:
 
     async def async_set_fast_charge(self, value: bool) -> None:
         self.fast_charge = value
+        self.fast_charge_holding = False
         if value:
             await self._set_all_mode(MODE_THIRD_PARTY)
             await self._async_tick(dt_util.utcnow())
@@ -457,9 +465,21 @@ class BatteryCoordinator:
                         f"{n}={self.unit_status[n].target} W" for n in snaps
                     ),
                 )
-                if all_full:
+                if all_full and self._fast_charge_hold:
+                    # Stay on and keep them there. Switching off here would hand
+                    # control back to the mode, which discharges the packs again
+                    # - exactly what you did not want when you pressed this
+                    # before a storm. Releasing is the user's call.
+                    if not self.fast_charge_holding:
+                        _LOGGER.debug("fast charge: full, holding until released")
+                    self.fast_charge_holding = True
+                    self.status = "hold"
+                    self.active_policy = POLICY_FAST_CHARGE_HOLD
+                elif all_full:
                     _LOGGER.debug("fast charge: all units full, switching off")
                     await self.async_set_fast_charge(False)
+                else:
+                    self.fast_charge_holding = False
                 self.last_tick = dt_util.utcnow()
                 self._notify()
                 return

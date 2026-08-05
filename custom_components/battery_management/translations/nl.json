@@ -61,7 +61,8 @@
           "kp": "Versterking (Kp)",
           "interval": "Regelinterval (seconden)",
           "min_output": "Minimaal vermogen per unit (W)",
-          "unit_max": "Maximaal vermogen per unit (W)"
+          "unit_max": "Maximaal vermogen per unit (W)",
+          "fast_charge_hold": "Accu's vol houden na snelladen (loslaten met de schakelaar)"
         }
       },
       "units": {
@@ -97,7 +98,8 @@
           "packs_full": "Accu's vol",
           "fast_charge": "Snelladen",
           "no_grid_data": "Geen meterstand",
-          "disabled": "Coördinator uit"
+          "disabled": "Coördinator uit",
+          "fast_charge_hold": "Vol, houdt de accu's vol"
         }
       }
     }

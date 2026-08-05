@@ -61,7 +61,8 @@
           "kp": "Gain (Kp)",
           "interval": "Control interval (seconds)",
           "min_output": "Minimum output per unit (W)",
-          "unit_max": "Max power per unit (W)"
+          "unit_max": "Max power per unit (W)",
+          "fast_charge_hold": "Keep the packs full after a fast charge (release with the switch)"
         }
       },
       "units": {
@@ -97,7 +98,8 @@
           "packs_full": "Packs full",
           "fast_charge": "Fast charging",
           "no_grid_data": "No grid reading",
-          "disabled": "Coordinator off"
+          "disabled": "Coordinator off",
+          "fast_charge_hold": "Charged, keeping the packs full"
         }
       }
     }
