@@ -62,3 +62,17 @@ def test_options_override_the_original_setup_values():
     coordinator = BatteryCoordinator(FakeHass(), entry)
 
     assert coordinator._kp == 0.4
+
+
+def test_the_manifest_keys_are_sorted_the_way_hassfest_wants():
+    """domain, name, then alphabetical. Caught in CI otherwise, not here."""
+    import json
+    import pathlib
+
+    manifest = pathlib.Path(__file__).resolve().parents[1] / (
+        "custom_components/battery_management/manifest.json"
+    )
+    keys = list(json.loads(manifest.read_text(encoding="utf-8")))
+
+    assert keys[:2] == ["domain", "name"]
+    assert keys[2:] == sorted(keys[2:])

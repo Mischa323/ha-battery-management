@@ -1,14 +1,14 @@
 {
   "domain": "battery_management",
   "name": "Battery Management",
-  "codeowners": [
-    "@Mischa323"
-  ],
-  "config_flow": true,
   "after_dependencies": [
     "http",
     "frontend"
   ],
+  "codeowners": [
+    "@Mischa323"
+  ],
+  "config_flow": true,
   "documentation": "https://github.com/Mischa323/ha-battery-management",
   "integration_type": "hub",
   "iot_class": "local_polling",
