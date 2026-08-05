@@ -37,7 +37,7 @@
       },
       "unit_modes": {
         "title": "Battery unit: {name} - what its modes mean",
-        "desc": "This unit offers: {options}.\n\nPick which one hands control to the coordinator, and which one gives it back when you switch off. Leave the second empty if there is nothing to return to - the unit is then simply commanded 0 W, which is a safe resting state. A pack without its own P1 meter has no self-consumption mode, so this is normal.",
+        "description": "This unit offers: {options}.\n\nPick which one hands control to the coordinator, and which one gives it back when you switch off. Leave the second empty if there is nothing to return to - the unit is then simply commanded 0 W, which is a safe resting state. A pack without its own P1 meter has no self-consumption mode, so this is normal.",
         "data": {
           "mode_control": "Option that hands control to the coordinator",
           "mode_safe": "Option to return to when switching off (leave empty to only command 0 W)"
