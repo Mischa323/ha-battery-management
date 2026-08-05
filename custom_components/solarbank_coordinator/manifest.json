@@ -1,0 +1,13 @@
+{
+  "domain": "solarbank_coordinator",
+  "name": "Solarbank Coordinator",
+  "codeowners": ["@ammiga"],
+  "config_flow": true,
+  "dependencies": [],
+  "documentation": "https://github.com/ammiga/solarbank-coordinator",
+  "integration_type": "hub",
+  "iot_class": "local_polling",
+  "issue_tracker": "https://github.com/ammiga/solarbank-coordinator/issues",
+  "requirements": [],
+  "version": "0.1.0"
+}
