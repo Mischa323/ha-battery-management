@@ -13,6 +13,10 @@ homeassistant:
 # websocket API: everything the setup wizard and the dashboard need.
 frontend:
 
+# schedule helpers and automations, so the shipped blueprints can be tried out
+automation: !include automations.yaml
+schedule:
+
 # so you can graph the setpoint and the per-unit targets over time
 recorder:
 history:

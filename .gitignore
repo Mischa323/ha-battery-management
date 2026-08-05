@@ -4,6 +4,8 @@ config/.cloud/
 config/.HA_VERSION
 config/.uuid
 config/.ha_run.lock
+# seeded by the dev scripts; Home Assistant writes to it
+config/automations.yaml
 config/home-assistant.log*
 config/home-assistant_v2.db*
 config/deps/

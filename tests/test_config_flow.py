@@ -19,8 +19,10 @@ from custom_components.battery_management.const import (  # noqa: E402
     CONF_DISCHARGE_LIMIT,
     CONF_FLOW_SELECT,
     CONF_GRID_POWER,
+    CONF_CHEAP_HOURS,
     CONF_KP,
     CONF_MODE_SELECT,
+    CONF_PRICE_SENSOR,
     CONF_SOC_SENSOR,
     CONF_TARGET_NUMBER,
     CONF_UNIT_COUNT,
@@ -159,13 +161,53 @@ async def _create_entry(hass: HomeAssistant, unit_count: int = 2):
     return hass.config_entries.async_entries(DOMAIN)[0]
 
 
-async def test_options_menu_offers_tuning_and_units(hass: HomeAssistant):
+async def test_options_menu_offers_every_section(hass: HomeAssistant):
     entry = await _create_entry(hass)
 
     result = await hass.config_entries.options.async_init(entry.entry_id)
 
     assert result["type"] is FlowResultType.MENU
-    assert set(result["menu_options"]) == {"tuning", "units"}
+    assert set(result["menu_options"]) == {"tuning", "units", "dynamic", "shadow"}
+
+
+async def test_options_dynamic_stores_a_price_sensor(hass: HomeAssistant):
+    entry = await _create_entry(hass)
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {"next_step_id": "dynamic"}
+    )
+    assert result["step_id"] == "dynamic"
+
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {CONF_PRICE_SENSOR: "sensor.energy_prices", CONF_CHEAP_HOURS: 4},
+    )
+    await hass.async_block_till_done()
+
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert entry.options[CONF_PRICE_SENSOR] == "sensor.energy_prices"
+    assert entry.options[CONF_CHEAP_HOURS] == 4
+
+
+async def test_options_dynamic_can_clear_the_price_sensor_again(hass: HomeAssistant):
+    """An emptied picker must clear, not silently keep the old sensor."""
+    entry = await _create_entry(hass)
+
+    for payload in (
+        {CONF_PRICE_SENSOR: "sensor.energy_prices"},
+        {CONF_CHEAP_HOURS: 4},
+    ):
+        result = await hass.config_entries.options.async_init(entry.entry_id)
+        result = await hass.config_entries.options.async_configure(
+            result["flow_id"], {"next_step_id": "dynamic"}
+        )
+        result = await hass.config_entries.options.async_configure(
+            result["flow_id"], payload
+        )
+        await hass.async_block_till_done()
+
+    assert CONF_PRICE_SENSOR not in entry.options
 
 
 async def test_options_tuning_saves_without_touching_the_units(hass: HomeAssistant):

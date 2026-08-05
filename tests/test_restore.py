@@ -14,8 +14,8 @@ import time
 
 from custom_components.battery_management.const import (
     MAX_SETPOINT_AGE,
-    MODE_SELF,
-    MODE_THIRD_PARTY,
+    DEVICE_MODE_SELF,
+    DEVICE_MODE_THIRD_PARTY,
 )
 
 
@@ -42,8 +42,8 @@ async def test_resumes_enabled_after_a_reload(build_system):
     assert system.coordinator.setpoint == 640
     # the packs are put back under third-party control straight away
     modes = system.hass.services.options_set()
-    assert modes[system.mode(0)] == MODE_THIRD_PARTY
-    assert modes[system.mode(1)] == MODE_THIRD_PARTY
+    assert modes[system.mode(0)] == DEVICE_MODE_THIRD_PARTY
+    assert modes[system.mode(1)] == DEVICE_MODE_THIRD_PARTY
 
 
 async def test_stale_setpoint_is_dropped_but_the_switch_still_resumes(build_system):
@@ -131,5 +131,5 @@ async def test_reverting_still_hands_the_units_back(build_system):
     await system.coordinator.async_stop(revert=True)
 
     modes = system.hass.services.options_set()
-    assert modes[system.mode(0)] == MODE_SELF
-    assert modes[system.mode(1)] == MODE_SELF
+    assert modes[system.mode(0)] == DEVICE_MODE_SELF
+    assert modes[system.mode(1)] == DEVICE_MODE_SELF

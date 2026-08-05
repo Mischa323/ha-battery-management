@@ -67,6 +67,7 @@ def _install_homeassistant_stub() -> None:
         SENSOR = "sensor"
         BINARY_SENSOR = "binary_sensor"
         NUMBER = "number"
+        SELECT = "select"
 
     ha_const.Platform = Platform
 
@@ -102,6 +103,23 @@ def _install_homeassistant_stub() -> None:
 
     storage.Store = Store
 
+    issue_registry = types.ModuleType("homeassistant.helpers.issue_registry")
+
+    class IssueSeverity(StrEnum):
+        CRITICAL = "critical"
+        ERROR = "error"
+        WARNING = "warning"
+
+    def async_create_issue(hass, domain, issue_id, **kwargs):
+        hass.data.setdefault("_issues", {})[issue_id] = kwargs
+
+    def async_delete_issue(hass, domain, issue_id):
+        hass.data.setdefault("_issues", {}).pop(issue_id, None)
+
+    issue_registry.IssueSeverity = IssueSeverity
+    issue_registry.async_create_issue = async_create_issue
+    issue_registry.async_delete_issue = async_delete_issue
+
     config_validation = types.ModuleType("homeassistant.helpers.config_validation")
     config_validation.string = str
 
@@ -120,6 +138,7 @@ def _install_homeassistant_stub() -> None:
     helpers.event = event
     helpers.storage = storage
     helpers.config_validation = config_validation
+    helpers.issue_registry = issue_registry
     util.dt = dt
 
     sys.modules.update(
@@ -132,6 +151,7 @@ def _install_homeassistant_stub() -> None:
             "homeassistant.helpers.event": event,
             "homeassistant.helpers.storage": storage,
             "homeassistant.helpers.config_validation": config_validation,
+            "homeassistant.helpers.issue_registry": issue_registry,
             "homeassistant.util": util,
             "homeassistant.util.dt": dt,
         }

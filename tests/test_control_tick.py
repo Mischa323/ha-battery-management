@@ -15,7 +15,7 @@ from custom_components.battery_management.const import (
     CONF_KP,
     FLOW_CHARGE,
     FLOW_DISCHARGE,
-    MODE_SELF,
+    DEVICE_MODE_SELF,
 )
 
 
@@ -208,8 +208,8 @@ async def test_stopping_reverts_every_unit_to_self_consumption(build_system):
     await system.coordinator.async_stop(revert=True)
 
     modes = system.hass.services.options_set()
-    assert modes[system.mode(0)] == MODE_SELF
-    assert modes[system.mode(1)] == MODE_SELF
+    assert modes[system.mode(0)] == DEVICE_MODE_SELF
+    assert modes[system.mode(1)] == DEVICE_MODE_SELF
     assert system.allocation() == {"Batterij 1": 0, "Batterij 2": 0}
 
 

@@ -22,6 +22,15 @@ from .const import (
     CONF_DEADBAND,
     CONF_DEVICE,
     CONF_FAST_CHARGE_HOLD,
+    CONF_BATTERY_POWER_SENSOR,
+    CONF_CHARGE_BELOW_SOC,
+    CONF_CHEAP_HOURS,
+    CONF_EXTERNAL_TIMEOUT,
+    CONF_FULL_CHARGE_MINUTES,
+    CONF_PRICE_SENSOR,
+    CONF_SOLAR_FORECAST_MAX,
+    CONF_SHADOW_SIMULATE,
+    CONF_SOLAR_FORECAST_SENSOR,
     CONF_DISCHARGE_LIMIT,
     CONF_FLOW_SELECT,
     CONF_GRID_POWER,
@@ -38,6 +47,12 @@ from .const import (
     DEFAULT_BIAS,
     DEFAULT_DEADBAND,
     DEFAULT_FAST_CHARGE_HOLD,
+    DEFAULT_CHARGE_BELOW_SOC,
+    DEFAULT_CHEAP_HOURS,
+    DEFAULT_EXTERNAL_TIMEOUT,
+    DEFAULT_FULL_CHARGE_MINUTES,
+    DEFAULT_SHADOW_SIMULATE,
+    DEFAULT_SOLAR_FORECAST_MAX,
     DEFAULT_INTERVAL,
     DEFAULT_KP,
     DEFAULT_MIN_OUTPUT,
@@ -80,6 +95,68 @@ def _options_schema(defaults: dict) -> vol.Schema:
                 CONF_FAST_CHARGE_HOLD,
                 default=defaults.get(CONF_FAST_CHARGE_HOLD, DEFAULT_FAST_CHARGE_HOLD),
             ): bool,
+            vol.Optional(
+                CONF_FULL_CHARGE_MINUTES,
+                default=defaults.get(
+                    CONF_FULL_CHARGE_MINUTES, DEFAULT_FULL_CHARGE_MINUTES
+                ),
+            ): int,
+            vol.Optional(
+                CONF_EXTERNAL_TIMEOUT,
+                default=defaults.get(CONF_EXTERNAL_TIMEOUT, DEFAULT_EXTERNAL_TIMEOUT),
+            ): int,
+        }
+    )
+
+
+def _dynamic_schema(defaults: dict) -> vol.Schema:
+    """Everything the Dynamic mode needs. All optional - without a price sensor
+    the mode is simply not offered, and the rest of the integration is
+    unaffected."""
+    return vol.Schema(
+        {
+            vol.Optional(
+                CONF_PRICE_SENSOR,
+                description={"suggested_value": defaults.get(CONF_PRICE_SENSOR)},
+            ): _SENSOR,
+            vol.Optional(
+                CONF_CHEAP_HOURS,
+                default=defaults.get(CONF_CHEAP_HOURS, DEFAULT_CHEAP_HOURS),
+            ): vol.Coerce(float),
+            vol.Optional(
+                CONF_CHARGE_BELOW_SOC,
+                default=defaults.get(CONF_CHARGE_BELOW_SOC, DEFAULT_CHARGE_BELOW_SOC),
+            ): int,
+            vol.Optional(
+                CONF_SOLAR_FORECAST_SENSOR,
+                description={
+                    "suggested_value": defaults.get(CONF_SOLAR_FORECAST_SENSOR)
+                },
+            ): _SENSOR,
+            vol.Optional(
+                CONF_SOLAR_FORECAST_MAX,
+                default=defaults.get(
+                    CONF_SOLAR_FORECAST_MAX, DEFAULT_SOLAR_FORECAST_MAX
+                ),
+            ): vol.Coerce(float),
+        }
+    )
+
+
+def _shadow_schema(defaults: dict) -> vol.Schema:
+    """Settings for running alongside another controller without touching it."""
+    return vol.Schema(
+        {
+            vol.Optional(
+                CONF_SHADOW_SIMULATE,
+                default=defaults.get(CONF_SHADOW_SIMULATE, DEFAULT_SHADOW_SIMULATE),
+            ): bool,
+            vol.Optional(
+                CONF_BATTERY_POWER_SENSOR,
+                description={
+                    "suggested_value": defaults.get(CONF_BATTERY_POWER_SENSOR)
+                },
+            ): _SENSOR,
         }
     )
 
@@ -200,7 +277,9 @@ class BatteryManagementOptionsFlow(OptionsFlow):
         self._unit_index = 0
 
     async def async_step_init(self, user_input: dict | None = None) -> ConfigFlowResult:
-        return self.async_show_menu(step_id="init", menu_options=["tuning", "units"])
+        return self.async_show_menu(
+            step_id="init", menu_options=["tuning", "units", "dynamic", "shadow"]
+        )
 
     async def async_step_tuning(self, user_input: dict | None = None) -> ConfigFlowResult:
         if user_input is not None:
@@ -208,6 +287,36 @@ class BatteryManagementOptionsFlow(OptionsFlow):
         defaults = {**self._entry.data, **self._entry.options}
         return self.async_show_form(
             step_id="tuning", data_schema=_options_schema(defaults)
+        )
+
+    async def async_step_dynamic(
+        self, user_input: dict | None = None
+    ) -> ConfigFlowResult:
+        if user_input is not None:
+            # an emptied picker must actually clear, not fall back to the old one
+            merged = {**self._entry.options}
+            for key in (CONF_PRICE_SENSOR, CONF_SOLAR_FORECAST_SENSOR):
+                merged.pop(key, None)
+            merged.update(user_input)
+            return self.async_create_entry(title="", data=merged)
+
+        defaults = {**self._entry.data, **self._entry.options}
+        return self.async_show_form(
+            step_id="dynamic", data_schema=_dynamic_schema(defaults)
+        )
+
+    async def async_step_shadow(
+        self, user_input: dict | None = None
+    ) -> ConfigFlowResult:
+        if user_input is not None:
+            merged = {**self._entry.options}
+            merged.pop(CONF_BATTERY_POWER_SENSOR, None)
+            merged.update(user_input)
+            return self.async_create_entry(title="", data=merged)
+
+        defaults = {**self._entry.data, **self._entry.options}
+        return self.async_show_form(
+            step_id="shadow", data_schema=_shadow_schema(defaults)
         )
 
     async def async_step_units(self, user_input: dict | None = None) -> ConfigFlowResult:

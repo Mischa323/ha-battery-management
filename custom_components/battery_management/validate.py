@@ -15,6 +15,10 @@ from __future__ import annotations
 from typing import Callable
 
 from .const import (
+    DEVICE_MODE_SELF,
+    DEVICE_MODE_THIRD_PARTY,
+    FLOW_CHARGE,
+    FLOW_DISCHARGE,
     CONF_CHARGE_LIMIT,
     CONF_DISCHARGE_LIMIT,
     CONF_FLOW_SELECT,
@@ -61,6 +65,32 @@ def limit_is_implausible(state) -> bool:
     return False
 
 
+#: what each select must be able to be told, or the coordinator is mute
+REQUIRED_OPTIONS = {
+    CONF_MODE_SELECT: (DEVICE_MODE_SELF, DEVICE_MODE_THIRD_PARTY),
+    CONF_FLOW_SELECT: (FLOW_CHARGE, FLOW_DISCHARGE),
+}
+
+
+def missing_options(state, required: tuple[str, ...]) -> bool:
+    """True when a select plainly cannot accept the commands we will send.
+
+    Worth checking at setup rather than at runtime: a firmware that renames
+    these leaves the coordinator writing options nobody accepts, and in dry run
+    it would never find out - it is exactly the failure a shadow month cannot
+    surface, because nothing is ever written.
+
+    Permissive on purpose: an entity we cannot see, or one that does not publish
+    its options, is accepted rather than blocked on a guess.
+    """
+    if state is None:
+        return False
+    options = state.attributes.get("options")
+    if not isinstance(options, (list, tuple)) or not options:
+        return False
+    return any(option not in options for option in required)
+
+
 def validate_unit(
     user_input: dict,
     other_names: list[str],
@@ -88,6 +118,15 @@ def validate_unit(
             errors.setdefault(seen[entity_id], "duplicate_entity")
         else:
             seen[entity_id] = field
+
+    # the selects must accept the options we are going to send them
+    if get_state is not None:
+        for field, required in REQUIRED_OPTIONS.items():
+            entity_id = user_input.get(field)
+            if not entity_id or field in errors:
+                continue
+            if missing_options(get_state(entity_id), required):
+                errors[field] = "missing_options"
 
     # the SoC limits must be percentages, not watts
     if get_state is not None:

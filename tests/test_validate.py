@@ -134,3 +134,53 @@ def test_soc_sensor_may_not_double_as_a_limit():
 
     assert errors[CONF_CHARGE_LIMIT] == "duplicate_entity"
     assert errors[CONF_SOC_SENSOR] == "duplicate_entity"
+
+
+# -- the selects must accept what we will send them ---------------------------
+
+MODE_SELECT_OK = FakeState(
+    "self_consumption",
+    {"options": ["self_consumption", "third_party_control"]},
+)
+FLOW_SELECT_OK = FakeState("charge", {"options": ["charge", "discharge"]})
+MODE_SELECT_RENAMED = FakeState(
+    "Self consumption", {"options": ["Self consumption", "Third party"]}
+)
+
+
+def test_accepts_selects_that_offer_the_expected_options():
+    cfg = unit_config("Batterij 01", "sim_01", with_limits=False)
+
+    errors = validate_unit(
+        cfg,
+        [],
+        states({cfg[CONF_MODE_SELECT]: MODE_SELECT_OK, cfg[CONF_FLOW_SELECT]: FLOW_SELECT_OK}),
+    )
+
+    assert errors == {}
+
+
+def test_rejects_a_mode_select_whose_firmware_renamed_the_options():
+    """Dry run would never surface this: nothing is ever written."""
+    cfg = unit_config("Batterij 01", "sim_01", with_limits=False)
+
+    errors = validate_unit(cfg, [], states({cfg[CONF_MODE_SELECT]: MODE_SELECT_RENAMED}))
+
+    assert errors == {CONF_MODE_SELECT: "missing_options"}
+
+
+def test_rejects_a_flow_select_that_cannot_discharge():
+    cfg = unit_config("Batterij 01", "sim_01", with_limits=False)
+    half = FakeState("charge", {"options": ["charge"]})
+
+    errors = validate_unit(cfg, [], states({cfg[CONF_FLOW_SELECT]: half}))
+
+    assert errors == {CONF_FLOW_SELECT: "missing_options"}
+
+
+def test_a_select_that_publishes_no_options_is_accepted():
+    """Permissive: do not block an unusual integration on a guess."""
+    cfg = unit_config("Batterij 01", "sim_01", with_limits=False)
+    quiet = FakeState("something", {})
+
+    assert validate_unit(cfg, [], states({cfg[CONF_MODE_SELECT]: quiet})) == {}

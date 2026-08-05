@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from homeassistant.components.switch import SwitchEntity
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -19,6 +20,7 @@ async def async_setup_entry(
         [
             CoordinatorEnableSwitch(coordinator, entry),
             FastChargeSwitch(coordinator, entry),
+            DryRunSwitch(coordinator, entry),
         ]
     )
 
@@ -57,6 +59,43 @@ class CoordinatorEnableSwitch(_BaseSwitch):
 
     async def async_turn_off(self, **kwargs) -> None:
         await self.coordinator.async_set_enabled(False)
+
+
+class DryRunSwitch(_BaseSwitch):
+    """Decide everything, command nothing.
+
+    Exists so this can be watched for a month next to a site's existing
+    automations before it is trusted with the packs. It blocks every write -
+    targets, grid flow, the operating-mode select and the safe revert - because
+    a half dry run that still set third_party_control would fight those
+    automations, which is worse than not testing at all.
+
+    The per-unit target sensors keep publishing what it *would* have done, so
+    the comparison accumulates in long-term statistics on its own.
+    """
+
+    _attr_name = "Dry run"
+    _attr_icon = "mdi:test-tube"
+    _attr_entity_category = EntityCategory.CONFIG
+
+    def __init__(self, coordinator, entry) -> None:
+        super().__init__(coordinator, entry)
+        self._attr_unique_id = f"{entry.entry_id}_dry_run"
+
+    @property
+    def is_on(self) -> bool:
+        return self.coordinator.dry_run
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        # proof of life: a shadow run that decided nothing is a broken shadow run
+        return {"suppressed_commands": self.coordinator.suppressed_commands}
+
+    async def async_turn_on(self, **kwargs) -> None:
+        await self.coordinator.async_set_dry_run(True)
+
+    async def async_turn_off(self, **kwargs) -> None:
+        await self.coordinator.async_set_dry_run(False)
 
 
 class FastChargeSwitch(_BaseSwitch):

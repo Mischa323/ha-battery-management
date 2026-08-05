@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from homeassistant.components.sensor import SensorDeviceClass, SensorEntity, SensorStateClass
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import UnitOfPower
+from homeassistant.const import UnitOfPower, UnitOfTime
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -21,6 +21,7 @@ async def async_setup_entry(
             SetpointSensor(coordinator, entry),
             StatusSensor(coordinator, entry),
             ActivePolicySensor(coordinator, entry),
+            MinutesToFullSensor(coordinator, entry),
         ]
         + [
             UnitTargetSensor(coordinator, entry, index, unit)
@@ -75,6 +76,14 @@ class StatusSensor(_BaseSensor):
     def native_value(self) -> str:
         return self.coordinator.status
 
+    @property
+    def extra_state_attributes(self) -> dict:
+        # the first place anyone looks, so do not make them hunt for this
+        return {
+            "dry_run": self.coordinator.dry_run,
+            "suppressed_commands": self.coordinator.suppressed_commands,
+        }
+
 
 class ActivePolicySensor(_BaseSensor):
     """Why the coordinator is doing what it is doing, right now.
@@ -96,6 +105,36 @@ class ActivePolicySensor(_BaseSensor):
     @property
     def native_value(self) -> str:
         return self.coordinator.active_policy
+
+
+class MinutesToFullSensor(_BaseSensor):
+    """How long a fast charge would take from right now.
+
+    Unavailable until the empty-to-full time has been measured and entered - a
+    "be full by 18:00" built on a guessed duration is worse than none at all.
+
+    The integration does the arithmetic because it knows the state of charge and
+    the limits; deciding *when* to act is left to an automation, the same split
+    as the schedule blueprints.
+    """
+
+    _attr_name = "Minutes to full"
+    _attr_native_unit_of_measurement = UnitOfTime.MINUTES
+    _attr_device_class = SensorDeviceClass.DURATION
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_icon = "mdi:battery-clock"
+
+    def __init__(self, coordinator, entry) -> None:
+        super().__init__(coordinator, entry)
+        self._attr_unique_id = f"{entry.entry_id}_minutes_to_full"
+
+    @property
+    def available(self) -> bool:
+        return self.coordinator.minutes_to_full() is not None
+
+    @property
+    def native_value(self) -> int | None:
+        return self.coordinator.minutes_to_full()
 
 
 class UnitTargetSensor(_BaseSensor):

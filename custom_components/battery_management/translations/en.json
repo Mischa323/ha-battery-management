@@ -40,7 +40,8 @@
       "name_required": "Give this unit a name.",
       "duplicate_name": "Another unit already uses this name. Names must be unique, otherwise the two packs are treated as one.",
       "duplicate_entity": "This entity is already used for another field on this unit. Each field needs its own entity.",
-      "limit_not_percentage": "This looks like a power entity, not a state-of-charge percentage. The limit fields expect a percentage (0-100); leave blank to use 100 % / 5 %."
+      "limit_not_percentage": "This looks like a power entity, not a state-of-charge percentage. The limit fields expect a percentage (0-100); leave blank to use 100 % / 5 %.",
+      "missing_options": "This select does not offer the options the coordinator needs (self_consumption / third_party_control, or charge / discharge). Check the entity, or adjust the option strings in const.py if your firmware renamed them."
     }
   },
   "options": {
@@ -49,7 +50,9 @@
         "title": "Battery Management",
         "menu_options": {
           "tuning": "Control parameters",
-          "units": "Battery unit entities"
+          "units": "Battery unit entities",
+          "dynamic": "Dynamic tariff",
+          "shadow": "Shadow running"
         }
       },
       "tuning": {
@@ -62,7 +65,9 @@
           "interval": "Control interval (seconds)",
           "min_output": "Minimum output per unit (W)",
           "unit_max": "Max power per unit (W)",
-          "fast_charge_hold": "Keep the packs full after a fast charge (release with the switch)"
+          "fast_charge_hold": "Keep the packs full after a fast charge (release with the switch)",
+          "full_charge_minutes": "Minutes from empty to full at max power (0 = not measured, hides the estimate)",
+          "external_timeout": "Minutes an external setpoint stays valid before handing control back"
         }
       },
       "units": {
@@ -77,13 +82,33 @@
           "charge_limit_number": "Charge limit (number, %, optional)",
           "discharge_limit_number": "Discharge limit (number, %, optional)"
         }
+      },
+      "dynamic": {
+        "title": "Dynamic tariff",
+        "description": "Optional. Without a price sensor the Dynamic mode is not offered and nothing else changes. Exchange (day-ahead) prices are enough: tax and markup shift every hour equally, so the cheap-to-expensive order is the same.",
+        "data": {
+          "price_sensor": "Price sensor (any integration publishing upcoming prices)",
+          "cheap_hours": "Hours per day to charge from the grid on",
+          "charge_below_soc": "Only buy when a pack is below this state of charge (%)",
+          "solar_forecast_sensor": "Solar forecast sensor (kWh expected, optional)",
+          "solar_forecast_max": "Skip buying when more sun than this is expected (kWh, 0 = ignore)"
+        }
+      },
+      "shadow": {
+        "title": "Shadow running",
+        "description": "Only matters while Dry run is on. Simulating the meter is what makes a shadow comparison honest: without it the other controller is already regulating the meter, so this one sees nothing to do and parks at zero.",
+        "data": {
+          "shadow_simulate": "Simulate the meter from reconstructed demand (recommended)",
+          "battery_power_sensor": "Measured battery power, signed, + = discharging (optional; otherwise read back from the target entities)"
+        }
       }
     },
     "error": {
       "name_required": "Give this unit a name.",
       "duplicate_name": "Another unit already uses this name. Names must be unique, otherwise the two packs are treated as one.",
       "duplicate_entity": "This entity is already used for another field on this unit. Each field needs its own entity.",
-      "limit_not_percentage": "This looks like a power entity, not a state-of-charge percentage. The limit fields expect a percentage (0-100); leave blank to use 100 % / 5 %."
+      "limit_not_percentage": "This looks like a power entity, not a state-of-charge percentage. The limit fields expect a percentage (0-100); leave blank to use 100 % / 5 %.",
+      "missing_options": "This select does not offer the options the coordinator needs (self_consumption / third_party_control, or charge / discharge). Check the entity, or adjust the option strings in const.py if your firmware renamed them."
     }
   },
   "entity": {
@@ -99,9 +124,40 @@
           "fast_charge": "Fast charging",
           "no_grid_data": "No grid reading",
           "disabled": "Coordinator off",
-          "fast_charge_hold": "Charged, keeping the packs full"
+          "fast_charge_hold": "Charged, keeping the packs full",
+          "mode_charge_only": "Mode: charge only, not discharging",
+          "mode_discharge_only": "Mode: discharge only, not charging",
+          "mode_pause": "Mode: paused",
+          "dynamic_charge": "Buying now, prices are low",
+          "dynamic_no_prices": "Dynamic, but no prices available",
+          "external_plan": "Following an external plan",
+          "external_stale": "External plan went quiet, regulating on its own"
         }
       }
+    },
+    "select": {
+      "mode": {
+        "name": "Mode",
+        "state": {
+          "grid_zero": "Follow the meter",
+          "charge_only": "Charge only",
+          "discharge_only": "Discharge only",
+          "pause": "Pause",
+          "dynamic": "Dynamic tariff",
+          "external": "External plan (EMHASS)"
+        }
+      }
+    },
+    "switch": {
+      "dry_run": {
+        "name": "Dry run"
+      }
+    }
+  },
+  "issues": {
+    "external_no_plan": {
+      "title": "Smart charging needs an external optimiser",
+      "description": "The coordinator is set to **External plan**, but no plan has arrived in the last {timeout} minutes, so it has handed control back to normal grid-zero regulation.\n\nThis mode does not plan anything itself. It executes a plan produced elsewhere — typically **EMHASS**, which optimises against price, solar and load forecasts. EMHASS is a separate project: it is **not** installed with this integration and is not a dependency.\n\nInstall and configure it (or any other optimiser), and have it call the `battery_management.set_setpoint` service. Positive discharges, negative charges. This message clears itself as soon as a plan arrives.\n\nNot using an optimiser? Pick a different mode — **Follow the meter** charges from your solar surplus and discharges on demand, with no extra software."
     }
   }
 }

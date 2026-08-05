@@ -24,6 +24,10 @@ echo "==> Linking the integration into config/custom_components"
 mkdir -p config/custom_components
 ln -sfn ../../custom_components/battery_management \
   config/custom_components/battery_management
+# automation: !include needs the file to exist
+touch config/automations.yaml
+mkdir -p config/blueprints/automation
+ln -sfn ../../../blueprints/automation/battery_management   config/blueprints/automation/battery_management
 
 cat <<'EOF'
 

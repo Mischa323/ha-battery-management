@@ -1,0 +1,93 @@
+blueprint:
+  name: Battery Management - mode during a schedule
+  description: >
+    Switch the coordinator to one mode while a schedule is on, and back to
+    another when it ends.
+
+
+    Time windows deliberately live in Home Assistant's own Schedule helper
+    rather than inside the integration: you draw the blocks in the calendar
+    view, and anything this blueprint did not anticipate you can still build
+    yourself with a normal automation.
+
+
+    Remember that every mode is grid-zero regulation with a bound on it. "Charge
+    only" still charges from your surplus and simply refuses to discharge - the
+    batteries never sit idle just because they are inside a window.
+  domain: automation
+  source_url: https://github.com/Mischa323/ha-battery-management/blob/master/blueprints/automation/battery_management/mode_during_schedule.yaml
+  input:
+    schedule_entity:
+      name: Schedule
+      description: >
+        A Schedule helper (Settings > Devices & services > Helpers > Schedule).
+        Draw the blocks in which the mode below should apply.
+      selector:
+        entity:
+          filter:
+            domain: schedule
+    mode_entity:
+      name: Battery Management mode
+      description: The coordinator's Mode select.
+      selector:
+        entity:
+          filter:
+            domain: select
+            integration: battery_management
+    mode_during:
+      name: Mode during the schedule
+      default: charge_only
+      selector:
+        select:
+          options:
+            - label: Follow the meter
+              value: grid_zero
+            - label: Charge only (never discharge)
+              value: charge_only
+            - label: Discharge only (never charge)
+              value: discharge_only
+            - label: Pause (hold at zero)
+              value: pause
+    mode_outside:
+      name: Mode outside the schedule
+      description: What to return to when the schedule ends.
+      default: grid_zero
+      selector:
+        select:
+          options:
+            - label: Follow the meter
+              value: grid_zero
+            - label: Charge only (never discharge)
+              value: charge_only
+            - label: Discharge only (never charge)
+              value: discharge_only
+            - label: Pause (hold at zero)
+              value: pause
+
+mode: single
+max_exceeded: silent
+
+variables:
+  schedule_entity: !input schedule_entity
+  mode_during: !input mode_during
+  mode_outside: !input mode_outside
+
+trigger:
+  - platform: state
+    entity_id: !input schedule_entity
+    to: "on"
+  - platform: state
+    entity_id: !input schedule_entity
+    to: "off"
+  # re-sync after a restart, so a window that began while Home Assistant was
+  # down is still honoured
+  - platform: homeassistant
+    event: start
+
+action:
+  - service: select.select_option
+    target:
+      entity_id: !input mode_entity
+    data:
+      option: >-
+        {{ mode_during if is_state(schedule_entity, 'on') else mode_outside }}

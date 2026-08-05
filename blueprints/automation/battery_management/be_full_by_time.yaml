@@ -1,0 +1,110 @@
+blueprint:
+  name: Battery Management - be full by a certain time
+  description: >
+    Start a fast charge late enough to be efficient and early enough to finish:
+    every few minutes this compares the coordinator's own "Minutes to full"
+    estimate against the time left until your deadline, and presses the button
+    when they meet.
+
+
+    Requires "Minutes from empty to full" to be filled in under the
+    integration's Configure > Control parameters. Without it the estimate sensor
+    is unavailable and this automation does nothing - deliberately, since
+    arriving late on a guessed duration defeats the point.
+
+
+    Fast charge draws from the grid if there is no surplus, and once full it
+    holds the packs there until you switch it off.
+  domain: automation
+  source_url: https://github.com/Mischa323/ha-battery-management/blob/master/blueprints/automation/battery_management/be_full_by_time.yaml
+  input:
+    deadline:
+      name: Be full by
+      description: Time of day the packs should be full. Rolls over to tomorrow.
+      selector:
+        time:
+    minutes_sensor:
+      name: Minutes to full sensor
+      description: The coordinator's "Minutes to full" sensor.
+      selector:
+        entity:
+          filter:
+            domain: sensor
+            integration: battery_management
+    fast_charge_switch:
+      name: Fast charge switch
+      selector:
+        entity:
+          filter:
+            domain: switch
+            integration: battery_management
+    margin:
+      name: Safety margin (minutes)
+      description: >
+        Start this much earlier than the estimate says. Charging slows down near
+        full on most packs, so a margin is worth having.
+      default: 20
+      selector:
+        number:
+          min: 0
+          max: 120
+          step: 5
+          unit_of_measurement: min
+    weekdays:
+      name: Days
+      default: [mon, tue, wed, thu, fri, sat, sun]
+      selector:
+        select:
+          multiple: true
+          options:
+            - label: Monday
+              value: mon
+            - label: Tuesday
+              value: tue
+            - label: Wednesday
+              value: wed
+            - label: Thursday
+              value: thu
+            - label: Friday
+              value: fri
+            - label: Saturday
+              value: sat
+            - label: Sunday
+              value: sun
+
+mode: single
+max_exceeded: silent
+
+variables:
+  minutes_sensor: !input minutes_sensor
+  margin: !input margin
+  deadline: !input deadline
+
+trigger:
+  - platform: time_pattern
+    minutes: "/5"
+
+condition:
+  - condition: time
+    weekday: !input weekdays
+  # already charging, or already full and holding: nothing to decide
+  - condition: state
+    entity_id: !input fast_charge_switch
+    state: "off"
+  # unavailable means the empty-to-full time was never measured
+  - condition: template
+    value_template: >-
+      {{ states(minutes_sensor) not in ['unknown', 'unavailable', 'none'] }}
+  - condition: template
+    value_template: "{{ states(minutes_sensor) | float(0) > 0 }}"
+  - condition: template
+    value_template: >-
+      {% set target = today_at(deadline) %}
+      {% set target = target if target > now() else target + timedelta(days=1) %}
+      {% set left = (target - now()).total_seconds() / 60 %}
+      {{ left <= (states(minutes_sensor) | float(0)) + (margin | float(0)) }}
+
+action:
+  - service: switch.turn_on
+    target:
+      entity_id: !input fast_charge_switch

@@ -40,7 +40,8 @@
       "name_required": "Geef deze unit een naam.",
       "duplicate_name": "Een andere unit gebruikt deze naam al. Namen moeten uniek zijn, anders worden beide accu's als één behandeld.",
       "duplicate_entity": "Deze entiteit is al gekozen voor een ander veld van deze unit. Elk veld heeft zijn eigen entiteit nodig.",
-      "limit_not_percentage": "Dit lijkt een vermogens-entiteit, geen SoC-percentage. De limietvelden verwachten een percentage (0-100); leeglaten geeft 100 % / 5 %."
+      "limit_not_percentage": "Dit lijkt een vermogens-entiteit, geen SoC-percentage. De limietvelden verwachten een percentage (0-100); leeglaten geeft 100 % / 5 %.",
+      "missing_options": "Deze select biedt niet de opties die de coördinator nodig heeft (self_consumption / third_party_control, of charge / discharge). Controleer de entiteit, of pas de optiestrings in const.py aan als jouw firmware ze hernoemd heeft."
     }
   },
   "options": {
@@ -49,7 +50,9 @@
         "title": "Battery Management",
         "menu_options": {
           "tuning": "Regelparameters",
-          "units": "Entiteiten van de accu-units"
+          "units": "Entiteiten van de accu-units",
+          "dynamic": "Dynamisch tarief",
+          "shadow": "Schaduwdraaien"
         }
       },
       "tuning": {
@@ -62,7 +65,9 @@
           "interval": "Regelinterval (seconden)",
           "min_output": "Minimaal vermogen per unit (W)",
           "unit_max": "Maximaal vermogen per unit (W)",
-          "fast_charge_hold": "Accu's vol houden na snelladen (loslaten met de schakelaar)"
+          "fast_charge_hold": "Accu's vol houden na snelladen (loslaten met de schakelaar)",
+          "full_charge_minutes": "Minuten van leeg naar vol op vol vermogen (0 = niet gemeten, verbergt de schatting)",
+          "external_timeout": "Minuten dat een extern setpoint geldig blijft voordat hij het overneemt"
         }
       },
       "units": {
@@ -77,13 +82,33 @@
           "charge_limit_number": "Laadlimiet (number, %, optioneel)",
           "discharge_limit_number": "Ontlaadlimiet (number, %, optioneel)"
         }
+      },
+      "dynamic": {
+        "title": "Dynamisch tarief",
+        "description": "Optioneel. Zonder prijssensor verschijnt de modus Dynamisch niet en verandert er verder niets. Beursprijzen volstaan: belasting en opslag verschuiven elk uur even veel, dus de volgorde van goedkoop naar duur blijft gelijk.",
+        "data": {
+          "price_sensor": "Prijssensor (elke integratie die toekomstprijzen publiceert)",
+          "cheap_hours": "Uren per dag om op het net te laden",
+          "charge_below_soc": "Alleen kopen als een accu onder deze SoC zit (%)",
+          "solar_forecast_sensor": "Zonverwachting-sensor (kWh verwacht, optioneel)",
+          "solar_forecast_max": "Niet kopen als er meer zon verwacht wordt dan dit (kWh, 0 = negeren)"
+        }
+      },
+      "shadow": {
+        "title": "Schaduwdraaien",
+        "description": "Alleen van belang zolang Proefdraaien aan staat. Het simuleren van de meter is wat de vergelijking eerlijk maakt: zonder dit regelt het andere systeem de meter al, ziet deze niets te doen en blijft hij op nul staan.",
+        "data": {
+          "shadow_simulate": "Meter simuleren uit gereconstrueerde vraag (aanbevolen)",
+          "battery_power_sensor": "Gemeten accuvermogen, met teken, + = ontladen (optioneel; anders teruggelezen uit de doel-entiteiten)"
+        }
       }
     },
     "error": {
       "name_required": "Geef deze unit een naam.",
       "duplicate_name": "Een andere unit gebruikt deze naam al. Namen moeten uniek zijn, anders worden beide accu's als één behandeld.",
       "duplicate_entity": "Deze entiteit is al gekozen voor een ander veld van deze unit. Elk veld heeft zijn eigen entiteit nodig.",
-      "limit_not_percentage": "Dit lijkt een vermogens-entiteit, geen SoC-percentage. De limietvelden verwachten een percentage (0-100); leeglaten geeft 100 % / 5 %."
+      "limit_not_percentage": "Dit lijkt een vermogens-entiteit, geen SoC-percentage. De limietvelden verwachten een percentage (0-100); leeglaten geeft 100 % / 5 %.",
+      "missing_options": "Deze select biedt niet de opties die de coördinator nodig heeft (self_consumption / third_party_control, of charge / discharge). Controleer de entiteit, of pas de optiestrings in const.py aan als jouw firmware ze hernoemd heeft."
     }
   },
   "entity": {
@@ -99,9 +124,40 @@
           "fast_charge": "Snelladen",
           "no_grid_data": "Geen meterstand",
           "disabled": "Coördinator uit",
-          "fast_charge_hold": "Vol, houdt de accu's vol"
+          "fast_charge_hold": "Vol, houdt de accu's vol",
+          "mode_charge_only": "Modus: alleen laden, ontlaadt niet",
+          "mode_discharge_only": "Modus: alleen ontladen, laadt niet",
+          "mode_pause": "Modus: gepauzeerd",
+          "dynamic_charge": "Koopt nu in, prijzen zijn laag",
+          "dynamic_no_prices": "Dynamisch, maar geen prijzen beschikbaar",
+          "external_plan": "Volgt een extern plan",
+          "external_stale": "Extern plan is stilgevallen, regelt zelf"
         }
       }
+    },
+    "select": {
+      "mode": {
+        "name": "Modus",
+        "state": {
+          "grid_zero": "Volg de meter",
+          "charge_only": "Alleen laden",
+          "discharge_only": "Alleen ontladen",
+          "pause": "Pauze",
+          "dynamic": "Dynamisch tarief",
+          "external": "Extern plan (EMHASS)"
+        }
+      }
+    },
+    "switch": {
+      "dry_run": {
+        "name": "Proefdraaien"
+      }
+    }
+  },
+  "issues": {
+    "external_no_plan": {
+      "title": "Slim laden vereist een externe optimalisator",
+      "description": "De coördinator staat op **Extern plan**, maar er is de afgelopen {timeout} minuten geen plan binnengekomen. Hij is daarom teruggevallen op de gewone nul-sturing.\n\nDeze modus plant zelf niets. Hij voert een plan uit dat ergens anders gemaakt wordt — meestal door **EMHASS**, dat optimaliseert op prijs, zon en verbruiksvoorspelling. EMHASS is een apart project: het wordt **niet** met deze integratie meegeïnstalleerd en is geen afhankelijkheid.\n\nInstalleer en configureer het (of een andere optimalisator), en laat het de service `battery_management.set_setpoint` aanroepen. Positief is ontladen, negatief is laden. Deze melding verdwijnt vanzelf zodra er een plan binnenkomt.\n\nGeen optimalisator? Kies dan een andere modus — **Volg de meter** laadt uit je zonneoverschot en ontlaadt bij tekort, zonder extra software."
     }
   }
 }

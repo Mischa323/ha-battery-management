@@ -29,6 +29,7 @@ from custom_components.battery_management.const import (
     CONF_UNIT_NAME,
     CONF_UNITS,
 )
+from custom_components.battery_management import coordinator as coordinator_module
 from custom_components.battery_management.coordinator import BatteryCoordinator
 
 GRID_SENSOR = "sensor.p1_meter_power"
@@ -210,7 +211,8 @@ def build_system():
     """Factory for a coordinator wired to fake states.
 
     Defaults mirror the primary site: two Max AC units, the fuller one first.
-    Pass ``soc=None`` for a unit to simulate it being offline/unavailable.
+    Pass ``soc=None`` for a unit to simulate it being offline/unavailable, and
+    ``dry_run=True`` to check that nothing reaches the packs.
     """
 
     def _build(
@@ -222,6 +224,7 @@ def build_system():
         target_max: float | None = 3500,
         with_limits: bool = True,
         enabled: bool = True,
+        dry_run: bool = False,
         **tunables,
     ) -> System:
         unit_cfgs = [
@@ -253,7 +256,35 @@ def build_system():
         entry = FakeEntry(data)
         coordinator = BatteryCoordinator(hass, entry)
         coordinator._store = FakeStore()
+        # live by default: these tests are about what gets commanded. Dry run
+        # ships enabled, and has its own tests.
+        coordinator.dry_run = dry_run
         coordinator.enabled = enabled
         return System(hass, entry, coordinator, unit_cfgs)
 
     return _build
+
+
+@pytest.fixture(autouse=True)
+def issues(monkeypatch):
+    """Stand in for Home Assistant's issue registry, for every test.
+
+    The real one wants a live event loop and a loaded registry, which a fake
+    hass cannot provide. Autouse so no test can reach the real registry by
+    accident; tests that care about repair issues just ask for this dict.
+    """
+    raised: dict = {}
+
+    class FakeIssueRegistry:
+        IssueSeverity = coordinator_module.ir.IssueSeverity
+
+        @staticmethod
+        def async_create_issue(hass, domain, issue_id, **kwargs):
+            raised[issue_id] = kwargs
+
+        @staticmethod
+        def async_delete_issue(hass, domain, issue_id):
+            raised.pop(issue_id, None)
+
+    monkeypatch.setattr(coordinator_module, "ir", FakeIssueRegistry)
+    return raised

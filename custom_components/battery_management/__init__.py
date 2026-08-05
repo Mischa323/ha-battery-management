@@ -21,6 +21,7 @@ PLATFORMS: list[Platform] = [
     Platform.SENSOR,
     Platform.BINARY_SENSOR,
     Platform.NUMBER,
+    Platform.SELECT,
 ]
 
 SERVICE_SET_SETPOINT = "set_setpoint"
