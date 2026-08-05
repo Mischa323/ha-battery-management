@@ -65,7 +65,7 @@
       },
       "tuning": {
         "title": "Coördinator afstellen",
-        "description": "Opslaan herlaadt de integratie. De units gaan even terug naar self-consumption, daarna hervat de coördinator vanzelf met het setpoint dat hij had.",
+        "description": "Opslaan herlaadt de integratie. Elke unit wordt even losgelaten voor zover dat kan, daarna hervat de coördinator vanzelf met het setpoint dat hij had.",
         "data": {
           "bias": "Import-marge (W)",
           "deadband": "Deadband (W)",
@@ -108,6 +108,14 @@
         "data": {
           "shadow_simulate": "Meter simuleren uit gereconstrueerde vraag (aanbevolen)",
           "battery_power_sensor": "Gemeten accuvermogen, met teken, + = ontladen (optioneel; anders teruggelezen uit de doel-entiteiten)"
+        }
+      },
+      "unit_modes": {
+        "title": "Accu-unit: {name} - wat zijn modi betekenen",
+        "description": "Deze unit biedt: {options}.\n\nKies welke optie de coördinator het stuur geeft, en welke hem teruggeeft als je uitschakelt. Laat de tweede leeg als er niets is om naar terug te keren - de unit krijgt dan simpelweg 0 W, en dat is een veilige ruststand. Een pack zonder eigen P1-meter heeft geen zelfverbruik-modus, dus dat is normaal.",
+        "data": {
+          "mode_control": "Optie die de coördinator het stuur geeft",
+          "mode_safe": "Optie om naar terug te keren bij uitschakelen (leeg = alleen 0 W)"
         }
       }
     },

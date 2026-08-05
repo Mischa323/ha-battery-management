@@ -739,6 +739,11 @@ class BatteryCoordinator:
                         "charge_limit": cfg.charge_limit,
                         "discharge_limit": cfg.discharge_limit,
                     },
+                    "modes": {
+                        "control": cfg.mode_control,
+                        # None means: command 0 and leave the mode alone
+                        "safe": cfg.mode_safe,
+                    },
                     "status": {
                         "online": self.unit_status[cfg.name].online,
                         "soc": self.unit_status[cfg.name].soc,

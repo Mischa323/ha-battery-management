@@ -247,6 +247,15 @@ async def test_options_units_can_repair_a_wrong_entity(hass: HomeAssistant):
         result = await hass.config_entries.options.async_configure(
             result["flow_id"], fixed
         )
+        # each unit's entities are followed by what its modes mean
+        assert result["step_id"] == "unit_modes"
+        result = await hass.config_entries.options.async_configure(
+            result["flow_id"],
+            {
+                CONF_MODE_CONTROL: "third_party_control",
+                CONF_MODE_SAFE: "self_consumption",
+            },
+        )
     await hass.async_block_till_done()
 
     assert result["type"] is FlowResultType.CREATE_ENTRY
@@ -304,3 +313,31 @@ async def test_the_mode_step_offers_what_the_entity_actually_has(hass: HomeAssis
     unit = result["data"][CONF_UNITS][0]
     assert unit[CONF_MODE_CONTROL] == "third_party_control"
     assert not unit.get(CONF_MODE_SAFE)  # nothing to return to, and that is fine
+
+
+async def test_the_mode_mapping_can_be_corrected_afterwards(hass: HomeAssistant):
+    """It decides what a pack does when the coordinator lets go, so it has to
+    stay reachable — it was only in the wizard, which meant a wrong choice
+    could not be fixed without deleting the entry."""
+    entry = await _create_entry(hass, unit_count=1)
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {"next_step_id": "units"}
+    )
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], unit_input(1)
+    )
+    assert result["step_id"] == "unit_modes"
+
+    # clear the hand-back: a pack with no meter of its own has nothing to
+    # return to, and must simply be commanded 0
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {CONF_MODE_CONTROL: "third_party_control"}
+    )
+    await hass.async_block_till_done()
+
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    unit = entry.data[CONF_UNITS][0]
+    assert unit[CONF_MODE_CONTROL] == "third_party_control"
+    assert not unit.get(CONF_MODE_SAFE)

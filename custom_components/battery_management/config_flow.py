@@ -86,6 +86,15 @@ def _unit_schema() -> vol.Schema:
     )
 
 
+def _mode_options(hass, entity_id: str) -> list[str]:
+    """This select's own options, or a sensible pair if it is not loaded."""
+    state = hass.states.get(entity_id)
+    options = state.attributes.get("options") if state else None
+    if isinstance(options, (list, tuple)) and options:
+        return [str(o) for o in options]
+    return [DEVICE_MODE_SELF, DEVICE_MODE_THIRD_PARTY]
+
+
 def _mode_schema(options: list[str], defaults: dict) -> vol.Schema:
     """Which of this unit's own options means what.
 
@@ -294,20 +303,12 @@ class BatteryManagementConfigFlow(ConfigFlow, domain=DOMAIN):
             },
         )
 
-    def _mode_options(self, entity_id: str) -> list[str]:
-        state = self.hass.states.get(entity_id)
-        options = state.attributes.get("options") if state else None
-        if isinstance(options, (list, tuple)) and options:
-            return [str(o) for o in options]
-        # entity not loaded: fall back to the pair every firmware seen so far has
-        return [DEVICE_MODE_SELF, DEVICE_MODE_THIRD_PARTY]
-
     async def async_step_unit_modes(
         self, user_input: dict | None = None
     ) -> ConfigFlowResult:
         """Map this unit's own mode options onto what we need them to mean."""
         unit = self._pending_unit
-        options = self._mode_options(unit[CONF_MODE_SELECT])
+        options = _mode_options(self.hass, unit[CONF_MODE_SELECT])
 
         if user_input is not None:
             unit = {**unit, **user_input}
@@ -344,6 +345,7 @@ class BatteryManagementOptionsFlow(OptionsFlow):
         self._entry = entry
         self._units: list[dict] = [dict(u) for u in entry.data.get(CONF_UNITS, [])]
         self._unit_index = 0
+        self._pending_unit: dict = {}
 
     async def async_step_init(self, user_input: dict | None = None) -> ConfigFlowResult:
         return self.async_show_menu(
@@ -372,6 +374,37 @@ class BatteryManagementOptionsFlow(OptionsFlow):
         defaults = {**self._entry.data, **self._entry.options}
         return self.async_show_form(
             step_id="dynamic", data_schema=_dynamic_schema(defaults)
+        )
+
+    async def async_step_unit_modes(
+        self, user_input: dict | None = None
+    ) -> ConfigFlowResult:
+        current = self._units[self._unit_index]
+        unit = {**current, **self._pending_unit}
+        options = _mode_options(self.hass, unit[CONF_MODE_SELECT])
+
+        if user_input is not None:
+            merged = {**unit}
+            merged.pop(CONF_MODE_SAFE, None)  # an emptied picker must clear
+            merged.update(user_input)
+            self._units[self._unit_index] = merged
+            self._pending_unit = {}
+            self._unit_index += 1
+            if self._unit_index >= len(self._units):
+                # the entities live in entry.data, not in the options
+                self.hass.config_entries.async_update_entry(
+                    self._entry, data={**self._entry.data, CONF_UNITS: self._units}
+                )
+                return self.async_create_entry(title="", data=dict(self._entry.options))
+            return await self.async_step_units()
+
+        return self.async_show_form(
+            step_id="unit_modes",
+            data_schema=_mode_schema(options, unit),
+            description_placeholders={
+                "name": unit.get(CONF_UNIT_NAME, ""),
+                "options": ", ".join(options),
+            },
         )
 
     async def async_step_shadow(
@@ -405,18 +438,11 @@ class BatteryManagementOptionsFlow(OptionsFlow):
             ]
             errors = validate_unit(user_input, others, self.hass.states.get)
             if not errors:
-                self._units[self._unit_index] = user_input
-                self._unit_index += 1
-                if self._unit_index >= len(self._units):
-                    # the entities live in entry.data, not in the options
-                    self.hass.config_entries.async_update_entry(
-                        self._entry,
-                        data={**self._entry.data, CONF_UNITS: self._units},
-                    )
-                    return self.async_create_entry(
-                        title="", data=dict(self._entry.options)
-                    )
-                return await self.async_step_units()
+                # carry the mode mapping through to its own step, exactly as the
+                # wizard does - it is the setting that decides what a pack does
+                # when the coordinator lets go, so it must stay correctable
+                self._pending_unit = user_input
+                return await self.async_step_unit_modes()
 
         current = self._units[self._unit_index]
         return self.async_show_form(

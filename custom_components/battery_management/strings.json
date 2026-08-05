@@ -65,7 +65,7 @@
       },
       "tuning": {
         "title": "Tune the coordinator",
-        "description": "Saving reloads the integration. The units are briefly handed back to self-consumption, then the coordinator resumes on its own with the setpoint it had.",
+        "description": "Saving reloads the integration. Each unit is briefly released as far as it can be, then the coordinator resumes on its own with the setpoint it had.",
         "data": {
           "bias": "Import bias (W)",
           "deadband": "Deadband (W)",
@@ -108,6 +108,14 @@
         "data": {
           "shadow_simulate": "Simulate the meter from reconstructed demand (recommended)",
           "battery_power_sensor": "Measured battery power, signed, + = discharging (optional; otherwise read back from the target entities)"
+        }
+      },
+      "unit_modes": {
+        "title": "Battery unit: {name} - what its modes mean",
+        "description": "This unit offers: {options}.\n\nPick which one hands control to the coordinator, and which one gives it back when you switch off. Leave the second empty if there is nothing to return to - the unit is then simply commanded 0 W, which is a safe resting state. A pack without its own P1 meter has no self-consumption mode, so this is normal.",
+        "data": {
+          "mode_control": "Option that hands control to the coordinator",
+          "mode_safe": "Option to return to when switching off (leave empty to only command 0 W)"
         }
       }
     },
