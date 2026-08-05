@@ -21,6 +21,8 @@ from custom_components.battery_management.const import (  # noqa: E402
     CONF_GRID_POWER,
     CONF_CHEAP_HOURS,
     CONF_KP,
+    CONF_MODE_CONTROL,
+    CONF_MODE_SAFE,
     CONF_MODE_SELECT,
     CONF_PRICE_SENSOR,
     CONF_SOC_SENSOR,
@@ -71,15 +73,26 @@ async def skip_device_step(hass: HomeAssistant, result: dict) -> dict:
     return result
 
 
+async def add_unit(hass: HomeAssistant, result: dict, index: int, **overrides) -> dict:
+    """Walk one unit all the way through: entities, then what its modes mean."""
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], unit_input(index, **overrides)
+    )
+    if result["type"] is not FlowResultType.FORM or result["step_id"] != "unit_modes":
+        return result  # rejected, or already finished
+    return await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        {CONF_MODE_CONTROL: "third_party_control", CONF_MODE_SAFE: "self_consumption"},
+    )
+
+
 async def test_wizard_completes_with_three_units(hass: HomeAssistant):
     """N>2 has only ever been exercised in `_distribute`, not through the flow."""
     result = await start_wizard(hass, 3)
 
     for index in (1, 2, 3):
         result = await skip_device_step(hass, result)
-        result = await hass.config_entries.flow.async_configure(
-            result["flow_id"], unit_input(index)
-        )
+        result = await add_unit(hass, result, index)
 
     assert result["type"] is FlowResultType.CREATE_ENTRY
     units = result["data"][CONF_UNITS]
@@ -94,9 +107,7 @@ async def test_wizard_completes_with_three_units(hass: HomeAssistant):
 async def test_wizard_completes_with_a_single_unit(hass: HomeAssistant):
     result = await start_wizard(hass, 1)
     result = await skip_device_step(hass, result)
-    result = await hass.config_entries.flow.async_configure(
-        result["flow_id"], unit_input(1)
-    )
+    result = await add_unit(hass, result, 1)
 
     assert result["type"] is FlowResultType.CREATE_ENTRY
     assert len(result["data"][CONF_UNITS]) == 1
@@ -118,13 +129,9 @@ async def test_wizard_refuses_a_limit_pointing_at_the_target(hass: HomeAssistant
 async def test_wizard_refuses_two_units_with_the_same_name(hass: HomeAssistant):
     result = await start_wizard(hass, 2)
     result = await skip_device_step(hass, result)
-    result = await hass.config_entries.flow.async_configure(
-        result["flow_id"], unit_input(1, **{CONF_UNIT_NAME: "Batterij"})
-    )
+    result = await add_unit(hass, result, 1, **{CONF_UNIT_NAME: "Batterij"})
     result = await skip_device_step(hass, result)
-    result = await hass.config_entries.flow.async_configure(
-        result["flow_id"], unit_input(2, **{CONF_UNIT_NAME: "Batterij"})
-    )
+    result = await add_unit(hass, result, 2, **{CONF_UNIT_NAME: "Batterij"})
 
     assert result["type"] is FlowResultType.FORM
     assert result["errors"][CONF_UNIT_NAME] == "duplicate_name"
@@ -144,9 +151,7 @@ async def test_a_rejected_unit_can_be_corrected_and_the_wizard_continues(
     assert result["type"] is FlowResultType.FORM
     assert result["errors"][CONF_DISCHARGE_LIMIT] == "duplicate_entity"
 
-    result = await hass.config_entries.flow.async_configure(
-        result["flow_id"], unit_input(1)
-    )
+    result = await add_unit(hass, result, 1)
     assert result["type"] is FlowResultType.CREATE_ENTRY
 
 
@@ -154,9 +159,7 @@ async def _create_entry(hass: HomeAssistant, unit_count: int = 2):
     result = await start_wizard(hass, unit_count)
     for index in range(1, unit_count + 1):
         result = await skip_device_step(hass, result)
-        result = await hass.config_entries.flow.async_configure(
-            result["flow_id"], unit_input(index)
-        )
+        result = await add_unit(hass, result, index)
     await hass.async_block_till_done()
     return hass.config_entries.async_entries(DOMAIN)[0]
 
@@ -268,3 +271,36 @@ async def test_options_units_rejects_a_bad_repair(hass: HomeAssistant):
 
     assert result["type"] is FlowResultType.FORM
     assert result["errors"][CONF_CHARGE_LIMIT] == "duplicate_entity"
+
+
+async def test_the_mode_step_offers_what_the_entity_actually_has(hass: HomeAssistant):
+    """Unit 052 at the primary site: no P1 meter, so no self-consumption mode.
+
+    The wizard must offer that unit's own two options rather than a fixed pair,
+    and must accept an empty hand-back — the only safe letting-go a meterless
+    pack has is being commanded 0 W.
+    """
+    hass.states.async_set(
+        "select.sim_01_operating_mode",
+        "third_party_control",
+        {"options": ["third_party_control", "custom_mode"]},
+    )
+
+    result = await start_wizard(hass, 1)
+    result = await skip_device_step(hass, result)
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], unit_input(1)
+    )
+    assert result["step_id"] == "unit_modes"
+    assert "custom_mode" in result["description_placeholders"]["options"]
+    assert "self_consumption" not in result["description_placeholders"]["options"]
+
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {CONF_MODE_CONTROL: "third_party_control"}
+    )
+    await hass.async_block_till_done()
+
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    unit = result["data"][CONF_UNITS][0]
+    assert unit[CONF_MODE_CONTROL] == "third_party_control"
+    assert not unit.get(CONF_MODE_SAFE)  # nothing to return to, and that is fine

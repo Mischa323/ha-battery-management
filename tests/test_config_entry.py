@@ -11,7 +11,7 @@ from custom_components.battery_management.const import (
     CONF_KP,
     CONF_UNITS,
 )
-from custom_components.battery_management.coordinator import BatteryCoordinator
+from custom_components.battery_management.coordinator import BatteryCoordinator, UnitConfig
 
 from .conftest import FakeEntry, FakeHass, unit_config
 
@@ -76,3 +76,30 @@ def test_the_manifest_keys_are_sorted_the_way_hassfest_wants():
 
     assert keys[:2] == ["domain", "name"]
     assert keys[2:] == sorted(keys[2:])
+
+
+def test_a_unit_can_be_configured_with_no_safe_mode_to_return_to():
+    """Unit 052 at the primary site: no P1 meter of its own, so the firmware
+    offers no self-consumption mode. Letting go means commanding 0 W and
+    leaving the mode alone — holding 0 W indefinitely is a safe resting state.
+    """
+    from custom_components.battery_management.const import (
+        CONF_MODE_CONTROL,
+        CONF_MODE_SAFE,
+    )
+
+    raw = unit_config("Batterij 02", "tuin_batterij_02")
+    raw[CONF_MODE_CONTROL] = "third_party_control"
+    raw[CONF_MODE_SAFE] = ""
+
+    unit = UnitConfig.from_entry(raw)
+
+    assert unit.mode_control == "third_party_control"
+    assert unit.mode_safe is None
+
+
+def test_units_configured_before_this_existed_keep_the_old_behaviour():
+    unit = UnitConfig.from_entry(unit_config("Batterij 01", "unit_a"))
+
+    assert unit.mode_control == "third_party_control"
+    assert unit.mode_safe == "self_consumption"

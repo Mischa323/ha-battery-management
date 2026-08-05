@@ -15,8 +15,6 @@ from __future__ import annotations
 from typing import Callable
 
 from .const import (
-    DEVICE_MODE_SELF,
-    DEVICE_MODE_THIRD_PARTY,
     FLOW_CHARGE,
     FLOW_DISCHARGE,
     CONF_CHARGE_LIMIT,
@@ -67,7 +65,11 @@ def limit_is_implausible(state) -> bool:
 
 #: what each select must be able to be told, or the coordinator is mute
 REQUIRED_OPTIONS = {
-    CONF_MODE_SELECT: (DEVICE_MODE_SELF, DEVICE_MODE_THIRD_PARTY),
+    # The mode select is deliberately absent: which of its options means
+    # "take control" and "hand back" is chosen from the entity's own list in the
+    # next step, because firmwares differ - a unit without its own P1 meter does
+    # not even offer self-consumption. Grid flow is checked, since charge and
+    # discharge are what the coordinator writes literally.
     CONF_FLOW_SELECT: (FLOW_CHARGE, FLOW_DISCHARGE),
 }
 

@@ -34,6 +34,14 @@
           "charge_limit_number": "Laadlimiet (number, %, optioneel)",
           "discharge_limit_number": "Ontlaadlimiet (number, %, optioneel)"
         }
+      },
+      "unit_modes": {
+        "title": "Accu-unit: {name} - wat zijn modi betekenen",
+        "desc": "Deze unit biedt: {options}.\n\nKies welke optie de coördinator het stuur geeft, en welke hem teruggeeft als je uitschakelt. Laat de tweede leeg als er niets is om naar terug te keren - de unit krijgt dan simpelweg 0 W, en dat is een veilige ruststand. Een pack zonder eigen P1-meter heeft geen zelfverbruik-modus, dus dat is normaal.",
+        "data": {
+          "mode_control": "Optie die de coördinator het stuur geeft",
+          "mode_safe": "Optie om naar terug te keren bij uitschakelen (leeg = alleen 0 W)"
+        }
       }
     },
     "error": {

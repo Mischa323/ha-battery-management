@@ -160,13 +160,30 @@ def test_accepts_selects_that_offer_the_expected_options():
     assert errors == {}
 
 
-def test_rejects_a_mode_select_whose_firmware_renamed_the_options():
-    """Dry run would never surface this: nothing is ever written."""
+def test_a_mode_select_offering_a_different_list_is_accepted():
+    """Real hardware: the two units at the primary site disagree.
+
+    Unit 093 offers six modes; unit 052 offers only two, because its own P1
+    meter is not connected so the firmware hides self-consumption entirely.
+    Which option means what is chosen from the entity's own list in the next
+    wizard step, so this must not be rejected here.
+    """
+    cfg = unit_config("Batterij 02", "sim_02", with_limits=False)
+    meterless = FakeState(
+        "third_party_control", {"options": ["third_party_control", "custom_mode"]}
+    )
+
+    assert validate_unit(cfg, [], states({cfg[CONF_MODE_SELECT]: meterless})) == {}
+
+
+def test_the_flow_select_is_still_checked_literally():
+    """charge / discharge are written as-is, so they must exist."""
     cfg = unit_config("Batterij 01", "sim_01", with_limits=False)
+    renamed = FakeState("Laden", {"options": ["Laden", "Ontladen"]})
 
-    errors = validate_unit(cfg, [], states({cfg[CONF_MODE_SELECT]: MODE_SELECT_RENAMED}))
+    errors = validate_unit(cfg, [], states({cfg[CONF_FLOW_SELECT]: renamed}))
 
-    assert errors == {CONF_MODE_SELECT: "missing_options"}
+    assert errors == {CONF_FLOW_SELECT: "missing_options"}
 
 
 def test_rejects_a_flow_select_that_cannot_discharge():

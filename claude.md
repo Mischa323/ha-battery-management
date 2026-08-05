@@ -101,10 +101,27 @@ splits proportionally; low load consolidates onto one unit; offline unit (weight
    both units so the wizard can be run without hardware.
 2. **Measure the real `min_output`** (the wattage below which a Max AC idles) —
    150 W is a guess. It decides when the pack consolidates onto one unit.
-3. **Confirm mode/flow option strings** against the installed Anker integration
-   (some firmwares/integrations may rename them) — centralised in `const.py`.
-   Highest-risk of the three: if these are wrong the coordinator does nothing at
-   all and only reports `degraded`.
+3. ~~**Confirm mode/flow option strings**~~ — **answered, 2026-08-05, and it was
+   not a naming problem.** The two packs do not offer the same modes:
+
+   - 093: `self_consumption, tou_mode, third_party_control, custom_mode,
+     smart_mode, dynamic_pricing`
+   - 052: `third_party_control, custom_mode` only
+
+   Both were in `third_party_control` at the time, so it is not a
+   valid-transition thing — **052 has no P1 meter of its own, so its firmware
+   hides self-consumption entirely.** Grid flow is `charge`/`discharge` on both.
+
+   Consequence, and it is the important one: the old fixed revert to
+   `self_consumption` **silently fails on 052**. The command is simply not
+   accepted, and per gotcha 1 that pack then keeps its last instruction forever.
+   **The site's existing YAML kill-switch almost certainly has this same hole** —
+   worth verifying there.
+
+   Fixed by making it per unit (`mode_control` / `mode_safe`, chosen in the
+   wizard from the entity's own options). Empty `mode_safe` means "command 0 W
+   and leave the mode alone", which is what a meterless pack needs: holding 0 W
+   indefinitely is a safe resting state, unlike holding a non-zero one.
 
 ### B. Charging options — design settled with the owner, read before touching
 

@@ -18,6 +18,14 @@ CONF_SOC_SENSOR = "soc_sensor"                 # sensor.* (%)
 CONF_CHARGE_LIMIT = "charge_limit_number"      # number.* (%) - optional
 CONF_DISCHARGE_LIMIT = "discharge_limit_number"  # number.* (%) - optional
 
+# Which option on this unit's mode select means what. Not hard-coded, because
+# the two units at the primary site do not even offer the same list: the one
+# without its own P1 meter cannot do self-consumption at all, so the firmware
+# hides that option. Different firmware or a different language would break a
+# fixed string in the same way, and at a site nobody can reach.
+CONF_MODE_CONTROL = "mode_control"   # the option that hands us the wheel
+CONF_MODE_SAFE = "mode_safe"         # the option that gives it back; may be empty
+
 # --- Options (tunable, sane defaults) ---------------------------------------
 CONF_BIAS = "bias"                 # W, aim for a small import so we never export
 CONF_DEADBAND = "deadband"         # W, ignore errors smaller than this
@@ -144,6 +152,8 @@ CONF_EXTERNAL_TIMEOUT = "external_timeout"   # minutes
 DEFAULT_EXTERNAL_TIMEOUT = 15
 DEFAULT_MODE = MODE_GRID_ZERO
 
+# Defaults only: the wizard offers whatever the entity actually publishes, and
+# these are pre-selected when present.
 DEVICE_MODE_SELF = "self_consumption"
 DEVICE_MODE_THIRD_PARTY = "third_party_control"
 FLOW_CHARGE = "charge"

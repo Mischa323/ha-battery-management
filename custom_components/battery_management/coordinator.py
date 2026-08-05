@@ -34,6 +34,8 @@ from .const import (
     CONF_INTERVAL,
     CONF_KP,
     CONF_MIN_OUTPUT,
+    CONF_MODE_CONTROL,
+    CONF_MODE_SAFE,
     CONF_MODE_SELECT,
     CONF_SOC_SENSOR,
     CONF_TARGET_NUMBER,
@@ -117,6 +119,12 @@ class UnitConfig:
     soc_sensor: str
     charge_limit: str | None = None
     discharge_limit: str | None = None
+    mode_control: str = DEVICE_MODE_THIRD_PARTY
+    #: empty means "do not touch the mode, just command 0" - which is what a
+    #: unit without its own meter needs, since it has no self-consumption mode
+    #: to fall back to. Holding 0 W indefinitely is a safe resting state; it is
+    #: holding a *non-zero* command that gotcha 1 warns about.
+    mode_safe: str | None = DEVICE_MODE_SELF
 
     @classmethod
     def from_entry(cls, raw: dict) -> "UnitConfig":
@@ -135,6 +143,9 @@ class UnitConfig:
             soc_sensor=raw[CONF_SOC_SENSOR],
             charge_limit=raw.get(CONF_CHARGE_LIMIT),
             discharge_limit=raw.get(CONF_DISCHARGE_LIMIT),
+            # entries created before these existed keep the old fixed behaviour
+            mode_control=raw.get(CONF_MODE_CONTROL) or DEVICE_MODE_THIRD_PARTY,
+            mode_safe=raw.get(CONF_MODE_SAFE, DEVICE_MODE_SELF) or None,
         )
 
 
@@ -313,7 +324,7 @@ class BatteryCoordinator:
             )
 
         self.status = "idle"
-        await self._set_all_mode(DEVICE_MODE_THIRD_PARTY)
+        await self._take_control()
         self._notify()
 
     async def async_stop(self, revert: bool = True) -> None:
@@ -342,7 +353,7 @@ class BatteryCoordinator:
         self.enabled = value
         if value:
             self.setpoint = 0.0
-            await self._set_all_mode(DEVICE_MODE_THIRD_PARTY)
+            await self._take_control()
         else:
             self.fast_charge = False
             self.setpoint = 0.0
@@ -375,7 +386,7 @@ class BatteryCoordinator:
         self.fast_charge = value
         self.fast_charge_holding = False
         if value:
-            await self._set_all_mode(DEVICE_MODE_THIRD_PARTY)
+            await self._take_control()
             await self._async_tick(dt_util.utcnow())
         else:
             self.setpoint = 0.0
@@ -781,14 +792,23 @@ class BatteryCoordinator:
         status.flow = flow
         status.target = watts if flow == FLOW_DISCHARGE else -watts
 
-    async def _set_all_mode(self, mode: str) -> None:
+    async def _take_control(self) -> None:
+        """Put every unit into whatever option means 'driven from outside'."""
         for u in self._units:
-            await self._svc_select(u.mode_select, mode)
+            await self._svc_select(u.mode_select, u.mode_control)
 
     async def _revert_all_to_self(self) -> None:
+        """Let go of every unit, as far as each one can be let go of.
+
+        Zero first, always: a unit whose mode cannot be changed - no meter of
+        its own, so no self-consumption mode to return to - is left holding a
+        command of 0 W, which is a safe resting state. Skipping the zero and
+        only switching modes would be the dangerous order.
+        """
         for u in self._units:
             await self._svc_number(u.target_number, 0)
-            await self._svc_select(u.mode_select, DEVICE_MODE_SELF)
+            if u.mode_safe:
+                await self._svc_select(u.mode_select, u.mode_safe)
             status = self.unit_status[u.name]
             status.target = 0
             status.flow = None

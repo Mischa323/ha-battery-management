@@ -37,6 +37,8 @@ from .const import (
     CONF_INTERVAL,
     CONF_KP,
     CONF_MIN_OUTPUT,
+    CONF_MODE_CONTROL,
+    CONF_MODE_SAFE,
     CONF_MODE_SELECT,
     CONF_SOC_SENSOR,
     CONF_TARGET_NUMBER,
@@ -57,6 +59,8 @@ from .const import (
     DEFAULT_KP,
     DEFAULT_MIN_OUTPUT,
     DEFAULT_UNIT_MAX,
+    DEVICE_MODE_SELF,
+    DEVICE_MODE_THIRD_PARTY,
     DOMAIN,
 )
 from .discovery import match_unit_entities
@@ -80,6 +84,40 @@ def _unit_schema() -> vol.Schema:
             vol.Optional(CONF_DISCHARGE_LIMIT): _NUMBER,
         }
     )
+
+
+def _mode_schema(options: list[str], defaults: dict) -> vol.Schema:
+    """Which of this unit's own options means what.
+
+    Populated from the entity, never from a fixed list: the two units at the
+    primary site do not offer the same modes - the one without its own P1 meter
+    has no self-consumption to return to at all.
+    """
+    picker = selector.SelectSelector(
+        selector.SelectSelectorConfig(
+            options=options, mode=selector.SelectSelectorMode.DROPDOWN
+        )
+    )
+    schema: dict = {
+        vol.Required(
+            CONF_MODE_CONTROL,
+            default=defaults.get(
+                CONF_MODE_CONTROL,
+                DEVICE_MODE_THIRD_PARTY
+                if DEVICE_MODE_THIRD_PARTY in options
+                else options[0],
+            ),
+        ): picker
+    }
+    # optional on purpose: leaving it empty means "never change the mode, just
+    # command 0", which is the only safe hand-back a meterless unit has
+    safe_default = defaults.get(CONF_MODE_SAFE)
+    if safe_default is None and DEVICE_MODE_SELF in options:
+        safe_default = DEVICE_MODE_SELF
+    schema[
+        vol.Optional(CONF_MODE_SAFE, description={"suggested_value": safe_default})
+    ] = picker
+    return vol.Schema(schema)
 
 
 def _options_schema(defaults: dict) -> vol.Schema:
@@ -172,6 +210,7 @@ class BatteryManagementConfigFlow(ConfigFlow, domain=DOMAIN):
         self._unit_total = 2
         self._unit_index = 0
         self._suggestion: dict[str, Any] = {}
+        self._pending_unit: dict[str, Any] = {}
 
     async def async_step_user(self, user_input: dict | None = None) -> ConfigFlowResult:
         if user_input is not None:
@@ -238,15 +277,8 @@ class BatteryManagementConfigFlow(ConfigFlow, domain=DOMAIN):
                 self.hass.states.get,
             )
             if not errors:
-                self._units.append(user_input)
-                self._unit_index += 1
-                if self._unit_index >= self._unit_total:
-                    self._data[CONF_UNITS] = self._units
-                    return self.async_create_entry(
-                        title="Battery Management", data=self._data
-                    )
-                self._suggestion = {}
-                return await self.async_step_unit_device()
+                self._pending_unit = user_input
+                return await self.async_step_unit_modes()
 
         suggested = user_input or {
             CONF_UNIT_NAME: f"Batterij {self._unit_index + 1}",
@@ -259,6 +291,43 @@ class BatteryManagementConfigFlow(ConfigFlow, domain=DOMAIN):
             description_placeholders={
                 "index": str(self._unit_index + 1),
                 "total": str(self._unit_total),
+            },
+        )
+
+    def _mode_options(self, entity_id: str) -> list[str]:
+        state = self.hass.states.get(entity_id)
+        options = state.attributes.get("options") if state else None
+        if isinstance(options, (list, tuple)) and options:
+            return [str(o) for o in options]
+        # entity not loaded: fall back to the pair every firmware seen so far has
+        return [DEVICE_MODE_SELF, DEVICE_MODE_THIRD_PARTY]
+
+    async def async_step_unit_modes(
+        self, user_input: dict | None = None
+    ) -> ConfigFlowResult:
+        """Map this unit's own mode options onto what we need them to mean."""
+        unit = self._pending_unit
+        options = self._mode_options(unit[CONF_MODE_SELECT])
+
+        if user_input is not None:
+            unit = {**unit, **user_input}
+            self._units.append(unit)
+            self._pending_unit = {}
+            self._unit_index += 1
+            if self._unit_index >= self._unit_total:
+                self._data[CONF_UNITS] = self._units
+                return self.async_create_entry(
+                    title="Battery Management", data=self._data
+                )
+            self._suggestion = {}
+            return await self.async_step_unit_device()
+
+        return self.async_show_form(
+            step_id="unit_modes",
+            data_schema=_mode_schema(options, unit),
+            description_placeholders={
+                "name": unit.get(CONF_UNIT_NAME, ""),
+                "options": ", ".join(options),
             },
         )
 
