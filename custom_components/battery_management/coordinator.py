@@ -153,9 +153,18 @@ class UnitConfig:
             soc_sensor=raw[CONF_SOC_SENSOR],
             charge_limit=raw.get(CONF_CHARGE_LIMIT),
             discharge_limit=raw.get(CONF_DISCHARGE_LIMIT),
-            # entries created before these existed keep the old fixed behaviour
             mode_control=raw.get(CONF_MODE_CONTROL) or DEVICE_MODE_THIRD_PARTY,
-            mode_safe=raw.get(CONF_MODE_SAFE, DEVICE_MODE_SELF) or None,
+            # An absent hand-back means two opposite things, and getting them
+            # confused disarms the safety net on exactly the unit that needs it.
+            # If the wizard stored a control mode, this entry went through the
+            # mode step, so absent means the user deliberately left it empty -
+            # what a pack with no self-consumption mode requires. Only an entry
+            # predating the step gets the old fixed default.
+            mode_safe=(
+                raw.get(CONF_MODE_SAFE) or None
+                if CONF_MODE_CONTROL in raw
+                else raw.get(CONF_MODE_SAFE, DEVICE_MODE_SELF) or None
+            ),
         )
 
 

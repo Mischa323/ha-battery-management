@@ -92,3 +92,53 @@ async def test_a_configured_entry_carries_the_choice_through(build_system):
 
     assert rebuilt.units[1].mode_safe is None
     assert rebuilt.units[0].mode_safe == DEVICE_MODE_SELF
+
+
+# -- an empty hand-back must stay empty ---------------------------------------
+
+
+def test_leaving_the_hand_back_blank_really_leaves_it_blank():
+    """Found in the field on day one of the shadow run.
+
+    The wizard omits an optional field that is left empty, and the fallback for
+    entries predating the mode step then filled in self_consumption - on the
+    very unit that has no such mode. The safe revert would have been silently
+    refused there the day it went live.
+    """
+    from custom_components.battery_management.const import (
+        CONF_MODE_CONTROL,
+        CONF_MODE_SAFE,
+    )
+    from custom_components.battery_management.coordinator import UnitConfig
+    from tests.conftest import unit_config
+
+    raw = unit_config("Batterij 02", "tuin_batterij_02")
+    raw[CONF_MODE_CONTROL] = "third_party_control"  # the step was walked
+    assert CONF_MODE_SAFE not in raw                # and left empty
+
+    assert UnitConfig.from_entry(raw).mode_safe is None
+
+
+def test_an_entry_from_before_the_mode_step_keeps_the_old_default():
+    from custom_components.battery_management.coordinator import UnitConfig
+    from tests.conftest import unit_config
+
+    # no mode_control: this entry predates the step entirely
+    assert UnitConfig.from_entry(unit_config("Batterij 01", "a")).mode_safe == (
+        DEVICE_MODE_SELF
+    )
+
+
+def test_an_explicit_hand_back_is_kept():
+    from custom_components.battery_management.const import (
+        CONF_MODE_CONTROL,
+        CONF_MODE_SAFE,
+    )
+    from custom_components.battery_management.coordinator import UnitConfig
+    from tests.conftest import unit_config
+
+    raw = unit_config("Batterij 01", "a")
+    raw[CONF_MODE_CONTROL] = "third_party_control"
+    raw[CONF_MODE_SAFE] = DEVICE_MODE_SELF
+
+    assert UnitConfig.from_entry(raw).mode_safe == DEVICE_MODE_SELF
