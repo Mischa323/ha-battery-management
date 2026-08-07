@@ -18,9 +18,9 @@ meter), so it works with any solar setup (Enphase, string inverter, none at all)
   making the other flip between idle and active.
 * **Kill-switch.** A single switch to hand control back to the batteries'
   native Self-Consumption mode (safe fallback).
-* **Fast charge (emergency).** One switch to stop discharging and charge both
-  packs to full as fast as possible (from the grid if needed), then it hands
-  back to normal automatically.
+* **Fast charge (emergency).** One switch to charge both packs to full as fast
+  as possible (from the grid if needed), then *hold* them there until you
+  release it.
 * **Fails safe.** If the integration is unloaded or errors out, the units are
   reverted to Self-Consumption.
 
@@ -63,10 +63,12 @@ Manual install: copy `custom_components/battery_management` into your HA
 
 ## Notes / status
 
-This is an early version (0.1.0). The control loop is a port of a field-tested
-YAML setup. Test on your own system and open issues for anything that needs
-tuning — especially the exact `min output` for your firmware and the mode/flow
-option strings if a future firmware renames them (see `const.py`).
+The control loop is a port of a field-tested YAML setup, but this integration
+itself has not yet run a full season on real hardware. **It ships with dry run
+switched on** so a new site watches before it acts — see the reference below.
+
+Every setting carries its own explanation in Home Assistant, under the field.
+Every entity is explained in the reference section further down.
 
 Not affiliated with Anker.
 
@@ -190,6 +192,88 @@ Settings → Automations & scenes → Blueprints → Import blueprint:
 Deliberately *not* a scheduler inside the integration: less to maintain, and
 anything the blueprints did not anticipate you can still build with an ordinary
 automation.
+
+## Reference: every control and what it means
+
+Settings carry their own explanation in Home Assistant, under each field in the
+setup wizard and under Configure. Entities have nowhere to put that, so they are
+listed here.
+
+### Switches
+
+| Switch | What it does |
+| --- | --- |
+| **Coordinator enabled** | The kill switch. Off hands the packs back and stops all coordination. This is not a mode: it is "let go entirely", which is why it is a separate switch. |
+| **Fast charge (emergency)** | Charges every pack at full power to its limit, from the grid if needed. Once full it *holds* them there until you switch it off, topping up if they drift down — you pressed it to be ready for something. Never resumed after a restart. |
+| **Dry run** | Decide everything, command nothing. On by default. Blocks every write including the safe revert, so it cannot fight another controller. The suppressed-command counter on this switch is its proof of life: a shadow run that suppressed nothing is a broken one. |
+
+### Mode
+
+One strategy at a time. Every mode is grid-zero regulation with a bound on it,
+so the packs keep responding to the house and the sun inside whatever you pick —
+they never sit idle merely because they are inside a window.
+
+| Mode | What it does |
+| --- | --- |
+| **Follow the meter** | Charge on surplus, discharge on deficit. The floor under every other mode. |
+| **Charge only** | Still fills from surplus, never discharges. |
+| **Discharge only** | Still covers a deficit, never charges. |
+| **Pause** | Holds at zero. Not the kill switch: the packs stay under control. |
+| **Dynamic tariff** | Grid-zero plus buying on the cheapest hours and saving the charge for the dearest. Only offered once a price sensor is configured. |
+| **External plan** | Executes a plan from elsewhere (EMHASS) through the `set_setpoint` service. Hands control back if no plan arrives. |
+
+### Numbers
+
+| Number | What it does |
+| --- | --- |
+| **SoC reserve** | Charge held back, in every mode. Raises each pack's *own* discharge floor rather than clamping the pair, so the split tapers towards it and a fuller pack carries the load alone. 0 = off. |
+| **Buy at least to** | Floor under the computed charge ceiling. Use it when the solar forecast is too gloomy to trust. |
+| **Buy at most to** | Cap on the computed charge ceiling. Use it when the forecast under-reads, which would otherwise let it buy more than needed. |
+
+The last two bound grid buying only. Charging from your own surplus is never
+capped — that would be throwing sun away.
+
+### Sensors
+
+| Sensor | What it means | Unavailable when |
+| --- | --- | --- |
+| **Setpoint** | Total power the packs are told to deliver. Positive discharging, negative charging. This is the integrator's own state, not a reading of the packs. | never |
+| **Status** | idle · charging · discharging · fast_charge · hold · off · degraded | never |
+| **Active policy** | Which rule is limiting things right now — see the table below. | never |
+| **‹unit› target** | What that pack was told to do, signed. Keeps its last value when the pack drops offline, because it is still executing that command. | never |
+| **Grid power (as read)** | The meter reading as this integration read it. Should sit exactly on your own P1 sensor. | the meter cannot be read |
+| **Grid power (regulated against)** | What it actually steered on. Equal to the above when live; the reconstruction during a shadow run. | the meter cannot be read |
+| **Other controller** | What the site's own automations are commanding, signed. | not shadow running |
+| **Minutes to full** | How long a fast charge would take from now. Slowest pack, since they charge in parallel. | the charge time has not been measured |
+| **Solar remaining** | Sun still expected today. Its attributes break down every forecast sensor separately, so "0 kWh" can be told apart from a sensor that is not reading. | no forecast sensors configured |
+| **Charge ceiling** | How full it is worth buying to: 100 % − remaining sun ÷ capacity, within your two bounds. | the charge time has not been measured |
+| **Plan** | Today's cheap and dear hours with their prices, plus the numbers the ceiling was computed from, all in attributes. | never |
+
+### Binary sensors
+
+| Sensor | What it means |
+| --- | --- |
+| **Healthy** | Off is good. On means the control loop is degraded — usually the grid sensor cannot be read. |
+| **‹unit› online** | Whether that pack's state of charge could be read on the last tick. Off means it was skipped; it keeps running its last command regardless, so check its target sensor too. |
+
+### What the active policy is telling you
+
+| Policy | Meaning |
+| --- | --- |
+| Following the meter | Regulating normally, nothing limiting it |
+| Difference too small to act on | Inside the deadband |
+| Holding the SoC reserve | Would discharge, but the reserve says no |
+| Packs empty / Packs full | Nothing left to give, or nowhere to put it |
+| Mode: … | Your chosen mode is the limit |
+| Buying now, prices are low | A cheap hour, packs low, little sun coming |
+| Holding the charge for dearer hours | Refusing to discharge now so the kWh go to the peak |
+| Not buying, the sun still fits | What is coming free would not fit if it bought now |
+| Dynamic, but no prices available | The mode is on but the price sensor is mute |
+| Following an external plan | EMHASS or similar is driving |
+| External plan went quiet | It stopped arriving; back to following the meter |
+| Fast charging / Charged, keeping full | The override is running |
+| No grid reading | The meter cannot be read; nothing is commanded |
+| Coordinator off | The kill switch is off |
 
 ## Checking the meter is read correctly
 

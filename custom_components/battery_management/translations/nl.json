@@ -5,14 +5,24 @@
         "title": "Battery Management",
         "description": "Kies de netvermogen-sensor van je huis (+ = afname, - = teruglevering) en hoeveel accu-units je wilt coördineren. De regelparameters kun je later aanpassen onder Configureren.",
         "data": {
-          "grid_power_sensor": "Netvermogen-sensor (W, + afname / - teruglevering)",
+          "grid_power_sensor": "Netvermogen-sensor",
           "unit_count": "Aantal accu-units",
-          "bias": "Import-marge (W) - mik op een kleine afname zodat je nooit teruglevert",
-          "deadband": "Deadband (W) - negeer fouten kleiner dan dit",
-          "kp": "Versterking (Kp) - lager is zachter/rustiger",
+          "bias": "Import-marge (W)",
+          "deadband": "Deadband (W)",
+          "kp": "Versterking (Kp)",
           "interval": "Regelinterval (seconden)",
           "min_output": "Minimaal vermogen per unit (W)",
           "unit_max": "Maximaal vermogen per unit (W)"
+        },
+        "data_description": {
+          "grid_power_sensor": "De huismeter waarop gestuurd wordt. Positief moet afname betekenen, negatief teruglevering. Al het andere wordt hieruit afgeleid.",
+          "unit_count": "Hoeveel packs samen aangestuurd worden. Elk krijgt hierna een eigen scherm.",
+          "bias": "Streef naar zoveel afname in plaats van precies nul, zodat een kleine doorschieter alsnog niets teruglevert.",
+          "deadband": "Negeer afwijkingen kleiner dan dit, anders jagen de packs op elke waterkoker. Kost een blijvende afwijking van hoogstens marge + deadband.",
+          "kp": "Hoe hard hij per tick corrigeert: nieuw setpoint = oud + Kp x afwijking. Hoger reageert sneller en schiet eerder door. 0,25 bij 15 s is hier stabiel gebleken.",
+          "interval": "Seconden tussen beslissingen. Ga niet onder 15: de Modbus-sensoren lopen 10-30 s achter, en bij 10 s liepen beide packs op en ontlaadden ze in een teruglevering.",
+          "min_output": "Hieronder doet een pack niets zinvols, dus kleine delen worden op een unit samengevoegd in plaats van beide te laten pruttelen. Meet dit; 150 W is een gok.",
+          "unit_max": "Harde bovengrens per pack, nodig omdat het maximum dat de doel-entiteit zelf meldt onbetrouwbaar is - een unit hier meldt 10000 voor een 3500 W-apparaat."
         }
       },
       "unit_device": {
@@ -20,6 +30,9 @@
         "description": "Kies het Anker-apparaat van deze unit, dan wordt het volgende scherm alvast ingevuld - je mag het daarna nog nakijken. Leeglaten betekent alle zes entiteiten met de hand kiezen.",
         "data": {
           "device_id": "Anker-apparaat (optioneel)"
+        },
+        "data_description": {
+          "device_id": "Kies het apparaat, dan wordt het volgende scherm alvast ingevuld ter controle. Leeglaten betekent alle zes entiteiten met de hand kiezen."
         }
       },
       "unit": {
@@ -27,20 +40,33 @@
         "description": "Selecteer de Modbus-stuurentiteiten van deze Anker SOLIX Max AC-unit. De twee limietvelden zijn optioneel en verwachten een percentage - laat ze leeg voor 100 % / 5 %.",
         "data": {
           "name": "Naam",
-          "operating_mode_select": "Modus-select (self_consumption / third_party_control)",
-          "grid_flow_select": "Richting-select (charge / discharge)",
-          "target_power_number": "Target grid power (number)",
+          "operating_mode_select": "Modus-select",
+          "grid_flow_select": "Richting-select",
+          "target_power_number": "Target grid power",
           "soc_sensor": "SoC-sensor (%)",
-          "charge_limit_number": "Laadlimiet (number, %, optioneel)",
-          "discharge_limit_number": "Ontlaadlimiet (number, %, optioneel)"
+          "charge_limit_number": "Laadlimiet (%, optioneel)",
+          "discharge_limit_number": "Ontlaadlimiet (%, optioneel)"
+        },
+        "data_description": {
+          "name": "Wordt gebruikt in de sensornamen van deze integratie. Moet uniek zijn: twee packs met dezelfde naam worden als een behandeld.",
+          "operating_mode_select": "De select die deze pack tussen eigen sturing en aansturing van buitenaf zet. Welke optie wat betekent wordt op het volgende scherm gevraagd.",
+          "grid_flow_select": "De select die laden of ontladen kiest. Moet letterlijk charge en discharge aanbieden - die worden onveranderd geschreven.",
+          "target_power_number": "Het getal waar het aandeel van deze pack in geschreven wordt. Altijd positief; de richting komt uit de richting-select.",
+          "soc_sensor": "Bepaalt de verdeling tussen packs en elke SoC-grens. Een pack waarvan de SoC niet leesbaar is wordt volledig overgeslagen.",
+          "charge_limit_number": "De eigen bovengrens van de pack, in procenten. Leeglaten betekent 100 %. Wijs hier nooit een watt-entiteit aan.",
+          "discharge_limit_number": "De eigen ondergrens van de pack. Leeglaten betekent 5 %. Dit is het hardware-vangnet waar de coordinator boven blijft."
         }
       },
       "unit_modes": {
         "title": "Accu-unit: {name} - wat zijn modi betekenen",
         "description": "Deze unit biedt: {options}.\n\nKies welke optie de coördinator het stuur geeft, en welke hem teruggeeft als je uitschakelt. Laat de tweede leeg als er niets is om naar terug te keren - de unit krijgt dan simpelweg 0 W, en dat is een veilige ruststand. Een pack zonder eigen P1-meter heeft geen zelfverbruik-modus, dus dat is normaal.",
         "data": {
-          "mode_control": "Optie die de coördinator het stuur geeft",
-          "mode_safe": "Optie om naar terug te keren bij uitschakelen (leeg = alleen 0 W)"
+          "mode_control": "Optie die het stuur overdraagt",
+          "mode_safe": "Optie om naar terug te keren bij uitschakelen"
+        },
+        "data_description": {
+          "mode_control": "De stand waar deze pack in moet staan voordat hij opdrachten aanneemt. Meestal third_party_control.",
+          "mode_safe": "Waar hij naartoe gezet wordt als je uitschakelt of Home Assistant afsluit. Leeg laten bij een pack zonder eigen meter: die krijgt dan alleen 0 W en zijn modus blijft ongemoeid, wat een veilige ruststand is."
         }
       }
     },
@@ -73,9 +99,20 @@
           "interval": "Regelinterval (seconden)",
           "min_output": "Minimaal vermogen per unit (W)",
           "unit_max": "Maximaal vermogen per unit (W)",
-          "fast_charge_hold": "Accu's vol houden na snelladen (loslaten met de schakelaar)",
-          "full_charge_minutes": "Minuten van leeg naar vol op vol vermogen (0 = niet gemeten, verbergt de schatting)",
-          "external_timeout": "Minuten dat een extern setpoint geldig blijft voordat hij het overneemt"
+          "fast_charge_hold": "Accu's vol houden na snelladen",
+          "full_charge_minutes": "Minuten van leeg naar vol op vol vermogen",
+          "external_timeout": "Minuten dat een extern setpoint geldig blijft"
+        },
+        "data_description": {
+          "bias": "Streef naar zoveel afname in plaats van precies nul, zodat een kleine doorschieter alsnog niets teruglevert.",
+          "deadband": "Negeer afwijkingen kleiner dan dit, anders jagen de packs op elke waterkoker. Kost een blijvende afwijking van hoogstens marge + deadband.",
+          "kp": "Hoe hard hij per tick corrigeert: nieuw setpoint = oud + Kp x afwijking. Hoger reageert sneller en schiet eerder door. 0,25 bij 15 s is hier stabiel gebleken.",
+          "interval": "Seconden tussen beslissingen. Ga niet onder 15: de Modbus-sensoren lopen 10-30 s achter, en bij 10 s liepen beide packs op en ontlaadden ze in een teruglevering.",
+          "min_output": "Hieronder doet een pack niets zinvols, dus kleine delen worden op een unit samengevoegd in plaats van beide te laten pruttelen. Meet dit; 150 W is een gok.",
+          "unit_max": "Harde bovengrens per pack, nodig omdat het maximum dat de doel-entiteit zelf meldt onbetrouwbaar is - een unit hier meldt 10000 voor een 3500 W-apparaat.",
+          "fast_charge_hold": "Aan: de schakelaar blijft aan bij vol en houdt ze daar tot jij hem uitzet. Uit: hij schakelt zichzelf uit en je modus ontlaadt ze weer.",
+          "full_charge_minutes": "Eenmalig gemeten, per pack. Levert zowel de minuten-tot-vol-schatting als de bruikbare capaciteit die het zon-plafond nodig heeft. 0 verbergt beide in plaats van te gokken.",
+          "external_timeout": "In de modus Extern plan: komt er binnen deze tijd geen nieuw plan, dan gaat de sturing terug naar de meter volgen in plaats van te bevriezen op het laatste commando."
         }
       },
       "units": {
@@ -83,42 +120,69 @@
         "description": "Corrigeer de stuurentiteiten van deze unit. De twee limietvelden verwachten een percentage - laat ze leeg voor 100 % / 5 %.",
         "data": {
           "name": "Naam",
-          "operating_mode_select": "Modus-select (self_consumption / third_party_control)",
-          "grid_flow_select": "Richting-select (charge / discharge)",
-          "target_power_number": "Target grid power (number)",
+          "operating_mode_select": "Modus-select",
+          "grid_flow_select": "Richting-select",
+          "target_power_number": "Target grid power",
           "soc_sensor": "SoC-sensor (%)",
-          "charge_limit_number": "Laadlimiet (number, %, optioneel)",
-          "discharge_limit_number": "Ontlaadlimiet (number, %, optioneel)"
+          "charge_limit_number": "Laadlimiet (%, optioneel)",
+          "discharge_limit_number": "Ontlaadlimiet (%, optioneel)"
+        },
+        "data_description": {
+          "name": "Wordt gebruikt in de sensornamen van deze integratie. Moet uniek zijn: twee packs met dezelfde naam worden als een behandeld.",
+          "operating_mode_select": "De select die deze pack tussen eigen sturing en aansturing van buitenaf zet. Welke optie wat betekent wordt op het volgende scherm gevraagd.",
+          "grid_flow_select": "De select die laden of ontladen kiest. Moet letterlijk charge en discharge aanbieden - die worden onveranderd geschreven.",
+          "target_power_number": "Het getal waar het aandeel van deze pack in geschreven wordt. Altijd positief; de richting komt uit de richting-select.",
+          "soc_sensor": "Bepaalt de verdeling tussen packs en elke SoC-grens. Een pack waarvan de SoC niet leesbaar is wordt volledig overgeslagen.",
+          "charge_limit_number": "De eigen bovengrens van de pack, in procenten. Leeglaten betekent 100 %. Wijs hier nooit een watt-entiteit aan.",
+          "discharge_limit_number": "De eigen ondergrens van de pack. Leeglaten betekent 5 %. Dit is het hardware-vangnet waar de coordinator boven blijft."
         }
       },
       "dynamic": {
         "title": "Dynamisch tarief",
         "description": "Optioneel. Zonder prijssensor verschijnt de modus Dynamisch niet en verandert er verder niets. Beursprijzen volstaan: belasting en opslag verschuiven elk uur even veel, dus de volgorde van goedkoop naar duur blijft gelijk.",
         "data": {
-          "price_sensor": "Prijssensor (elke integratie die toekomstprijzen publiceert)",
-          "cheap_hours": "Uren per dag om op het net te laden",
-          "charge_below_soc": "Alleen kopen als een accu onder deze SoC zit (%)",
-          "solar_forecast_max": "Terugval: niet kopen boven zoveel kWh verwacht (0 = negeren; niet meer gebruikt zodra de laadduur gemeten is)",
-          "expensive_hours": "Uren per dag om de lading voor te bewaren (de duurste)",
-          "discharge_anyway_soc": "Tóch ontladen boven deze SoC (%) - houdt ruimte voor de zon die nog komt",
-          "solar_forecast_sensors": "Zonverwachting-sensoren (kies elk dakvlak; liefst de 'resterend vandaag'-varianten)",
-          "solar_produced_sensor": "Vandaag al geproduceerd (optioneel; alleen nodig als hierboven een dagtotaal staat)"
+          "price_sensor": "Prijssensor",
+          "cheap_hours": "Uren per dag om op in te kopen",
+          "charge_below_soc": "Alleen inkopen onder deze SoC (%)",
+          "solar_forecast_max": "Terugval: niet inkopen boven zoveel kWh verwacht",
+          "expensive_hours": "Uren per dag om de lading voor te bewaren",
+          "discharge_anyway_soc": "Toch ontladen boven (%)",
+          "solar_forecast_sensors": "Zonverwachting-sensoren",
+          "solar_produced_sensor": "Vandaag al geproduceerd"
+        },
+        "data_description": {
+          "price_sensor": "Elke integratie die toekomstprijzen publiceert. Beursprijzen volstaan: belasting en opslag verschuiven elk uur even veel, dus de volgorde goedkoop-duur blijft gelijk. Zonder sensor verschijnt de modus Dynamisch niet.",
+          "cheap_hours": "Hoeveel van de goedkoopste momenten van de komende dag gebruikt mogen worden om van het net te laden. Gerangschikt over een rollende 24 uur, niet over alles wat gepubliceerd is.",
+          "charge_below_soc": "Terugval-plafond, alleen gebruikt zolang de laadduur ongemeten is. Daarna neemt het zon-plafond het over.",
+          "solar_forecast_max": "Alleen gebruikt zolang de laadduur ongemeten is, want zonder capaciteit is kWh niet in procenten om te rekenen. 0 negeert de verwachting.",
+          "expensive_hours": "Buiten de duurste uren ontladen de packs niet, dus een goedkoop uur koop je van het net en gaan de opgeslagen kWh naar de piek. 0 zet dit uit.",
+          "discharge_anyway_soc": "Een pack die zo vol is ontlaadt ook in een goedkoop uur. Weigeren zou geen ruimte laten voor de zon die nog komt, en gratis energie weggooien om een paar cent te sparen is een slechte ruil.",
+          "solar_forecast_sensors": "Kies elk dakvlak; ze worden opgeteld. Liefst de 'resterend vandaag'-varianten - een dagtotaal klopt om 02:00 en niet om 17:00.",
+          "solar_produced_sensor": "Alleen nodig als hierboven een dagtotaal staat: dit wordt eraf getrokken, zodat overblijft wat er nog komt."
         }
       },
       "shadow": {
         "title": "Schaduwdraaien",
         "description": "Alleen van belang zolang Proefdraaien aan staat. Het simuleren van de meter is wat de vergelijking eerlijk maakt: zonder dit regelt het andere systeem de meter al, ziet deze niets te doen en blijft hij op nul staan.",
         "data": {
-          "shadow_simulate": "Meter simuleren uit gereconstrueerde vraag (aanbevolen)",
-          "battery_power_sensor": "Gemeten accuvermogen, met teken, + = ontladen (optioneel; anders teruggelezen uit de doel-entiteiten)"
+          "shadow_simulate": "Meter simuleren uit gereconstrueerde vraag",
+          "battery_power_sensor": "Gemeten accuvermogen (optioneel)"
+        },
+        "data_description": {
+          "shadow_simulate": "Alleen van belang bij proefdraaien. Zonder dit regelt het andere systeem de meter al, ziet deze niets te doen en blijft hij op nul staan - dan vergelijk je het oude systeem met zichzelf.",
+          "battery_power_sensor": "Met teken, + ontladen, van beide packs samen. Leeglaten en hij leest het terug uit de doel-entiteiten, waar het andere systeem in schrijft. Nooit de netmeter: de reconstructie telt die twee bij elkaar op."
         }
       },
       "unit_modes": {
         "title": "Accu-unit: {name} - wat zijn modi betekenen",
         "description": "Deze unit biedt: {options}.\n\nKies welke optie de coördinator het stuur geeft, en welke hem teruggeeft als je uitschakelt. Laat de tweede leeg als er niets is om naar terug te keren - de unit krijgt dan simpelweg 0 W, en dat is een veilige ruststand. Een pack zonder eigen P1-meter heeft geen zelfverbruik-modus, dus dat is normaal.",
         "data": {
-          "mode_control": "Optie die de coördinator het stuur geeft",
-          "mode_safe": "Optie om naar terug te keren bij uitschakelen (leeg = alleen 0 W)"
+          "mode_control": "Optie die het stuur overdraagt",
+          "mode_safe": "Optie om naar terug te keren bij uitschakelen"
+        },
+        "data_description": {
+          "mode_control": "De stand waar deze pack in moet staan voordat hij opdrachten aanneemt. Meestal third_party_control.",
+          "mode_safe": "Waar hij naartoe gezet wordt als je uitschakelt of Home Assistant afsluit. Leeg laten bij een pack zonder eigen meter: die krijgt dan alleen 0 W en zijn modus blijft ongemoeid, wat een veilige ruststand is."
         }
       }
     },

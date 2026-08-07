@@ -79,3 +79,38 @@ def test_english_and_dutch_offer_the_same_entity_states():
             assert set(entity.get("state", {})) == set(
                 dutch[domain][key].get("state", {})
             ), f"{domain}.{key}"
+
+
+@pytest.mark.parametrize("path", FILES, ids=lambda p: p.name)
+def test_every_field_is_explained(path):
+    """A setting nobody can explain in a year is a setting nobody dares touch.
+
+    Home Assistant renders `data_description` under each field, so this is the
+    place the explanation belongs - not a wiki that drifts.
+    """
+    data = load(path)
+    for section in ("config", "options"):
+        for name, step in data.get(section, {}).get("step", {}).items():
+            fields = set(step.get("data", {}))
+            explained = set(step.get("data_description", {}))
+            assert fields <= explained, f"{section}.{name}: {fields - explained}"
+
+
+@pytest.mark.parametrize("path", FILES, ids=lambda p: p.name)
+def test_no_explanation_without_a_field(path):
+    """A leftover explanation means a field was renamed and this was missed."""
+    data = load(path)
+    for section in ("config", "options"):
+        for name, step in data.get(section, {}).get("step", {}).items():
+            orphans = set(step.get("data_description", {})) - set(step.get("data", {}))
+            assert not orphans, f"{section}.{name}: {orphans}"
+
+
+def test_the_two_languages_explain_the_same_fields():
+    english = load(FILES[1])
+    dutch = load(FILES[2])
+    for section in ("config", "options"):
+        for name, step in english.get(section, {}).get("step", {}).items():
+            assert set(step.get("data_description", {})) == set(
+                dutch[section]["step"][name].get("data_description", {})
+            ), f"{section}.{name}"

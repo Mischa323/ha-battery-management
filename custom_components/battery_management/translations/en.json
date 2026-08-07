@@ -5,14 +5,24 @@
         "title": "Battery Management",
         "description": "Pick the household grid-power sensor (+ = import, - = export) and how many battery units to coordinate. You can tune the control parameters later under Configure.",
         "data": {
-          "grid_power_sensor": "Grid power sensor (W, + import / - export)",
+          "grid_power_sensor": "Grid power sensor",
           "unit_count": "Number of battery units",
-          "bias": "Import bias (W) - aim for a small import so you never export",
-          "deadband": "Deadband (W) - ignore errors smaller than this",
-          "kp": "Gain (Kp) - lower is gentler/slower",
+          "bias": "Import bias (W)",
+          "deadband": "Deadband (W)",
+          "kp": "Gain (Kp)",
           "interval": "Control interval (seconds)",
           "min_output": "Minimum output per unit (W)",
           "unit_max": "Max power per unit (W)"
+        },
+        "data_description": {
+          "grid_power_sensor": "The household meter this steers on. Positive must mean importing, negative exporting. Everything else is derived from this one reading.",
+          "unit_count": "How many packs to coordinate. Each gets its own screen next.",
+          "bias": "Aim for this much import instead of exactly zero, so a brief overshoot still exports nothing.",
+          "deadband": "Ignore errors smaller than this, otherwise the packs chase every kettle. Costs a steady-state error of at most bias + deadband.",
+          "kp": "How hard it corrects per tick: new setpoint = old + Kp x error. Higher reacts faster and overshoots sooner. 0.25 at 15 s is proven stable here.",
+          "interval": "Seconds between decisions. Do not go below 15: the Modbus sensors lag 10-30 s, and at 10 s both packs wound up and discharged into an export.",
+          "min_output": "Below this a pack does nothing useful, so small shares are consolidated onto one unit instead of leaving both idling. Measure it; 150 W is a guess.",
+          "unit_max": "Hard ceiling per pack, needed because the target entity's own maximum is unreliable - one unit here reports 10000 for a 3500 W device."
         }
       },
       "unit_device": {
@@ -20,6 +30,9 @@
         "description": "Pick the Anker device for this unit and the next screen is filled in for you - you still get to check it. Leave it empty to select all six entities by hand.",
         "data": {
           "device_id": "Anker device (optional)"
+        },
+        "data_description": {
+          "device_id": "Pick the device and the next screen is filled in for you, for review. Leave empty to choose all six entities by hand."
         }
       },
       "unit": {
@@ -27,20 +40,33 @@
         "description": "Select the Modbus control entities for this Anker SOLIX Max AC unit. The two limit fields are optional and expect a percentage - leave them blank to use 100 % / 5 %.",
         "data": {
           "name": "Name",
-          "operating_mode_select": "Operating-mode select (self_consumption / third_party_control)",
-          "grid_flow_select": "Grid-flow select (charge / discharge)",
-          "target_power_number": "Target grid power (number)",
+          "operating_mode_select": "Operating-mode select",
+          "grid_flow_select": "Grid-flow select",
+          "target_power_number": "Target grid power",
           "soc_sensor": "State of charge sensor (%)",
-          "charge_limit_number": "Charge limit (number, %, optional)",
-          "discharge_limit_number": "Discharge limit (number, %, optional)"
+          "charge_limit_number": "Charge limit (%, optional)",
+          "discharge_limit_number": "Discharge limit (%, optional)"
+        },
+        "data_description": {
+          "name": "Used in this integration's own sensor names. Must be unique: two packs sharing a name would be treated as one.",
+          "operating_mode_select": "The select that switches this pack between its own control and being driven from outside. Which option means what is asked on the next screen.",
+          "grid_flow_select": "The select that chooses charging or discharging. Must offer charge and discharge literally - those are written as-is.",
+          "target_power_number": "The number this pack's share of the setpoint is written to. Always positive; the direction comes from the flow select.",
+          "soc_sensor": "Drives the split between packs and every SoC limit. A pack whose state of charge cannot be read is skipped entirely.",
+          "charge_limit_number": "The pack's own upper limit, as a percentage. Leave empty to assume 100 %. Never point this at a watt entity.",
+          "discharge_limit_number": "The pack's own lower limit. Leave empty to assume 5 %. This is the hardware backstop the coordinator stays above."
         }
       },
       "unit_modes": {
         "title": "Battery unit: {name} - what its modes mean",
         "description": "This unit offers: {options}.\n\nPick which one hands control to the coordinator, and which one gives it back when you switch off. Leave the second empty if there is nothing to return to - the unit is then simply commanded 0 W, which is a safe resting state. A pack without its own P1 meter has no self-consumption mode, so this is normal.",
         "data": {
-          "mode_control": "Option that hands control to the coordinator",
-          "mode_safe": "Option to return to when switching off (leave empty to only command 0 W)"
+          "mode_control": "Option that hands control over",
+          "mode_safe": "Option to return to when switching off"
+        },
+        "data_description": {
+          "mode_control": "The option this pack must be set to before it will take orders. Usually third_party_control.",
+          "mode_safe": "Where it is put when you switch off or Home Assistant unloads. Leave empty for a pack with no meter of its own: it is then simply commanded 0 W and its mode left alone, which is a safe resting state."
         }
       }
     },
@@ -73,9 +99,20 @@
           "interval": "Control interval (seconds)",
           "min_output": "Minimum output per unit (W)",
           "unit_max": "Max power per unit (W)",
-          "fast_charge_hold": "Keep the packs full after a fast charge (release with the switch)",
-          "full_charge_minutes": "Minutes from empty to full at max power (0 = not measured, hides the estimate)",
-          "external_timeout": "Minutes an external setpoint stays valid before handing control back"
+          "fast_charge_hold": "Keep the packs full after a fast charge",
+          "full_charge_minutes": "Minutes from empty to full at max power",
+          "external_timeout": "Minutes an external setpoint stays valid"
+        },
+        "data_description": {
+          "bias": "Aim for this much import instead of exactly zero, so a brief overshoot still exports nothing.",
+          "deadband": "Ignore errors smaller than this, otherwise the packs chase every kettle. Costs a steady-state error of at most bias + deadband.",
+          "kp": "How hard it corrects per tick: new setpoint = old + Kp x error. Higher reacts faster and overshoots sooner. 0.25 at 15 s is proven stable here.",
+          "interval": "Seconds between decisions. Do not go below 15: the Modbus sensors lag 10-30 s, and at 10 s both packs wound up and discharged into an export.",
+          "min_output": "Below this a pack does nothing useful, so small shares are consolidated onto one unit instead of leaving both idling. Measure it; 150 W is a guess.",
+          "unit_max": "Hard ceiling per pack, needed because the target entity's own maximum is unreliable - one unit here reports 10000 for a 3500 W device.",
+          "fast_charge_hold": "On: the switch stays on at full and holds them there until you release it. Off: it switches itself off and your mode discharges them again.",
+          "full_charge_minutes": "Measured once, per pack. Gives both the minutes-to-full estimate and the usable capacity that the solar-aware charge ceiling needs. 0 hides both rather than guessing.",
+          "external_timeout": "In External plan mode: if no new plan arrives within this time, control returns to following the meter instead of freezing on the last instruction."
         }
       },
       "units": {
@@ -83,42 +120,69 @@
         "description": "Correct the control entities for this unit. The two limit fields expect a percentage - leave them blank to use 100 % / 5 %.",
         "data": {
           "name": "Name",
-          "operating_mode_select": "Operating-mode select (self_consumption / third_party_control)",
-          "grid_flow_select": "Grid-flow select (charge / discharge)",
-          "target_power_number": "Target grid power (number)",
+          "operating_mode_select": "Operating-mode select",
+          "grid_flow_select": "Grid-flow select",
+          "target_power_number": "Target grid power",
           "soc_sensor": "State of charge sensor (%)",
-          "charge_limit_number": "Charge limit (number, %, optional)",
-          "discharge_limit_number": "Discharge limit (number, %, optional)"
+          "charge_limit_number": "Charge limit (%, optional)",
+          "discharge_limit_number": "Discharge limit (%, optional)"
+        },
+        "data_description": {
+          "name": "Used in this integration's own sensor names. Must be unique: two packs sharing a name would be treated as one.",
+          "operating_mode_select": "The select that switches this pack between its own control and being driven from outside. Which option means what is asked on the next screen.",
+          "grid_flow_select": "The select that chooses charging or discharging. Must offer charge and discharge literally - those are written as-is.",
+          "target_power_number": "The number this pack's share of the setpoint is written to. Always positive; the direction comes from the flow select.",
+          "soc_sensor": "Drives the split between packs and every SoC limit. A pack whose state of charge cannot be read is skipped entirely.",
+          "charge_limit_number": "The pack's own upper limit, as a percentage. Leave empty to assume 100 %. Never point this at a watt entity.",
+          "discharge_limit_number": "The pack's own lower limit. Leave empty to assume 5 %. This is the hardware backstop the coordinator stays above."
         }
       },
       "dynamic": {
         "title": "Dynamic tariff",
         "description": "Optional. Without a price sensor the Dynamic mode is not offered and nothing else changes. Exchange (day-ahead) prices are enough: tax and markup shift every hour equally, so the cheap-to-expensive order is the same.",
         "data": {
-          "price_sensor": "Price sensor (any integration publishing upcoming prices)",
-          "cheap_hours": "Hours per day to charge from the grid on",
-          "charge_below_soc": "Only buy when a pack is below this state of charge (%)",
-          "solar_forecast_max": "Fallback: skip buying above this many kWh expected (0 = ignore; unused once the charge time is measured)",
-          "expensive_hours": "Hours a day to keep the charge for (the dearest ones)",
-          "discharge_anyway_soc": "Discharge anyway above this state of charge (%) - leaves room for the sun still coming",
-          "solar_forecast_sensors": "Solar forecast sensors (pick every roof plane; prefer the 'remaining today' ones)",
-          "solar_produced_sensor": "Produced so far today (optional; only needed if the forecast above is a day total)"
+          "price_sensor": "Price sensor",
+          "cheap_hours": "Hours a day to buy on",
+          "charge_below_soc": "Only buy below this state of charge (%)",
+          "solar_forecast_max": "Fallback: skip buying above this many kWh expected",
+          "expensive_hours": "Hours a day to save the charge for",
+          "discharge_anyway_soc": "Discharge anyway above (%)",
+          "solar_forecast_sensors": "Solar forecast sensors",
+          "solar_produced_sensor": "Produced so far today"
+        },
+        "data_description": {
+          "price_sensor": "Any integration publishing upcoming prices. Exchange prices are enough: tax and markup shift every hour equally, so the cheap-to-expensive order is unchanged. Without one, Dynamic mode is not offered.",
+          "cheap_hours": "How many of the coming day's cheapest slots may be used to charge from the grid. Ranked over a rolling 24 hours, not over everything published.",
+          "charge_below_soc": "Fallback ceiling, used only while the charge time is unmeasured. Once it is, the solar-aware ceiling replaces it.",
+          "solar_forecast_max": "Only used while the charge time is unmeasured, since without a capacity there is no way to turn kWh into a percentage. 0 ignores the forecast.",
+          "expensive_hours": "Outside the dearest hours the packs do not discharge, so a cheap hour is bought from the grid and the stored kWh go to the peak instead. 0 switches this off.",
+          "discharge_anyway_soc": "A pack this full discharges even during a cheap hour. Refusing would leave nowhere for the sun still coming, and spilling free energy to save a few cents is a bad trade.",
+          "solar_forecast_sensors": "Pick every roof plane; they are summed. Prefer the 'remaining today' variants - a whole-day total is right at 02:00 and wrong at 17:00.",
+          "solar_produced_sensor": "Only needed if the sensors above give a day total: this is subtracted, leaving what is still to come."
         }
       },
       "shadow": {
         "title": "Shadow running",
         "description": "Only matters while Dry run is on. Simulating the meter is what makes a shadow comparison honest: without it the other controller is already regulating the meter, so this one sees nothing to do and parks at zero.",
         "data": {
-          "shadow_simulate": "Simulate the meter from reconstructed demand (recommended)",
-          "battery_power_sensor": "Measured battery power, signed, + = discharging (optional; otherwise read back from the target entities)"
+          "shadow_simulate": "Simulate the meter from reconstructed demand",
+          "battery_power_sensor": "Measured battery power (optional)"
+        },
+        "data_description": {
+          "shadow_simulate": "Only matters in dry run. Without it the other controller is already regulating the meter, so this one sees nothing to do and parks at zero - comparing the old system with itself.",
+          "battery_power_sensor": "Signed, + discharging, for both packs together. Leave empty and it is read back from the target entities, where the other controller writes. Never the grid meter: the reconstruction adds the two together."
         }
       },
       "unit_modes": {
         "title": "Battery unit: {name} - what its modes mean",
         "description": "This unit offers: {options}.\n\nPick which one hands control to the coordinator, and which one gives it back when you switch off. Leave the second empty if there is nothing to return to - the unit is then simply commanded 0 W, which is a safe resting state. A pack without its own P1 meter has no self-consumption mode, so this is normal.",
         "data": {
-          "mode_control": "Option that hands control to the coordinator",
-          "mode_safe": "Option to return to when switching off (leave empty to only command 0 W)"
+          "mode_control": "Option that hands control over",
+          "mode_safe": "Option to return to when switching off"
+        },
+        "data_description": {
+          "mode_control": "The option this pack must be set to before it will take orders. Usually third_party_control.",
+          "mode_safe": "Where it is put when you switch off or Home Assistant unloads. Leave empty for a pack with no meter of its own: it is then simply commanded 0 W and its mode left alone, which is a safe resting state."
         }
       }
     },
