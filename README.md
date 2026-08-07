@@ -196,22 +196,23 @@ automation.
 ## The icon
 
 Home Assistant does not read an integration icon from its own repository — it
-fetches brand images from , which is fed by the
+fetches brand images from `brands.home-assistant.io`, which is fed by the
 [home-assistant/brands](https://github.com/home-assistant/brands) repository.
 Until an icon lands there, the integration page shows a grey placeholder.
 
-The files are ready in [](brands/), laid out exactly as that repository
+The files are ready in [`brands/`](brands/), laid out exactly as that repository
 expects. To publish them:
 
-1. Fork 
-2. Copy  into the same path there
+1. Fork `home-assistant/brands`
+2. Copy `brands/custom_integrations/battery_management/` into the same path there
 3. Open a pull request
 
- regenerates them (needs Pillow, which is
-deliberately not a dependency of the integration itself).
+`scripts/make_brand_icon.py` regenerates them (needs Pillow, which is
+deliberately not a dependency of the integration itself, so the manifest can
+keep `requirements: []`).
 
-Once merged, remove  from the HACS step in
- — it is only there because the brand does not exist
+Once merged, drop `ignore: brands` from the HACS step in
+`.github/workflows/ci.yml` — it is only there because the brand does not exist
 yet.
 
 ## Reference: every control and what it means
