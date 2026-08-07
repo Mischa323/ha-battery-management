@@ -352,9 +352,11 @@ possible, and they gate section A.
 
 ### E. Loose ends
 
-16. **`home-assistant/brands` icon** — the HACS action runs with `ignore: brands`
-    until that PR lands. It is a PR to a Home Assistant repo, so the owner
-    submits it.
+16. **`home-assistant/brands` icon** — *files ready, PR outstanding.* A battery
+    with two cells, drawn by `scripts/make_brand_icon.py`, sits in `brands/`
+    laid out as that repository expects; it stays legible down to 32 px. The
+    pull request is a public contribution under the owner's name, so the owner
+    submits it. The HACS step keeps `ignore: brands` until it lands.
 17. **Card rendering unverified** — the card is served and registered, but nobody
     has looked at how it actually renders on a dashboard.
 
