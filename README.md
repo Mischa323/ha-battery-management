@@ -185,7 +185,8 @@ Settings → Automations & scenes → Blueprints → Import blueprint:
 - [`be_full_by_time.yaml`](blueprints/automation/battery_management/be_full_by_time.yaml)
   — start a fast charge late enough to be efficient and early enough to finish.
   Needs **Minutes from empty to full** filled in under Configure → Control
-  parameters; measure it once. Until you do, `sensor.…_minutes_to_full` stays
+  parameters; measure it once. Until you do, `sensor.…_minutes_to_full`
+  (**Fast charge duration**) stays
   unavailable and the automation does nothing, on purpose — arriving late on a
   guessed duration defeats the point.
 
@@ -266,7 +267,7 @@ capped — that would be throwing sun away.
 | **Grid power (as read)** | The meter reading as this integration read it. Should sit exactly on your own P1 sensor. | the meter cannot be read |
 | **Grid power (regulated against)** | What it actually steered on. Equal to the above when live; the reconstruction during a shadow run. | the meter cannot be read |
 | **Other controller** | What the site's own automations are commanding, signed. | not shadow running |
-| **Minutes to full** | How long a fast charge would take from now. Slowest pack, since they charge in parallel. | the charge time has not been measured |
+| **Fast charge duration** | How long a *fast charge* would take from now — at full power, which is what the be-full-by blueprint triggers. Slowest pack, since they charge in parallel. Its `at_current_rate_minutes` attribute answers the other question: how long at the rate being commanded right now, which on solar surplus alone is far longer. | the charge time has not been measured |
 | **Solar remaining** | Sun still expected today. Its attributes break down every forecast sensor separately, so "0 kWh" can be told apart from a sensor that is not reading. | no forecast sensors configured |
 | **Charge ceiling** | How full it is worth buying to: 100 % − remaining sun ÷ capacity, within your two bounds. | the charge time has not been measured |
 | **Plan** | Today's cheap and dear hours with their prices, plus the numbers the ceiling was computed from, all in attributes. | never |

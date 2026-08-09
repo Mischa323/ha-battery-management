@@ -295,6 +295,11 @@ class BatteryCoordinator:
         self._store: Store = Store(hass, STORAGE_VERSION, f"{DOMAIN}.{entry.entry_id}")
 
     @property
+    def unit_max(self) -> float:
+        """The per-pack ceiling the fast-charge estimate assumes."""
+        return self._unit_ceiling
+
+    @property
     def units(self) -> list[UnitConfig]:
         """The configured units, in wizard order (the per-unit entities' order)."""
         return list(self._units)
@@ -562,6 +567,29 @@ class BatteryCoordinator:
             if produced is not None:
                 total -= produced
         return max(total, 0.0)
+
+    def minutes_to_full_at_current_rate(self) -> int | None:
+        """The same question, at the rate actually being commanded.
+
+        `minutes_to_full` assumes full power because it exists to schedule a
+        fast charge. Next to a pack trickling in from the sun that reads as a
+        promise it is not making, so answer the other question too: how long at
+        what we are doing now. None when nothing is charging - "never" would be
+        the honest answer and a sensor cannot say it.
+        """
+        if self._full_charge_minutes <= 0:
+            return None
+        longest: float | None = None
+        for cfg in self._units:
+            unit = self._unit_snapshot(cfg)
+            status = self.unit_status[cfg.name]
+            if not unit.online or status.target >= 0:
+                continue
+            watts = -status.target
+            missing = max(unit.charge_limit - unit.soc, 0.0)
+            at_full = missing / 100.0 * self._full_charge_minutes
+            longest = max(longest or 0.0, at_full * unit.unit_max / watts)
+        return int(round(longest)) if longest is not None else None
 
     def charge_ceiling(self) -> float | None:
         """How full it is worth buying to right now, after the user's bounds."""
@@ -1001,6 +1029,9 @@ class BatteryCoordinator:
                 "active_policy": self.active_policy,
                 "soc_reserve": self.soc_reserve,
                 "minutes_to_full": self.minutes_to_full(),
+                "minutes_to_full_at_current_rate": (
+                    self.minutes_to_full_at_current_rate()
+                ),
                 "solar_remaining_kwh": self.solar_remaining(),
                 "solar_breakdown": self.solar_breakdown(),
                 "usable_capacity_kwh": self.usable_capacity_kwh(),

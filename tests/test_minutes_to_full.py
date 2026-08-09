@@ -65,3 +65,46 @@ async def test_available_while_the_coordinator_is_switched_off(build_system):
     system = build_system(units=(("093", 40.0), ("052", 40.0)), enabled=False, **MEASURED)
 
     assert system.coordinator.minutes_to_full() == 144
+
+
+# -- the same question at the rate actually being commanded ------------------
+
+
+async def test_at_current_rate_is_slower_than_at_full_power(build_system):
+    """The owner's observation: "79 minutes" is enthusiastic next to a pack
+    trickling in from the sun. The headline figure assumes a fast charge."""
+    system = build_system(grid=-1600, units=(("093", 50.0), ("052", 50.0)), **MEASURED)
+
+    await system.coordinator._async_tick(None)
+
+    assert system.coordinator.minutes_to_full() == 120           # at 2 x 3500 W
+    at_rate = system.coordinator.minutes_to_full_at_current_rate()
+    assert at_rate > 400                                          # at 2 x 800 W
+
+
+async def test_at_current_rate_is_unknown_while_discharging(build_system):
+    """"Never" is the honest answer, and a sensor cannot say it."""
+    system = build_system(grid=500, **MEASURED)
+
+    await system.coordinator._async_tick(None)
+
+    assert system.coordinator.minutes_to_full_at_current_rate() is None
+
+
+async def test_at_current_rate_needs_the_measurement_too(build_system):
+    system = build_system(grid=-1600)
+
+    await system.coordinator._async_tick(None)
+
+    assert system.coordinator.minutes_to_full_at_current_rate() is None
+
+
+async def test_the_slowest_pack_sets_the_pace_here_as_well(build_system):
+    system = build_system(grid=-2000, units=(("093", 90.0), ("052", 20.0)), **MEASURED)
+
+    await system.coordinator._async_tick(None)
+
+    # the emptier pack gets the larger share, but still has much further to go
+    assert system.coordinator.minutes_to_full_at_current_rate() > (
+        system.coordinator.minutes_to_full()
+    )

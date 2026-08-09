@@ -2,7 +2,7 @@ blueprint:
   name: Battery Management - be full by a certain time
   description: >
     Start a fast charge late enough to be efficient and early enough to finish:
-    every few minutes this compares the coordinator's own "Minutes to full"
+    every few minutes this compares the coordinator's own "Fast charge duration"
     estimate against the time left until your deadline, and presses the button
     when they meet.
 
@@ -24,8 +24,10 @@ blueprint:
       selector:
         time:
     minutes_sensor:
-      name: Minutes to full sensor
-      description: The coordinator's "Minutes to full" sensor.
+      name: Fast charge duration sensor
+      description: >-
+        The coordinator's "Fast charge duration" sensor - how long a fast
+        charge would take from right now.
       selector:
         entity:
           filter:

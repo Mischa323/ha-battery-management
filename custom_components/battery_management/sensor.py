@@ -124,7 +124,7 @@ class MinutesToFullSensor(_BaseSensor):
     as the schedule blueprints.
     """
 
-    _attr_name = "Minutes to full"
+    _attr_name = "Fast charge duration"
     _attr_native_unit_of_measurement = UnitOfTime.MINUTES
     _attr_device_class = SensorDeviceClass.DURATION
     _attr_state_class = SensorStateClass.MEASUREMENT
