@@ -131,7 +131,16 @@ DEFAULT_PHASE_PROBE_SECONDS = 20
 
 # Detection: command one pack, watch which leg moves. Deliberately crude,
 # because the alternative is asking the user to read a meter cupboard.
-PHASE_SETTLE_SECONDS = 10       # everything at 0 before the baseline is taken
+# Everything at 0 before the baseline is taken. 30 s, not 10, and the primary
+# site's first live run is why: probing unit 052 recorded -3557 W on L1, which
+# was unit 093 still winding down from its own probe ten seconds after being
+# told to stop. Gotcha 2, caught in the act.
+#
+# It did no harm there - the packs were on different legs and the attribution
+# looks for the largest *rise* - but two packs on one leg would have cancelled
+# each other out (-3557 + 3547) and the probe would have refused forever
+# without ever saying why.
+PHASE_SETTLE_SECONDS = 30
 PHASE_PROBE_MIN_WATTS = 600     # below this the signal drowns in the household
 PHASE_PROBE_MIN_FRACTION = 0.5  # the winning leg must show at least this much
 PHASE_PROBE_MARGIN = 2.0        # ...and this many times the runner-up

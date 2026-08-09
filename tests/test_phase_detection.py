@@ -364,3 +364,30 @@ async def test_a_typed_in_phase_says_so(build_system):
 
     assert system.coordinator.phase_source("Batterij 1") == "manual"
     assert system.coordinator.phase_source("Batterij 2") == "unknown"
+
+
+async def test_the_baseline_waits_for_the_previous_pack_to_wind_down(build_system):
+    """Measured at the primary site: ten seconds after being told to stop, a
+    pack was still delivering 3557 W. Two packs on one leg would then cancel
+    out and the probe would refuse forever without ever saying why."""
+    from custom_components.battery_management.const import PHASE_SETTLE_SECONDS
+
+    system = build_system(grid=0, units=EVEN, phases=QUIET)
+    waits: list[float] = []
+
+    house = None
+
+    async def record(seconds):
+        waits.append(seconds)
+        await house(seconds)
+
+    system.wire_house({"Batterij 1": 1, "Batterij 2": 1})
+    house = system.coordinator._sleep
+    system.coordinator._sleep = record
+
+    await system.coordinator._async_tick(None)
+    await system.run_background()
+
+    # settle before every baseline, and it must outlast the Modbus lag
+    assert waits[0] == PHASE_SETTLE_SECONDS
+    assert PHASE_SETTLE_SECONDS >= 30

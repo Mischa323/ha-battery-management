@@ -405,16 +405,29 @@ possible, and they gate section A.
       inside it. In between, the same tick regulated the packs and the next tick
       launched a second probe on top of the first.
 
+    ~~Still open: the probe has never run against real packs.~~ **It has, on
+    2026-08-09, and it worked first time.** 093 → L1 (delta 3569 W against a
+    runner-up of 2 W), 052 → L3 (3547 W against 18 W). 20 s of probe was
+    plenty; the attribution margins were not close.
+
+    What the same download *did* show is that **the settle was too short**:
+    052's probe recorded −3557 W on L1, which was 093 still winding down ten
+    seconds after being told to stop. Gotcha 2 in the act. Harmless there,
+    because the packs were on different legs and the attribution looks for the
+    largest *rise* - but two packs on one leg would have cancelled out
+    (−3557 + 3547 ≈ −10) and the probe would have refused forever without ever
+    saying why. Settle raised 10 → 30 s.
+
     Still open, and it needs hardware:
-    - **The probe has never run against real packs.** 20 s is a guess sitting on
-      top of gotcha 2; if the packs ramp slowly it will read too small and
-      decline. Watch the `probes` attribute on the first live run.
     - **`phase_voltage` is nominal.** The meter usually publishes real per-phase
       voltages; using them would make the amps honest. Not worth it until the
       rest is proven.
-    - **Cannot run during the shadow month** (it writes, dry run does not), so
-      the phases have to be typed in by hand until go-live, or the first probe
-      happens the moment it goes live. Say so out loud when switching over.
+    - **Two packs on one leg has never been observed**, and it is the case the
+      settle change was made for. Unverifiable at the primary site, where they
+      are on L1 and L3.
+    - **Cannot run during a shadow run** (it writes, dry run does not), so the
+      phases have to be typed in by hand until go-live, or the first probe
+      happens the moment it goes live - which is what happened here.
 
 ### G. Done
 
