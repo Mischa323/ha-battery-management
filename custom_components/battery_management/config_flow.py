@@ -83,7 +83,7 @@ from .const import (
     DOMAIN,
 )
 from .discovery import match_unit_entities
-from .validate import validate_shadow, validate_unit
+from .validate import validate_phases, validate_shadow, validate_unit
 
 _SENSOR = selector.EntitySelector(selector.EntitySelectorConfig(domain="sensor"))
 _SELECT = selector.EntitySelector(selector.EntitySelectorConfig(domain="select"))
@@ -518,17 +518,22 @@ class BatteryManagementOptionsFlow(OptionsFlow):
     async def async_step_phases(
         self, user_input: dict | None = None
     ) -> ConfigFlowResult:
-        if user_input is not None:
-            # emptying the sensor list must switch the protection off, not
-            # silently keep guarding with yesterday's entities
-            merged = {**self._entry.options}
-            merged.pop(CONF_PHASE_SENSORS, None)
-            merged.update(user_input)
-            return self.async_create_entry(title="", data=merged)
-
         defaults = {**self._entry.data, **self._entry.options}
+        errors: dict[str, str] = {}
+
+        if user_input is not None:
+            errors = validate_phases(user_input, defaults.get(CONF_GRID_POWER))
+            if not errors:
+                # emptying the sensor list must switch the protection off, not
+                # silently keep guarding with yesterday's entities
+                merged = {**self._entry.options}
+                merged.pop(CONF_PHASE_SENSORS, None)
+                merged.update(user_input)
+                return self.async_create_entry(title="", data=merged)
+            defaults = {**defaults, **user_input}
+
         return self.async_show_form(
-            step_id="phases", data_schema=_phases_schema(defaults)
+            step_id="phases", data_schema=_phases_schema(defaults), errors=errors
         )
 
     async def async_step_shadow(

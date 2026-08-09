@@ -93,6 +93,28 @@ def missing_options(state, required: tuple[str, ...]) -> bool:
     return any(option not in options for option in required)
 
 
+def validate_phases(user_input: dict, grid_sensor: str | None) -> dict[str, str]:
+    """The fuse settings, which have the same shape of plausible mistake.
+
+    The whole-house meter is the power sensor everybody knows by name, and
+    picking it here looks right. It is not: one sensor means "single-phase
+    supply, everything is on that leg", so a 25 A limit lands on a 3x25 A
+    connection and the packs get clamped for a total that is nowhere near any
+    fuse. Worse, the thing this exists to catch - one leg at 25 A while the
+    total looks calm - becomes invisible, because a total cannot show it.
+
+    This is the second time the site meter has been offered where a different
+    measurement was wanted (see `validate_shadow`), which is what makes it
+    worth a rule rather than a sentence in the README.
+    """
+    from .const import CONF_PHASE_SENSORS
+
+    chosen = user_input.get(CONF_PHASE_SENSORS) or []
+    if grid_sensor and grid_sensor in chosen:
+        return {CONF_PHASE_SENSORS: "phase_sensor_is_grid"}
+    return {}
+
+
 def validate_unit(
     user_input: dict,
     other_names: list[str],

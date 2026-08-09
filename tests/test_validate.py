@@ -8,11 +8,15 @@ from custom_components.battery_management.const import (
     CONF_DISCHARGE_LIMIT,
     CONF_FLOW_SELECT,
     CONF_MODE_SELECT,
+    CONF_PHASE_SENSORS,
     CONF_SOC_SENSOR,
     CONF_TARGET_NUMBER,
     CONF_UNIT_NAME,
 )
-from custom_components.battery_management.validate import validate_unit
+from custom_components.battery_management.validate import (
+    validate_phases,
+    validate_unit,
+)
 
 from .conftest import FakeState, unit_config
 
@@ -235,3 +239,62 @@ def test_leaving_it_empty_is_the_normal_case():
     from custom_components.battery_management.validate import validate_shadow
 
     assert validate_shadow({}, "sensor.p1_meter_power") == {}
+
+
+# -- the fuse settings ---------------------------------------------------------
+
+
+def test_the_whole_house_meter_is_rejected_as_a_phase_sensor():
+    """It is the power sensor everybody knows by name, and it looks right here.
+
+    One sensor means "single-phase supply, everything is on that leg", so a
+    25 A limit lands on a 3x25 A connection - and the thing this exists to
+    catch, one leg at 25 A while the total looks calm, a total cannot show.
+    """
+    errors = validate_phases(
+        {CONF_PHASE_SENSORS: ["sensor.p1_meter_power"]}, "sensor.p1_meter_power"
+    )
+
+    assert errors == {CONF_PHASE_SENSORS: "phase_sensor_is_grid"}
+
+
+def test_it_is_rejected_even_alongside_the_real_ones():
+    errors = validate_phases(
+        {
+            CONF_PHASE_SENSORS: [
+                "sensor.p1_meter_power_phase_1",
+                "sensor.p1_meter_power",
+            ]
+        },
+        "sensor.p1_meter_power",
+    )
+
+    assert errors
+
+
+def test_the_per_phase_sensors_are_accepted():
+    errors = validate_phases(
+        {
+            CONF_PHASE_SENSORS: [
+                "sensor.p1_meter_power_phase_1",
+                "sensor.p1_meter_power_phase_2",
+                "sensor.p1_meter_power_phase_3",
+            ]
+        },
+        "sensor.p1_meter_power",
+    )
+
+    assert errors == {}
+
+
+def test_a_genuinely_single_phase_house_is_still_allowed():
+    """One sensor is legitimate - just not the one that sums three legs."""
+    errors = validate_phases(
+        {CONF_PHASE_SENSORS: ["sensor.meter_power_l1"]}, "sensor.p1_meter_power"
+    )
+
+    assert errors == {}
+
+
+def test_leaving_it_empty_switches_the_protection_off_without_complaint():
+    assert validate_phases({CONF_PHASE_SENSORS: []}, "sensor.p1_meter_power") == {}

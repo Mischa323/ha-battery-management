@@ -219,7 +219,8 @@
       "duplicate_entity": "This entity is already used for another field on this unit. Each field needs its own entity.",
       "limit_not_percentage": "This looks like a power entity, not a state-of-charge percentage. The limit fields expect a percentage (0-100); leave blank to use 100 % / 5 %.",
       "missing_options": "This select does not offer the options the coordinator needs (self_consumption / third_party_control, or charge / discharge). Check the entity, or adjust the option strings in const.py if your firmware renamed them.",
-      "battery_power_is_grid": "That is the grid meter, not the batteries. The reconstruction adds the two together, so using the meter here counts it twice and the comparison becomes worthless. Leave this empty unless you have a sensor for the packs' own combined power - empty reads it back from the target entities, which is what you want."
+      "battery_power_is_grid": "That is the grid meter, not the batteries. The reconstruction adds the two together, so using the meter here counts it twice and the comparison becomes worthless. Leave this empty unless you have a sensor for the packs' own combined power - empty reads it back from the target entities, which is what you want.",
+      "phase_sensor_is_grid": "That is the whole-house meter, not one phase. A total cannot show a single leg sitting at 25 A, which is the only thing this protects against - and one sensor means “single-phase supply”, so a 25 A limit would land on your whole connection. Pick the per-phase sensors instead, usually named ..._phase_1, ..._phase_2, ..._phase_3."
     }
   },
   "entity": {

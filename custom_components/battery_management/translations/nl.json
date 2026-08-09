@@ -219,7 +219,8 @@
       "duplicate_entity": "Deze entiteit is al gekozen voor een ander veld van deze unit. Elk veld heeft zijn eigen entiteit nodig.",
       "limit_not_percentage": "Dit lijkt een vermogens-entiteit, geen SoC-percentage. De limietvelden verwachten een percentage (0-100); leeglaten geeft 100 % / 5 %.",
       "missing_options": "Deze select biedt niet de opties die de coördinator nodig heeft (self_consumption / third_party_control, of charge / discharge). Controleer de entiteit, of pas de optiestrings in const.py aan als jouw firmware ze hernoemd heeft.",
-      "battery_power_is_grid": "Dat is de netmeter, niet de accu's. De reconstructie telt die twee bij elkaar op, dus de meter hier invullen telt hem dubbel en maakt de vergelijking waardeloos. Laat dit leeg tenzij je een sensor hebt voor het gezamenlijke vermogen van de packs zelf - leeg leest hij terug uit de doel-entiteiten, en dat is wat je wilt."
+      "battery_power_is_grid": "Dat is de netmeter, niet de accu's. De reconstructie telt die twee bij elkaar op, dus de meter hier invullen telt hem dubbel en maakt de vergelijking waardeloos. Laat dit leeg tenzij je een sensor hebt voor het gezamenlijke vermogen van de packs zelf - leeg leest hij terug uit de doel-entiteiten, en dat is wat je wilt.",
+      "phase_sensor_is_grid": "Dat is de meter van het hele huis, niet één fase. Een totaal kan niet laten zien dat één fase op 25 A zit, en daar is dit het enige waar het tegen beschermt - en één sensor betekent “eenfase-aansluiting”, dus een grens van 25 A zou op je hele aansluiting komen te staan. Kies de sensoren per fase, meestal ..._phase_1, ..._phase_2, ..._phase_3."
     }
   },
   "entity": {
