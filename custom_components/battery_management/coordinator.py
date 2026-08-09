@@ -893,12 +893,24 @@ class BatteryCoordinator:
         Going live is the dangerous direction, so it is logged at warning level:
         a month-old shadow install that quietly starts commanding packs is
         exactly the surprise this whole mode exists to avoid.
+
+        Going back the other way is not free either. "Stop commanding" leaves
+        the packs holding whatever they were last told, indefinitely - there is
+        no watchdog on the device (gotcha 1). So hand them back first, exactly
+        as the kill-switch does, and only then stop writing. Someone reaching
+        for this switch to make it stop expects it to stop.
+
+        Only on a deliberate flip: at startup dry run is simply the state, and
+        writing a revert on the way up would be commanding packs this mode
+        exists never to touch.
         """
+        if value and not self.dry_run:
+            await self._revert_all_to_self()
         self.dry_run = value
         if value:
             _LOGGER.warning(
                 "Battery Management is in DRY RUN: it will decide but command "
-                "nothing"
+                "nothing (the packs have been handed back first)"
             )
         else:
             _LOGGER.warning(

@@ -122,3 +122,38 @@ async def test_the_setting_survives_a_restart(build_system, stored):
     await system.coordinator._async_restore()
 
     assert system.coordinator.dry_run is stored
+
+
+async def test_going_back_into_dry_run_hands_the_packs_back_first(build_system):
+    """"Stop commanding" is not the same as "stop". The packs have no watchdog:
+    without this they hold the last live command for good (gotcha 1)."""
+    system = build_system(grid=2000)
+    await system.coordinator._async_tick(None)
+    assert system.allocation()["Batterij 1"] > 0
+    system.hass.services.clear()
+
+    await system.coordinator.async_set_dry_run(True)
+
+    # zeroed, and nothing written after that - the tick that follows is
+    # suppressed, though it still records what it *would* have done, which is
+    # the whole point of a shadow run
+    assert system.allocation() == {"Batterij 1": 0, "Batterij 2": 0}
+    assert [c.data["value"] for c in system.hass.services.numbers()] == [0, 0]
+
+
+async def test_it_does_not_write_a_revert_when_already_in_dry_run(build_system):
+    """Startup and a redundant flip must both stay silent."""
+    system = build_system(grid=2000, dry_run=True)
+
+    await system.coordinator.async_set_dry_run(True)
+
+    assert system.hass.services.calls == []
+
+
+async def test_going_live_is_not_preceded_by_a_handback(build_system):
+    system = build_system(grid=2000, dry_run=True)
+
+    await system.coordinator.async_set_dry_run(False)
+
+    assert system.coordinator.dry_run is False
+    assert system.allocation()["Batterij 1"] > 0
