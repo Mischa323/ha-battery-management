@@ -270,6 +270,10 @@
     "external_no_plan": {
       "title": "Slim laden vereist een externe optimalisator",
       "description": "De coördinator staat op **Extern plan**, maar er is de afgelopen {timeout} minuten geen plan binnengekomen. Hij is daarom teruggevallen op de gewone nul-sturing.\n\nDeze modus plant zelf niets. Hij voert een plan uit dat ergens anders gemaakt wordt — meestal door **EMHASS**, dat optimaliseert op prijs, zon en verbruiksvoorspelling. EMHASS is een apart project: het wordt **niet** met deze integratie meegeïnstalleerd en is geen afhankelijkheid.\n\nInstalleer en configureer het (of een andere optimalisator), en laat het de service `battery_management.set_setpoint` aanroepen. Positief is ontladen, negatief is laden. Deze melding verdwijnt vanzelf zodra er een plan binnenkomt.\n\nGeen optimalisator? Kies dan een andere modus — **Volg de meter** laadt uit je zonneoverschot en ontlaadt bij tekort, zonder extra software."
+    },
+    "hand_back_impossible": {
+      "title": "{unit} kan niet worden teruggezet naar {mode}",
+      "description": "**{unit}** staat ingesteld om terug te keren naar `{mode}` zodra de coördinator uitgaat of Home Assistant afsluit. Die pack biedt die stand niet aan — hij kent alleen: {options}.\n\nHet commando wordt dan simpelweg geweigerd, en deze packs hebben geen watchdog: eentje zou zijn laatste opdracht oneindig blijven uitvoeren, precies waar het veilige terugzetten voor bedoeld is. Proefdraaien laat dit nooit zien, want er wordt niets geschreven.\n\nEen pack zonder eigen P1-meter heeft helemaal geen zelfverbruik-modus. Laat het vangnetveld daar **leeg**: hij krijgt dan 0 W en zijn modus blijft ongemoeid, wat een veilige ruststand is.\n\nHerstel het onder **Configureren → Entiteiten van de accu-units**, door door te klikken naar het scherm dat vraagt wat de modi van deze unit betekenen."
     }
   }
 }

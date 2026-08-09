@@ -270,6 +270,10 @@
     "external_no_plan": {
       "title": "Smart charging needs an external optimiser",
       "description": "The coordinator is set to **External plan**, but no plan has arrived in the last {timeout} minutes, so it has handed control back to normal grid-zero regulation.\n\nThis mode does not plan anything itself. It executes a plan produced elsewhere — typically **EMHASS**, which optimises against price, solar and load forecasts. EMHASS is a separate project: it is **not** installed with this integration and is not a dependency.\n\nInstall and configure it (or any other optimiser), and have it call the `battery_management.set_setpoint` service. Positive discharges, negative charges. This message clears itself as soon as a plan arrives.\n\nNot using an optimiser? Pick a different mode — **Follow the meter** charges from your solar surplus and discharges on demand, with no extra software."
+    },
+    "hand_back_impossible": {
+      "title": "{unit} cannot be handed back to {mode}",
+      "description": "**{unit}** is set to return to `{mode}` when the coordinator is switched off or Home Assistant unloads. That pack does not offer that option — it only offers: {options}.\n\nThe command would simply be refused, and these packs have no watchdog: one would keep running its last instruction indefinitely, which is exactly what the safe revert exists to prevent. Dry run never reveals this, because nothing is written.\n\nA pack without its own P1 meter has no self-consumption mode at all. For that one, **leave the hand-back empty**: it is then commanded 0 W and its mode is left alone, which is a safe resting state.\n\nFix it under **Configure → Battery unit entities**, walking through to the screen that asks what this unit's modes mean."
     }
   }
 }

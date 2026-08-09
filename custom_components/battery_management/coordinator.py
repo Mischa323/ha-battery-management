@@ -130,6 +130,9 @@ class UnitConfig:
     charge_limit: str | None = None
     discharge_limit: str | None = None
     mode_control: str = DEVICE_MODE_THIRD_PARTY
+    #: False when this entry predates the mode step, so both values below are
+    #: defaults rather than choices - which is exactly when they are wrong
+    modes_configured: bool = False
     #: empty means "do not touch the mode, just command 0" - which is what a
     #: unit without its own meter needs, since it has no self-consumption mode
     #: to fall back to. Holding 0 W indefinitely is a safe resting state; it is
@@ -153,6 +156,7 @@ class UnitConfig:
             soc_sensor=raw[CONF_SOC_SENSOR],
             charge_limit=raw.get(CONF_CHARGE_LIMIT),
             discharge_limit=raw.get(CONF_DISCHARGE_LIMIT),
+            modes_configured=CONF_MODE_CONTROL in raw,
             mode_control=raw.get(CONF_MODE_CONTROL) or DEVICE_MODE_THIRD_PARTY,
             # An absent hand-back means two opposite things, and getting them
             # confused disarms the safety net on exactly the unit that needs it.
@@ -266,6 +270,7 @@ class BatteryCoordinator:
         self.external_setpoint: float | None = None
         self.external_setpoint_at = None
         self._external_issue_active = False
+        self._hand_back_issues: dict[str, bool] = {}
         self.fast_charge_holding: bool = False   # charged, now being kept full
         self.setpoint: float = 0.0          # + = total discharge, - = total charge (W)
         self.status: str = "idle"           # idle | charging | discharging | fast_charge | off | degraded
@@ -864,6 +869,47 @@ class BatteryCoordinator:
         net_demand = real_grid + other
         return net_demand - self.setpoint, other
 
+    def _mode_options(self, entity_id: str) -> list[str] | None:
+        state = self.hass.states.get(entity_id)
+        options = state.attributes.get("options") if state is not None else None
+        if isinstance(options, (list, tuple)) and options:
+            return [str(o) for o in options]
+        return None
+
+    @callback
+    def _check_hand_back(self) -> None:
+        """Warn when a unit is told to return to a mode it cannot accept.
+
+        Found the hard way: one pack has no P1 meter of its own, so its firmware
+        offers no self-consumption at all. Setting that as its hand-back means
+        the safe revert is silently refused - and per gotcha 1 the pack then
+        keeps its last instruction forever. Dry run never surfaces it, because
+        nothing is ever written.
+        """
+        for cfg in self._units:
+            issue_id = f"{self.entry.entry_id}_hand_back_{cfg.name}"
+            options = self._mode_options(cfg.mode_select)
+            broken = bool(cfg.mode_safe and options and cfg.mode_safe not in options)
+            if broken == self._hand_back_issues.get(cfg.name, False):
+                continue
+            self._hand_back_issues[cfg.name] = broken
+            if broken:
+                ir.async_create_issue(
+                    self.hass,
+                    DOMAIN,
+                    issue_id,
+                    is_fixable=False,
+                    severity=ir.IssueSeverity.WARNING,
+                    translation_key="hand_back_impossible",
+                    translation_placeholders={
+                        "unit": cfg.name,
+                        "mode": cfg.mode_safe,
+                        "options": ", ".join(options or []),
+                    },
+                )
+            else:
+                ir.async_delete_issue(self.hass, DOMAIN, issue_id)
+
     @callback
     def _sync_external_issue(self, waiting: bool) -> None:
         """Tell the user *what to install*, not just that nothing is arriving.
@@ -981,6 +1027,11 @@ class BatteryCoordinator:
                         "control": cfg.mode_control,
                         # None means: command 0 and leave the mode alone
                         "safe": cfg.mode_safe,
+                        # a defaulted value looks identical to a chosen one,
+                        # which is how a wrong hand-back stayed invisible in an
+                        # entry that predates the mode step
+                        "explicitly_set": cfg.modes_configured,
+                        "select_offers": self._mode_options(cfg.mode_select),
                     },
                     "status": {
                         "online": self.unit_status[cfg.name].online,
@@ -1111,6 +1162,7 @@ class BatteryCoordinator:
             # cannot be reached, not merely that nobody asked, and the meter
             # reading is worth checking before anything is switched on
             self._refresh_observations()
+            self._check_hand_back()
             self.last_grid_observed = self._read_float(self._grid_sensor)
             self._notify()
             return
@@ -1119,6 +1171,7 @@ class BatteryCoordinator:
             cfg_by_name = {u.name: u for u in self._units}
 
             self._refresh_observations(snaps)
+            self._check_hand_back()
 
             # ---- FAST CHARGE override --------------------------------------
             if self.fast_charge:
