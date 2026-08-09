@@ -39,8 +39,12 @@ async def async_setup_entry(
             PhaseDetectionSensor(coordinator, entry),
         ]
         + [
-            UnitTargetSensor(coordinator, entry, index, unit)
+            entity
             for index, unit in enumerate(coordinator.units)
+            for entity in (
+                UnitTargetSensor(coordinator, entry, index, unit),
+                UnitPhaseSensor(coordinator, entry, index, unit),
+            )
         ]
     )
 
@@ -417,4 +421,49 @@ class PhaseDetectionSensor(_BaseSensor):
             # the deltas each probe saw - the only way to tell a confident
             # placement from a lucky one
             "probes": self.coordinator.phase_probe_detail,
+        }
+
+
+class UnitPhaseSensor(_BaseSensor):
+    """Which leg of the supply this pack sits on.
+
+    It is already an attribute on the target sensor and in the fuse-headroom
+    detail, but an attribute is not something you can put on a dashboard
+    without writing a template - and "which pack is on which phase" is exactly
+    the thing somebody wants to check at a glance after a detection run.
+
+    Not translated on purpose: L1, L2 and L3 read the same in every language.
+    """
+
+    _attr_icon = "mdi:transmission-tower"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(
+        self,
+        coordinator: BatteryCoordinator,
+        entry: ConfigEntry,
+        index: int,
+        unit: UnitConfig,
+    ) -> None:
+        super().__init__(coordinator, entry)
+        self._unit_name = unit.name
+        self._attr_name = f"{unit.name} phase"
+        self._attr_unique_id = f"{entry.entry_id}_unit{index}_phase"
+
+    @property
+    def available(self) -> bool:
+        return self.coordinator.phase_protection
+
+    @property
+    def native_value(self) -> str | None:
+        phase = self.coordinator.unit_phase.get(self._unit_name)
+        return None if phase is None else f"L{phase}"
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        return {
+            # a measured placement can be wrong; the evidence says how sure it is
+            "source": self.coordinator.phase_source(self._unit_name),
+            "detection": self.coordinator.phase_detection,
+            "probe": self.coordinator.phase_probe_detail.get(self._unit_name),
         }

@@ -368,6 +368,7 @@ capped — that would be throwing sun away.
 | **Plan** | Today's cheap and dear hours with their prices, plus the numbers the ceiling was computed from, all in attributes. | never |
 | **Fuse headroom** | Amps still available on the busiest leg of your supply. Per-leg detail — load, room, and which packs sit on it — is in the attributes. | no per-phase sensors configured |
 | **Phase detection** | Whether it knows which pack is on which leg, and how it found out. The `probes` attribute holds the measurements behind each placement. | never |
+| **‹unit› phase** | Which leg that pack is on — `L1`, `L2` or `L3`. Its `source` attribute says whether that was measured or typed in. | no per-phase sensors configured |
 
 ### Binary sensors
 

@@ -114,7 +114,7 @@ class BatteryManagementCard extends HTMLElement {
       const el = document.createElement("div");
       el.className = "unit";
       el.innerHTML = `
-        <div class="uhead"><span class="uname">${esc(u.name || "Unit " + (i + 1))}</span>
+        <div class="uhead"><span class="uname">${esc(u.name || "Unit " + (i + 1))}<span class="muted" id="uph${i}"></span></span>
           <span class="muted" id="ust${i}">—</span></div>
         <div class="bar"><div class="fill" id="ufill${i}"></div></div>
         <div class="uhead muted"><span id="usoc${i}">—</span><span id="utar${i}">—</span></div>`;
@@ -154,6 +154,11 @@ class BatteryManagementCard extends HTMLElement {
       this.querySelector(`#usoc${i}`).textContent = soc !== null ? soc + "%" : "—";
       this.querySelector(`#utar${i}`).textContent = tar !== null ? "doel " + tar + " W" : "";
       this.querySelector(`#ust${i}`).textContent = ust || "";
+      // which leg of the supply this pack is on, once it is known. Blank rather
+      // than a guess: an unplaced pack is held back, not placed somewhere.
+      const phase = this._s(u.phase);
+      this.querySelector(`#uph${i}`).textContent =
+        phase && phase !== "unknown" && phase !== "unavailable" ? "  ·  " + phase : "";
       const fill = this.querySelector(`#ufill${i}`);
       fill.style.width = (soc !== null ? Math.max(0, Math.min(100, soc)) : 0) + "%";
       fill.style.background =

@@ -1178,11 +1178,7 @@ class BatteryCoordinator:
                         "select_offers": self._mode_options(cfg.mode_select),
                     },
                     "phase": self.unit_phase.get(cfg.name),
-                    "phase_source": (
-                        "manual"
-                        if self._phase_manual.get(cfg.name) is not None
-                        else "measured"
-                    ),
+                    "phase_source": self.phase_source(cfg.name),
                     "status": {
                         "online": self.unit_status[cfg.name].online,
                         "soc": self.unit_status[cfg.name].soc,
@@ -1359,6 +1355,12 @@ class BatteryCoordinator:
             return caps
         ceilings = self._phase_ceilings(list(caps), caps, charging)
         return {n: min(caps[n], ceilings.get(n, caps[n])) for n in caps}
+
+    def phase_source(self, name: str) -> str:
+        """How this unit's leg came to be believed - typed in, or measured."""
+        if self._phase_manual.get(name) is not None:
+            return "manual"
+        return "measured" if self.unit_phase.get(name) is not None else "unknown"
 
     def _phase_needing_detection(self) -> list[UnitConfig]:
         """Units whose leg we do not know and are allowed to go and find out."""

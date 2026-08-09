@@ -341,3 +341,26 @@ async def test_unloading_cancels_a_running_probe(build_system):
     assert system.coordinator._detecting is False
     # and the revert still happened, in the right order
     assert system.allocation() == {"Batterij 1": 0, "Batterij 2": 0}
+
+
+# -- showing it -----------------------------------------------------------------
+
+
+async def test_each_unit_reports_its_own_phase_as_a_state(build_system):
+    """An attribute needs a template to put on a dashboard; a state does not."""
+    system = build_system(grid=0, units=EVEN, phases=QUIET)
+
+    await probe(system, {"Batterij 1": 3, "Batterij 2": 1})
+
+    assert system.coordinator.phase_source("Batterij 1") == "measured"
+    assert system.coordinator.unit_phase["Batterij 1"] == 3
+
+
+async def test_a_typed_in_phase_says_so(build_system):
+    """Worth distinguishing: a measurement can be wrong, a meter cupboard cannot."""
+    system = build_system(grid=0, units=EVEN, phases=QUIET, unit_phase=(2, 0))
+
+    await system.coordinator._async_tick(None)
+
+    assert system.coordinator.phase_source("Batterij 1") == "manual"
+    assert system.coordinator.phase_source("Batterij 2") == "unknown"
