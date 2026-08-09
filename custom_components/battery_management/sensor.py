@@ -3,12 +3,19 @@ from __future__ import annotations
 
 from homeassistant.components.sensor import SensorDeviceClass, SensorEntity, SensorStateClass
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import PERCENTAGE, UnitOfEnergy, UnitOfPower, UnitOfTime
+from homeassistant.const import (
+    EntityCategory,
+    PERCENTAGE,
+    UnitOfElectricCurrent,
+    UnitOfEnergy,
+    UnitOfPower,
+    UnitOfTime,
+)
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import DOMAIN, POLICIES
+from .const import DOMAIN, PHASE_DETECT_STATES, POLICIES
 from .coordinator import BatteryCoordinator, UnitConfig
 
 
@@ -28,6 +35,8 @@ async def async_setup_entry(
             GridObservedSensor(coordinator, entry),
             GridUsedSensor(coordinator, entry),
             OtherControllerSensor(coordinator, entry),
+            FuseHeadroomSensor(coordinator, entry),
+            PhaseDetectionSensor(coordinator, entry),
         ]
         + [
             UnitTargetSensor(coordinator, entry, index, unit)
@@ -342,4 +351,70 @@ class UnitTargetSensor(_BaseSensor):
             "grid_flow": status.flow,
             "commanded_watts": abs(status.target),
             "soc": status.soc,
+            # which leg of the supply this pack sits on, once known - the fuse
+            # protection is only as good as this answer
+            "phase": self.coordinator.unit_phase.get(self._unit_name),
+        }
+
+
+class FuseHeadroomSensor(_BaseSensor):
+    """How close the busiest leg is to its main fuse.
+
+    One number, because that is the one worth putting on a dashboard: the
+    tightest leg is the one that trips. The per-leg detail is in the attributes,
+    including which packs are believed to be on each.
+    """
+
+    _attr_name = "Fuse headroom"
+    _attr_native_unit_of_measurement = UnitOfElectricCurrent.AMPERE
+    _attr_device_class = SensorDeviceClass.CURRENT
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_icon = "mdi:fuse"
+
+    def __init__(self, coordinator, entry) -> None:
+        super().__init__(coordinator, entry)
+        self._attr_unique_id = f"{entry.entry_id}_fuse_headroom"
+
+    @property
+    def available(self) -> bool:
+        return self.coordinator.fuse_headroom_amps() is not None
+
+    @property
+    def native_value(self) -> float | None:
+        return self.coordinator.fuse_headroom_amps()
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        if not self.coordinator.phase_protection:
+            return {}
+        return self.coordinator.phase_report()
+
+
+class PhaseDetectionSensor(_BaseSensor):
+    """Whether we know which pack is on which leg, and how we found out."""
+
+    # a translation key, not a name: without one Home Assistant never applies
+    # the state translations and the dashboard shows the bare slug
+    _attr_translation_key = "phase_detection"
+    _attr_device_class = SensorDeviceClass.ENUM
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_options = list(PHASE_DETECT_STATES)
+    _attr_icon = "mdi:transmission-tower"
+
+    def __init__(self, coordinator, entry) -> None:
+        super().__init__(coordinator, entry)
+        self._attr_unique_id = f"{entry.entry_id}_phase_detection"
+
+    @property
+    def native_value(self) -> str:
+        return self.coordinator.phase_detection
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        return {
+            "unit_phase": dict(self.coordinator.unit_phase),
+            "detected_at": self.coordinator.phase_detected_at,
+            # the deltas each probe saw - the only way to tell a confident
+            # placement from a lucky one
+            "probes": self.coordinator.phase_probe_detail,
         }

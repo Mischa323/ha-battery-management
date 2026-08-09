@@ -12,6 +12,7 @@ against a household grid-power sensor so they behave as a single system:
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from collections import deque
@@ -23,6 +24,13 @@ from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
+from .phases import (
+    attribute_phase,
+    effective_limit_w,
+    other_load,
+    room,
+    unit_ceilings,
+)
 from .prices import cheapest_slots, dearest_slots, is_cheap_now, is_dear_now, parse_forecast
 from .const import (
     CONF_BIAS,
@@ -37,7 +45,15 @@ from .const import (
     CONF_MODE_CONTROL,
     CONF_MODE_SAFE,
     CONF_MODE_SELECT,
+    CONF_PHASE_DETECT,
+    CONF_PHASE_LIMIT_AMPS,
+    CONF_PHASE_MARGIN,
+    CONF_PHASE_PROBE_SECONDS,
+    CONF_PHASE_REDETECT,
+    CONF_PHASE_SENSORS,
+    CONF_PHASE_VOLTAGE,
     CONF_SOC_SENSOR,
+    CONF_UNIT_PHASE,
     CONF_TARGET_NUMBER,
     CONF_FAST_CHARGE_HOLD,
     CONF_BATTERY_POWER_SENSOR,
@@ -72,6 +88,12 @@ from .const import (
     DEFAULT_KP,
     DEFAULT_MIN_OUTPUT,
     DEFAULT_MODE,
+    DEFAULT_PHASE_DETECT,
+    DEFAULT_PHASE_LIMIT_AMPS,
+    DEFAULT_PHASE_MARGIN,
+    DEFAULT_PHASE_PROBE_SECONDS,
+    DEFAULT_PHASE_REDETECT,
+    DEFAULT_PHASE_VOLTAGE,
     DEFAULT_SHADOW_SIMULATE,
     DEFAULT_SOC_RESERVE,
     DEFAULT_SOLAR_FORECAST_MAX,
@@ -108,7 +130,19 @@ from .const import (
     POLICY_NO_GRID_DATA,
     POLICY_PACKS_EMPTY,
     POLICY_PACKS_FULL,
+    POLICY_PHASE_DETECT,
+    POLICY_PHASE_LIMIT,
     POLICY_SOC_RESERVE,
+    PHASE_DETECT_BLOCKED,
+    PHASE_DETECT_DONE,
+    PHASE_DETECT_INCONCLUSIVE,
+    PHASE_DETECT_MANUAL,
+    PHASE_DETECT_OFF,
+    PHASE_DETECT_PARTIAL,
+    PHASE_DETECT_RUNNING,
+    PHASE_DETECT_UNKNOWN,
+    PHASE_PROBE_MIN_WATTS,
+    PHASE_SETTLE_SECONDS,
     SAVE_DELAY,
     TICK_LOG_SIZE,
     STORAGE_VERSION,
@@ -259,6 +293,33 @@ class BatteryCoordinator:
             data.get(CONF_EXTERNAL_TIMEOUT, DEFAULT_EXTERNAL_TIMEOUT)
         )
 
+        # --- per-phase fuse protection (entirely opt-in) ---------------------
+        self._phase_sensors: list[str] = list(data.get(CONF_PHASE_SENSORS) or [])
+        self._phase_amps: float = float(
+            data.get(CONF_PHASE_LIMIT_AMPS, DEFAULT_PHASE_LIMIT_AMPS)
+        )
+        self._phase_volts: float = float(
+            data.get(CONF_PHASE_VOLTAGE, DEFAULT_PHASE_VOLTAGE)
+        )
+        self._phase_margin: float = float(
+            data.get(CONF_PHASE_MARGIN, DEFAULT_PHASE_MARGIN)
+        )
+        self._phase_detect: bool = bool(
+            data.get(CONF_PHASE_DETECT, DEFAULT_PHASE_DETECT)
+        )
+        self._phase_redetect: bool = bool(
+            data.get(CONF_PHASE_REDETECT, DEFAULT_PHASE_REDETECT)
+        )
+        self._probe_seconds: float = float(
+            data.get(CONF_PHASE_PROBE_SECONDS, DEFAULT_PHASE_PROBE_SECONDS)
+        )
+        # Typed in per unit, and it wins over anything we work out ourselves:
+        # somebody who has read the meter cupboard knows better than a probe.
+        self._phase_manual: dict[str, int | None] = {
+            u[CONF_UNIT_NAME]: (int(u.get(CONF_UNIT_PHASE) or 0) or None)
+            for u in data[CONF_UNITS]
+        }
+
         # runtime state
         self.enabled: bool = False
         self.fast_charge: bool = False
@@ -288,6 +349,16 @@ class BatteryCoordinator:
         self.unit_status: dict[str, UnitStatus] = {
             u.name: UnitStatus() for u in self._units
         }
+        # which leg each unit sits on (1-based), and how we came to believe it
+        self.unit_phase: dict[str, int | None] = {u.name: None for u in self._units}
+        self.phase_detection: str = PHASE_DETECT_UNKNOWN
+        self.phase_detected_at: float | None = None
+        self.phase_probe_detail: dict[str, dict] = {}
+        self._detecting: bool = False
+        self._detect_task = None
+        # a unit that dropped out may have come back on different wiring, so its
+        # placement is retired the moment it goes offline
+        self._was_online: dict[str, bool] = {u.name: False for u in self._units}
         self._unsub = None
         # entities subscribe to this to refresh
         self._listeners: list = []
@@ -325,6 +396,8 @@ class BatteryCoordinator:
             "buy_ceiling_max": self.buy_ceiling_max,
             "dry_run": self.dry_run,
             "mode": self.mode,
+            "unit_phase": dict(self.unit_phase),
+            "phase_detected_at": self.phase_detected_at,
             "saved_at": time.time(),
         }
 
@@ -356,6 +429,7 @@ class BatteryCoordinator:
         for key in ("buy_ceiling_min", "buy_ceiling_max"):
             if stored and stored.get(key) is not None:
                 setattr(self, key, float(stored[key]))
+        self._restore_phases(stored)
         if stored and stored.get("soc_reserve") is not None:
             # a user setting, not runtime state: restore it even when the
             # coordinator was switched off, and regardless of age
@@ -380,10 +454,37 @@ class BatteryCoordinator:
         await self._take_control()
         self._notify()
 
+    def _restore_phases(self, stored: dict | None) -> None:
+        """Bring back which pack sits on which leg, unless we were told not to.
+
+        The owner asked for a fresh probe after every restart, and that is the
+        default: an integration that has been down cannot vouch for what an
+        electrician did while it was. Turning it off keeps the stored placement,
+        which is what a stable site wants once the wiring is known - a probe
+        parks the packs for a minute every time Home Assistant is restarted, and
+        during development that is every few minutes.
+        """
+        self._apply_manual_phases()
+        if self._phase_redetect and self._phase_detect:
+            self._refresh_phase_detection_state()
+            return
+        for name, phase in (stored or {}).get("unit_phase", {}).items():
+            if name in self.unit_phase and phase and self._phase_manual.get(name) is None:
+                self.unit_phase[name] = int(phase)
+        self.phase_detected_at = (stored or {}).get("phase_detected_at")
+        self._refresh_phase_detection_state()
+
     async def async_stop(self, revert: bool = True) -> None:
         if self._unsub:
             self._unsub()
             self._unsub = None
+        # A probe left running would command a pack *after* the safe revert had
+        # already let go of it, and per gotcha 1 that pack then holds power
+        # indefinitely. Cancel first, revert second.
+        if self._detect_task is not None:
+            self._detect_task.cancel()
+            self._detect_task = None
+            self._detecting = False
         if revert:
             await self._revert_all_to_self()
 
@@ -1013,6 +1114,14 @@ class BatteryCoordinator:
                 "solar_forecast_max": self._solar_forecast_max,
                 "expensive_hours": self._expensive_hours,
                 "discharge_anyway_soc": self._discharge_anyway_soc,
+                "phase_sensors": self._phase_sensors,
+                "phase_limit_amps": self._phase_amps,
+                "phase_voltage": self._phase_volts,
+                "phase_margin_percent": self._phase_margin,
+                "phase_detect": self._phase_detect,
+                "phase_redetect_on_restart": self._phase_redetect,
+                "phase_probe_seconds": self._probe_seconds,
+                "phase_manual": self._phase_manual,
             },
             "state": {
                 # dry run first: every other number means something different
@@ -1042,6 +1151,10 @@ class BatteryCoordinator:
                 "external_plan_age_s": self.external_plan_age(),
                 "external_timeout_min": self._external_timeout,
                 "last_tick": self.last_tick.isoformat() if self.last_tick else None,
+                # the fuse protection, including the evidence behind each
+                # placement - a probe that guessed wrong is only findable here
+                "phase_protection": self.phase_report() if self.phase_protection else None,
+                "fuse_headroom_amps": self.fuse_headroom_amps(),
             },
             "units": [
                 {
@@ -1064,6 +1177,12 @@ class BatteryCoordinator:
                         "explicitly_set": cfg.modes_configured,
                         "select_offers": self._mode_options(cfg.mode_select),
                     },
+                    "phase": self.unit_phase.get(cfg.name),
+                    "phase_source": (
+                        "manual"
+                        if self._phase_manual.get(cfg.name) is not None
+                        else "measured"
+                    ),
                     "status": {
                         "online": self.unit_status[cfg.name].online,
                         "soc": self.unit_status[cfg.name].soc,
@@ -1123,12 +1242,320 @@ class BatteryCoordinator:
         for name, snap in snaps.items():
             self.unit_status[name].online = snap.online
             self.unit_status[name].soc = snap.soc if snap.online else None
+            # the owner's rule: a pack that dropped out gets re-placed when it
+            # returns, because it is no longer provably the pack we measured
+            if self._was_online[name] and not snap.online:
+                self._forget_phase(name)
+            self._was_online[name] = snap.online
+        self._apply_manual_phases()
+        self._refresh_phase_detection_state()
 
     def _record(self, name: str, flow: str, watts: int) -> None:
         """Remember what we just commanded, signed like the Setpoint sensor."""
         status = self.unit_status[name]
         status.flow = flow
         status.target = watts if flow == FLOW_DISCHARGE else -watts
+
+    # -- per-phase fuse protection -------------------------------------------
+    @property
+    def phase_protection(self) -> bool:
+        """Configured at all? Without per-phase sensors none of this exists."""
+        return bool(self._phase_sensors)
+
+    @property
+    def phase_limit_w(self) -> float:
+        """What one leg may carry, after the margin."""
+        return effective_limit_w(self._phase_amps, self._phase_volts, self._phase_margin)
+
+    def phase_power(self) -> dict[int, float]:
+        """Read every leg. A leg we cannot read is simply left out.
+
+        Leaving it out is not the same as calling it zero: `unit_ceilings`
+        treats an unknown placement as possibly-on-the-worst-leg, and a leg that
+        has gone unreadable drops out of that comparison rather than pretending
+        to be empty.
+        """
+        readings: dict[int, float] = {}
+        for index, entity_id in enumerate(self._phase_sensors, start=1):
+            value = self._read_float(entity_id)
+            if value is not None:
+                readings[index] = value
+        return readings
+
+    def _our_load_per_phase(self) -> dict[int, float]:
+        """Our own last commanded watts, gathered per leg (+ discharge)."""
+        totals: dict[int, float] = {}
+        for name, status in self.unit_status.items():
+            phase = self.unit_phase.get(name)
+            if phase is not None:
+                totals[phase] = totals.get(phase, 0.0) + status.target
+        return totals
+
+    def phase_report(self) -> dict:
+        """Everything the fuse protection currently believes, for the sensors."""
+        limit = self.phase_limit_w
+        measured = self.phase_power()
+        other = other_load(measured, self._our_load_per_phase())
+        discharge_room, charge_room = room(other, limit)
+        volts = self._phase_volts or 1.0
+        return {
+            "limit_w": round(limit),
+            "limit_amps": self._phase_amps,
+            "margin_percent": self._phase_margin,
+            "phases": {
+                phase: {
+                    "measured_w": round(watts),
+                    "without_us_w": round(other[phase]),
+                    "amps": round(abs(other[phase]) / volts, 1),
+                    "discharge_room_w": round(discharge_room[phase]),
+                    "charge_room_w": round(charge_room[phase]),
+                    "units": [
+                        n for n, p in self.unit_phase.items() if p == phase
+                    ],
+                }
+                for phase, watts in measured.items()
+            },
+            "detection": self.phase_detection,
+            "unit_phase": dict(self.unit_phase),
+            "detected_at": self.phase_detected_at,
+            "probes": self.phase_probe_detail,
+        }
+
+    def fuse_headroom_amps(self) -> float | None:
+        """The tightest leg's remaining amps - one number worth watching."""
+        if not self.phase_protection:
+            return None
+        measured = self.phase_power()
+        if not measured:
+            return None
+        volts = self._phase_volts or 1.0
+        limit = self.phase_limit_w
+        # what is left before the fuse, in whichever direction the leg is going
+        return round(min((limit - abs(w)) / volts for w in measured.values()), 1)
+
+    def _phase_ceilings(
+        self, names: list[str], unit_max: dict[str, float], charging: bool
+    ) -> dict[str, float]:
+        """Per-unit watt ceiling from the fuse, for one direction."""
+        measured = self.phase_power()
+        if not measured:
+            # Configured but unreadable. Falling back to "no limit" would quietly
+            # disarm the protection exactly when the meter is misbehaving, so
+            # hold the packs instead - the bound is the whole point.
+            return {name: 0.0 for name in names}
+        other = other_load(measured, self._our_load_per_phase())
+        discharge_room, charge_room = room(other, self.phase_limit_w)
+        return unit_ceilings(
+            names,
+            self.unit_phase,
+            charge_room if charging else discharge_room,
+            unit_max,
+        )
+
+    def _unit_caps(self, states: dict, *, charging: bool) -> dict[str, float]:
+        """Deliverable watts per unit: its own rating, and the fuse on its leg."""
+        caps = {n: s.unit_max for n, s in states.items()}
+        if not self.phase_protection or not caps:
+            return caps
+        ceilings = self._phase_ceilings(list(caps), caps, charging)
+        return {n: min(caps[n], ceilings.get(n, caps[n])) for n in caps}
+
+    def _phase_needing_detection(self) -> list[UnitConfig]:
+        """Units whose leg we do not know and are allowed to go and find out."""
+        return [
+            u
+            for u in self._units
+            if self.unit_phase.get(u.name) is None
+            and self._phase_manual.get(u.name) is None
+        ]
+
+    def _apply_manual_phases(self) -> None:
+        """A typed-in leg always wins; it is the one source that cannot be wrong."""
+        for name, phase in self._phase_manual.items():
+            if phase is not None:
+                self.unit_phase[name] = phase
+
+    def _single_phase_shortcut(self) -> bool:
+        """One sensor means one leg, and everything is on it. Nothing to probe."""
+        if len(self._phase_sensors) != 1:
+            return False
+        for name in self.unit_phase:
+            self.unit_phase[name] = 1
+        return True
+
+    def _refresh_phase_detection_state(self) -> None:
+        placed = [n for n, p in self.unit_phase.items() if p is not None]
+        if not self.phase_protection:
+            self.phase_detection = PHASE_DETECT_OFF
+        elif len(placed) == len(self.unit_phase):
+            self.phase_detection = (
+                PHASE_DETECT_MANUAL
+                if all(self._phase_manual.get(n) is not None for n in placed)
+                else PHASE_DETECT_DONE
+            )
+        elif not self._phase_detect:
+            self.phase_detection = PHASE_DETECT_OFF
+        elif self.dry_run:
+            # a shadow run writes nothing, and this needs to write to see
+            self.phase_detection = PHASE_DETECT_BLOCKED
+        elif placed:
+            self.phase_detection = PHASE_DETECT_PARTIAL
+        elif self.phase_detection not in (
+            PHASE_DETECT_INCONCLUSIVE,
+            PHASE_DETECT_RUNNING,
+        ):
+            self.phase_detection = PHASE_DETECT_UNKNOWN
+
+    def _forget_phase(self, name: str) -> None:
+        """Retire a placement. Called when a unit drops out, per the owner's rule.
+
+        A pack that disappeared and came back is not provably the same pack on
+        the same leg - it could have been moved, or replaced. Re-probing costs a
+        minute; guarding the wrong leg costs a fuse.
+        """
+        if self._phase_manual.get(name) is not None:
+            return
+        if self.unit_phase.get(name) is not None:
+            _LOGGER.info("%s went offline; its phase placement is retired", name)
+        self.unit_phase[name] = None
+
+    @callback
+    def async_request_phase_detection(self) -> None:
+        """Ask for a probe. Idempotent - the tick starts it when it is safe to.
+
+        Typed-in placements are left alone: they are re-applied every tick, so
+        clearing them here would only make the button appear to do something.
+        Someone who wants those re-measured sets the field back to 0.
+        """
+        for name in self.unit_phase:
+            if self._phase_manual.get(name) is None:
+                self.unit_phase[name] = None
+        self.phase_detection = PHASE_DETECT_UNKNOWN
+        self.phase_probe_detail = {}
+        self._notify()
+
+    def _maybe_start_detection(self) -> None:
+        """Start a probe if one is wanted, allowed, and not already running."""
+        if self._detecting or not self.phase_protection or not self._phase_detect:
+            return
+        if self.dry_run or not self.enabled or self.fast_charge:
+            return
+        if self._single_phase_shortcut() or not self._phase_needing_detection():
+            return
+        # claim the packs *now*, not when the task happens to start: between
+        # those two moments this tick would otherwise regulate them, and the
+        # next tick would launch a second probe on top of the first
+        self._detecting = True
+        self.phase_detection = PHASE_DETECT_RUNNING
+        self.active_policy = POLICY_PHASE_DETECT
+        self.status = "detecting"
+        self._detect_task = self.hass.async_create_task(self._async_detect_phases())
+
+    async def _async_detect_phases(self) -> None:
+        """Work out which pack is on which leg by moving one and watching.
+
+        Crude on purpose. Nothing in the Modbus data says how the installer ran
+        the cables, and asking the owner to read a meter cupboard is how a
+        safety feature ends up switched off at the sites nobody lives at.
+
+        The probe is itself bounded by the fuse: the legs are unknown, so the
+        power is capped by whichever leg has least room. That is also why it can
+        decline - on a busy evening there is no room to push into, and waiting
+        is the right answer.
+        """
+        self._notify()
+        try:
+            for cfg in self._phase_needing_detection():
+                await self._probe_unit(cfg)
+        except Exception:  # noqa: BLE001 - a failed probe must not kill the loop
+            _LOGGER.exception("Phase detection failed")
+        finally:
+            # whatever happened, leave nothing running: the packs have no
+            # watchdog, so a half-finished probe must not be left holding power
+            for cfg in self._units:
+                await self._svc_number(cfg.target_number, 0)
+                self._record(cfg.name, FLOW_CHARGE, 0)
+            self._detecting = False
+            self._refresh_phase_detection_state()
+            if self.phase_detection in (PHASE_DETECT_DONE, PHASE_DETECT_MANUAL):
+                self.phase_detected_at = time.time()
+            self._save_state()
+            self._notify()
+
+    async def _sleep(self, seconds: float) -> None:
+        """Waiting for real hardware to respond. A seam, so tests need not."""
+        await asyncio.sleep(seconds)
+
+    async def _probe_unit(self, cfg: UnitConfig) -> None:
+        state = self._unit_snapshot(cfg)
+        if not state.online:
+            return
+
+        # charge if there is room to take power in, otherwise push it out; a
+        # charge is preferred because it is a load like any other and cannot
+        # collide with an export limit
+        headroom_soc = state.charge_limit - state.soc
+        floor = self._discharge_floor(state)
+        if headroom_soc > 5:
+            charging, flow = True, FLOW_CHARGE
+        elif state.soc - floor > 5:
+            charging, flow = False, FLOW_DISCHARGE
+        else:
+            _LOGGER.debug("%s: no room to probe with, skipping", cfg.name)
+            self.phase_probe_detail[cfg.name] = {"reason": "no_soc_room"}
+            return
+
+        # everything at rest first, so the baseline is the house alone
+        for other in self._units:
+            await self._svc_number(other.target_number, 0)
+            self._record(other.name, flow, 0)
+        await self._sleep(PHASE_SETTLE_SECONDS)
+
+        baseline = self.phase_power()
+        if not baseline:
+            self.phase_probe_detail[cfg.name] = {"reason": "no_phase_readings"}
+            return
+
+        # every pack is at rest, so the baseline *is* the house on its own
+        discharge_room, charge_room = room(baseline, self.phase_limit_w)
+        # we do not know the leg yet, so the tightest one sets the probe
+        available = min((charge_room if charging else discharge_room).values())
+        probe_w = min(state.unit_max, available)
+        if probe_w < PHASE_PROBE_MIN_WATTS:
+            _LOGGER.info(
+                "%s: only %.0f W of fuse room, too little to probe with; will retry",
+                cfg.name,
+                probe_w,
+            )
+            self.phase_probe_detail[cfg.name] = {
+                "reason": "no_fuse_room",
+                "available_w": round(available),
+            }
+            return
+
+        await self._svc_select(cfg.flow_select, flow)
+        await self._svc_number(cfg.target_number, int(probe_w))
+        self._record(cfg.name, flow, int(probe_w))
+        try:
+            await self._sleep(self._probe_seconds)
+            during = self.phase_power()
+        finally:
+            await self._svc_number(cfg.target_number, 0)
+            self._record(cfg.name, flow, 0)
+
+        phase, detail = attribute_phase(baseline, during, probe_w, charging)
+        self.phase_probe_detail[cfg.name] = detail
+        if phase is None:
+            _LOGGER.warning(
+                "%s: could not tell which phase it is on (%s); %s",
+                cfg.name,
+                detail.get("reason"),
+                detail.get("deltas"),
+            )
+            self.phase_detection = PHASE_DETECT_INCONCLUSIVE
+            return
+        _LOGGER.info("%s is on phase L%d (%s)", cfg.name, phase, detail.get("deltas"))
+        self.unit_phase[cfg.name] = phase
 
     async def _take_control(self) -> None:
         """Put every unit into whatever option means 'driven from outside'."""
@@ -1153,6 +1580,44 @@ class BatteryCoordinator:
 
     # -- distribution --------------------------------------------------------
     @staticmethod
+    def _split(mag: float, weights: dict, umax: dict, pool: list) -> dict:
+        """Proportional split, re-offering whatever a ceiling refuses.
+
+        A unit that hits its ceiling stops taking a share and what it could not
+        take goes back to the others. Without that, a lopsided weighting quietly
+        under-delivers - `sp = 5000` with weights 3:1 gave 3500 + 1250, and the
+        missing 250 W is a steady-state error the integrator cannot correct,
+        because it is already sitting on its own bound.
+
+        This never overshoots: what is handed out is only ever what was left of
+        `mag`, and the tick has already clamped `mag` to the sum of the
+        ceilings. It matters much more now than it did, because the fuse
+        protection produces ceilings of a few hundred watts, not 3500.
+        """
+        shares: dict = {}
+        pool = list(pool)
+        remaining = mag
+        while pool:
+            total = sum(weights[u] for u in pool)
+            if total <= 0:
+                break
+            capped = [
+                u for u in pool if remaining * weights[u] / total >= umax[u]
+            ]
+            if not capped:
+                for u in pool:
+                    shares[u] = remaining * weights[u] / total
+                return shares
+            for u in capped:
+                shares[u] = umax[u]
+                remaining -= umax[u]
+                pool.remove(u)
+            remaining = max(remaining, 0.0)
+        for u in pool:
+            shares[u] = 0.0
+        return shares
+
+    @staticmethod
     def _distribute(mag: float, weights: dict, umax: dict, min_output: float) -> dict:
         """Split `mag` W across units by weight, clamped to max, with min-output flooring.
 
@@ -1173,8 +1638,7 @@ class BatteryCoordinator:
             return {u: 0 for u in weights}
 
         while True:
-            total = sum(weights[u] for u in active)
-            shares = {u: min(mag * weights[u] / total, umax[u]) for u in active}
+            shares = BatteryCoordinator._split(mag, weights, umax, active)
             if len(active) == 1:
                 break
             below = [u for u in active if shares[u] < min_output]
@@ -1187,6 +1651,10 @@ class BatteryCoordinator:
 
     # -- the control tick ----------------------------------------------------
     async def _async_tick(self, _now) -> None:
+        if self._detecting:
+            # a probe owns the packs for its minute; regulating underneath it
+            # would be measuring our own interference
+            return
         if not self.enabled and not self.fast_charge:
             self.active_policy = POLICY_DISABLED
             # keep looking even while idle: "disconnected" has to mean the pack
@@ -1203,21 +1671,39 @@ class BatteryCoordinator:
 
             self._refresh_observations(snaps)
             self._check_hand_back()
+            self._maybe_start_detection()
+            if self._detecting:
+                self._notify()
+                return
 
             # ---- FAST CHARGE override --------------------------------------
             if self.fast_charge:
                 self.status = "fast_charge"
                 self.active_policy = POLICY_FAST_CHARGE
                 all_full = True
+                # "as fast as possible" still means "within the main fuse" -
+                # this is the one place that commands full rating outright, so
+                # it is the most likely single thing to drop a leg
+                wanting = {
+                    n: s
+                    for n, s in snaps.items()
+                    if s.online and s.soc < s.charge_limit - 1
+                }
+                caps = self._unit_caps(wanting, charging=True)
+                if caps and min(caps.values()) < max(
+                    s.unit_max for s in wanting.values()
+                ):
+                    self.active_policy = POLICY_PHASE_LIMIT
                 for name, s in snaps.items():
                     cfg = cfg_by_name[name]
                     if not s.online:
                         continue
                     if s.soc < s.charge_limit - 1:
                         all_full = False
+                        watts = int(caps.get(name, s.unit_max))
                         await self._svc_select(cfg.flow_select, FLOW_CHARGE)
-                        await self._svc_number(cfg.target_number, s.unit_max)
-                        self._record(name, FLOW_CHARGE, int(s.unit_max))
+                        await self._svc_number(cfg.target_number, watts)
+                        self._record(name, FLOW_CHARGE, watts)
                     else:
                         await self._svc_number(cfg.target_number, 0)
                         self._record(name, FLOW_CHARGE, 0)
@@ -1272,12 +1758,22 @@ class BatteryCoordinator:
             error = grid - self._bias
             online = {n: s for n, s in snaps.items() if s.online}
 
-            maxdis = sum(
-                s.unit_max
-                for s in online.values()
-                if s.soc > self._discharge_floor(s)
-            )
-            maxchg = sum(s.unit_max for s in online.values() if s.soc < s.charge_limit)
+            can_discharge = {
+                n: s for n, s in online.items() if s.soc > self._discharge_floor(s)
+            }
+            can_charge = {n: s for n, s in online.items() if s.soc < s.charge_limit}
+
+            # What the packs could deliver if only their own state of charge
+            # and rating mattered...
+            free_dis = sum(s.unit_max for s in can_discharge.values())
+            free_chg = sum(s.unit_max for s in can_charge.values())
+            # ...and what the main fuse leaves of that, leg by leg. This is a
+            # bound like every other one here, so the anti-windup clamp covers
+            # it too: the integrator cannot wind up against a fuse either.
+            dis_cap = self._unit_caps(can_discharge, charging=False)
+            chg_cap = self._unit_caps(can_charge, charging=True)
+            maxdis = sum(dis_cap.values())
+            maxchg = sum(chg_cap.values())
 
             # The mode is a bound on the setpoint, not a separate behaviour:
             # grid-zero keeps regulating inside it. Reusing the existing clamp
@@ -1324,9 +1820,22 @@ class BatteryCoordinator:
             self.setpoint = sp
 
             umax = {n: s.unit_max for n, s in online.items()}
+            umax.update(dis_cap if sp > 0 else chg_cap)
 
-            self.active_policy = dynamic_policy or hold_policy or external_policy or self._classify(
-                error, sp, online, maxdis, maxchg
+            # "the fuse is what is stopping me" outranks the generic reasons,
+            # because it is the one a flat graph would otherwise never explain
+            phase_policy = None
+            if sp > 0 and maxdis < free_dis - 1 and sp >= maxdis - 1:
+                phase_policy = POLICY_PHASE_LIMIT
+            elif sp < 0 and maxchg < free_chg - 1 and -sp >= maxchg - 1:
+                phase_policy = POLICY_PHASE_LIMIT
+
+            self.active_policy = (
+                dynamic_policy
+                or hold_policy
+                or external_policy
+                or phase_policy
+                or self._classify(error, sp, online, maxdis, maxchg)
             )
 
             if sp > 0:  # discharge

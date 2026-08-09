@@ -45,7 +45,8 @@
           "target_power_number": "Target grid power",
           "soc_sensor": "State of charge sensor (%)",
           "charge_limit_number": "Charge limit (%, optional)",
-          "discharge_limit_number": "Discharge limit (%, optional)"
+          "discharge_limit_number": "Discharge limit (%, optional)",
+          "unit_phase": "Phase (0 = measure it)"
         },
         "data_description": {
           "name": "Used in this integration's own sensor names. Must be unique: two packs sharing a name would be treated as one.",
@@ -54,7 +55,8 @@
           "target_power_number": "The number this pack's share of the setpoint is written to. Always positive; the direction comes from the flow select.",
           "soc_sensor": "Drives the split between packs and every SoC limit. A pack whose state of charge cannot be read is skipped entirely.",
           "charge_limit_number": "The pack's own upper limit, as a percentage. Leave empty to assume 100 %. Never point this at a watt entity.",
-          "discharge_limit_number": "The pack's own lower limit. Leave empty to assume 5 %. This is the hardware backstop the coordinator stays above."
+          "discharge_limit_number": "The pack's own lower limit. Leave empty to assume 5 %. This is the hardware backstop the coordinator stays above.",
+          "unit_phase": "Which leg of the supply this pack is on: 1, 2 or 3. Leave it at 0 and it is measured. Anything you type here wins over any measurement - if you have read the meter cupboard, you know better than a probe does."
         }
       },
       "unit_modes": {
@@ -86,7 +88,8 @@
           "tuning": "Control parameters",
           "units": "Battery unit entities",
           "dynamic": "Dynamic tariff",
-          "shadow": "Shadow running"
+          "shadow": "Shadow running",
+          "phases": "Fuse protection per phase"
         }
       },
       "tuning": {
@@ -125,7 +128,8 @@
           "target_power_number": "Target grid power",
           "soc_sensor": "State of charge sensor (%)",
           "charge_limit_number": "Charge limit (%, optional)",
-          "discharge_limit_number": "Discharge limit (%, optional)"
+          "discharge_limit_number": "Discharge limit (%, optional)",
+          "unit_phase": "Phase (0 = measure it)"
         },
         "data_description": {
           "name": "Used in this integration's own sensor names. Must be unique: two packs sharing a name would be treated as one.",
@@ -134,7 +138,8 @@
           "target_power_number": "The number this pack's share of the setpoint is written to. Always positive; the direction comes from the flow select.",
           "soc_sensor": "Drives the split between packs and every SoC limit. A pack whose state of charge cannot be read is skipped entirely.",
           "charge_limit_number": "The pack's own upper limit, as a percentage. Leave empty to assume 100 %. Never point this at a watt entity.",
-          "discharge_limit_number": "The pack's own lower limit. Leave empty to assume 5 %. This is the hardware backstop the coordinator stays above."
+          "discharge_limit_number": "The pack's own lower limit. Leave empty to assume 5 %. This is the hardware backstop the coordinator stays above.",
+          "unit_phase": "Which leg of the supply this pack is on: 1, 2 or 3. Leave it at 0 and it is measured. Anything you type here wins over any measurement - if you have read the meter cupboard, you know better than a probe does."
         }
       },
       "dynamic": {
@@ -184,6 +189,28 @@
           "mode_control": "The option this pack must be set to before it will take orders. Usually third_party_control.",
           "mode_safe": "Where it is put when you switch off or Home Assistant unloads. Leave empty for a pack with no meter of its own: it is then simply commanded 0 W and its mode left alone, which is a safe resting state."
         }
+      },
+      "phases": {
+        "title": "Fuse protection per phase",
+        "description": "The packs are single-phase and the control loop only knows the household total. A pack charging at 3500 W on a leg that is already pulling 20 A takes that leg to 35 A - while the other two sit half idle and the total looks perfectly reasonable.\n\nPoint this at your meter's per-phase power sensors, in L1, L2, L3 order, and each leg gets its own ceiling. Leave the list empty and none of this exists.\n\nWhich pack sits on which leg is measured, not configured: one pack is asked to move while the others hold still, and whichever leg moves with it is the answer.",
+        "data": {
+          "phase_power_sensors": "Per-phase power sensors (L1, L2, L3)",
+          "phase_limit_amps": "Main fuse per phase (A)",
+          "phase_voltage": "Nominal voltage (V)",
+          "phase_margin": "Margin kept free (%)",
+          "phase_detect": "Find out which pack is on which phase",
+          "phase_redetect": "Measure again after a restart",
+          "phase_probe_seconds": "Measurement duration (s)"
+        },
+        "data_description": {
+          "phase_power_sensors": "In L1, L2, L3 order - the order decides which leg is which. Signed like the main meter: + import, - export. Empty switches the whole protection off. One sensor means a single-phase supply, and then everything is on that one leg.",
+          "phase_limit_amps": "What your main fuse is rated at per phase, typically 25 or 35 in the Netherlands. Read it off the fuse itself rather than off your contract.",
+          "phase_voltage": "Only used to turn the fuse rating into watts. 230 unless you know otherwise.",
+          "phase_margin": "Left unused, for the kettle somebody switches on while we are deciding. Ten per cent of 25 A is 2.5 A of room. A fuse is not a cliff, but running it to the last ampere leaves nothing for the rest of the house.",
+          "phase_detect": "Nothing in the Modbus data says how the cables were run, so it is measured: one pack is commanded while the others hold at 0, and the leg that moves with it is the answer. Takes about a minute per pack, during which the packs do not regulate. Switch it off if you would rather type the phases in yourself on each unit's page.",
+          "phase_redetect": "On by default: an integration that has been down cannot vouch for what changed while it was. Switch it off once the wiring is known and stable - otherwise every restart parks the packs for a minute.",
+          "phase_probe_seconds": "How long one pack is held at power before the legs are read. Longer is more reliable and more disruptive; the packs take a few seconds to respond and the meter a few more."
+        }
       }
     },
     "error": {
@@ -217,7 +244,9 @@
           "external_plan": "Following an external plan",
           "external_stale": "External plan went quiet, regulating on its own",
           "dynamic_hold": "Holding the charge for dearer hours",
-          "solar_headroom": "Not buying, the sun still fits"
+          "solar_headroom": "Not buying, the sun still fits",
+          "phase_limit": "Held back by the main fuse",
+          "phase_detect": "Measuring which pack is on which phase"
         }
       },
       "solar_remaining": {
@@ -237,6 +266,19 @@
       },
       "other_controller": {
         "name": "Other controller"
+      },
+      "phase_detection": {
+        "name": "Phase detection",
+        "state": {
+          "done": "Measured",
+          "manual": "Entered by hand",
+          "partial": "Partly known",
+          "running": "Measuring now",
+          "inconclusive": "Could not tell",
+          "unknown": "Not yet measured",
+          "blocked": "Not while in dry run",
+          "off": "Not in use"
+        }
       }
     },
     "select": {

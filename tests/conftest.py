@@ -23,16 +23,20 @@ from custom_components.battery_management.const import (
     CONF_KP,
     CONF_MIN_OUTPUT,
     CONF_MODE_SELECT,
+    CONF_PHASE_SENSORS,
     CONF_SOC_SENSOR,
     CONF_TARGET_NUMBER,
     CONF_UNIT_MAX,
     CONF_UNIT_NAME,
+    CONF_UNIT_PHASE,
     CONF_UNITS,
 )
 from custom_components.battery_management import coordinator as coordinator_module
 from custom_components.battery_management.coordinator import BatteryCoordinator
 
 GRID_SENSOR = "sensor.p1_meter_power"
+# the primary site publishes these alongside the total
+PHASE_SENSORS = [f"sensor.p1_meter_power_phase_{n}" for n in (1, 2, 3)]
 
 # kp=1 and deadband=0 make the expected setpoint arithmetic obvious in tests;
 # individual tests override what they care about.
@@ -116,6 +120,13 @@ class FakeHass:
         self.services = FakeServices()
         self.data: dict = {}
         self.config = FakeConfig()
+        # background work the coordinator kicks off. Held rather than run, so a
+        # test decides when the phase probe happens instead of the event loop.
+        self.tasks: list = []
+
+    def async_create_task(self, coro, *args, **kwargs):
+        self.tasks.append(coro)
+        return coro
 
 
 class FakeStore:
@@ -196,6 +207,65 @@ class System:
             if u[CONF_TARGET_NUMBER] in written
         }
 
+    def phase(self, number: int) -> str:
+        return PHASE_SENSORS[number - 1]
+
+    def set_phases(self, *watts: float) -> None:
+        """Rewrite what each leg of the supply is reading."""
+        for number, value in enumerate(watts, start=1):
+            self.hass.states.set(self.phase(number), value)
+
+    def read_phases(self) -> dict[int, float]:
+        return {
+            n: float(self.hass.states.get(self.phase(n)).state)
+            for n in range(1, len(PHASE_SENSORS) + 1)
+            if self.hass.states.get(self.phase(n)) is not None
+        }
+
+    def settle_phases(self, *household: float) -> None:
+        """Let the meter catch up with what we commanded.
+
+        A static fake meter is a fake that lies: it never shows our own load, so
+        `other = phase + target` keeps concluding the household got quieter and
+        the ceiling walks upward every tick. A real leg reads the household plus
+        us within a tick or two (gotcha 2), which is what this plays out - and
+        pinning that is worth more than pinning a frozen number.
+        """
+        legs = {n: watts for n, watts in enumerate(household, start=1)}
+        for cfg in self.units:
+            name = cfg[CONF_UNIT_NAME]
+            phase = self.coordinator.unit_phase.get(name)
+            if phase in legs:
+                legs[phase] -= self.coordinator.unit_status[name].target
+        self.set_phases(*(legs[n] for n in sorted(legs)))
+
+    async def run_background(self) -> None:
+        """Run whatever the coordinator handed to the event loop."""
+        while self.hass.tasks:
+            await self.hass.tasks.pop(0)
+
+    def wire_house(self, on_phase: dict[str, int], *, obeys: bool = True) -> None:
+        """Close the loop: put each pack's commanded power on its real leg.
+
+        The probe only works if the meter actually responds, so a fake that
+        just returns fixed numbers would test nothing. This plays the house:
+        every time the coordinator waits, the legs are recomputed from the
+        baseline plus whatever it has commanded - on the leg the pack is
+        *really* on, which is exactly what detection has to discover.
+        """
+        base = self.read_phases()
+
+        async def house(_seconds: float) -> None:
+            legs = dict(base)
+            if obeys:
+                for cfg in self.units:
+                    name = cfg[CONF_UNIT_NAME]
+                    # + discharge feeds the leg, so it subtracts from the meter
+                    legs[on_phase[name]] -= self.coordinator.unit_status[name].target
+            self.set_phases(*(legs[n] for n in sorted(legs)))
+
+        self.coordinator._sleep = house
+
     def flows(self) -> list[str]:
         """Flow option written to each unit this tick."""
         written = self.hass.services.options_set()
@@ -214,6 +284,7 @@ def build_system():
     Pass ``soc=None`` for a unit to simulate it being offline/unavailable, and
     ``dry_run=True`` to check that nothing reaches the packs.
     """
+    built: list[System] = []
 
     def _build(
         *,
@@ -225,22 +296,32 @@ def build_system():
         with_limits: bool = True,
         enabled: bool = True,
         dry_run: bool = False,
+        phases: tuple | None = None,
+        unit_phase: tuple | None = None,
         **tunables,
     ) -> System:
         unit_cfgs = [
             unit_config(f"Batterij {i + 1}", prefix, with_limits=with_limits)
             for i, (prefix, _) in enumerate(units)
         ]
+        if unit_phase is not None:
+            for cfg, leg in zip(unit_cfgs, unit_phase):
+                cfg[CONF_UNIT_PHASE] = leg
         data = {
             CONF_GRID_POWER: GRID_SENSOR,
             CONF_UNITS: unit_cfgs,
             **DEFAULT_TUNABLES,
             **tunables,
         }
+        if phases is not None:
+            # opt-in, exactly as in the wizard: no sensors, no fuse protection
+            data[CONF_PHASE_SENSORS] = PHASE_SENSORS[: len(phases)]
 
         states: dict[str, FakeState] = {}
         if grid is not None:
             states[GRID_SENSOR] = FakeState(grid)
+        for number, watts in enumerate(phases or (), start=1):
+            states[PHASE_SENSORS[number - 1]] = FakeState(watts)
         for cfg, (_, soc) in zip(unit_cfgs, units):
             if soc is not None:
                 states[cfg[CONF_SOC_SENSOR]] = FakeState(soc)
@@ -260,9 +341,17 @@ def build_system():
         # ships enabled, and has its own tests.
         coordinator.dry_run = dry_run
         coordinator.enabled = enabled
-        return System(hass, entry, coordinator, unit_cfgs)
+        system = System(hass, entry, coordinator, unit_cfgs)
+        built.append(system)
+        return system
 
-    return _build
+    yield _build
+
+    # a tick can hand a phase probe to the event loop; a test that did not care
+    # about it would otherwise leak a coroutine and warn at collection time
+    for system in built:
+        while system.hass.tasks:
+            system.hass.tasks.pop(0).close()
 
 
 @pytest.fixture(autouse=True)

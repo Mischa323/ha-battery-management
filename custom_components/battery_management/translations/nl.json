@@ -45,7 +45,8 @@
           "target_power_number": "Target grid power",
           "soc_sensor": "SoC-sensor (%)",
           "charge_limit_number": "Laadlimiet (%, optioneel)",
-          "discharge_limit_number": "Ontlaadlimiet (%, optioneel)"
+          "discharge_limit_number": "Ontlaadlimiet (%, optioneel)",
+          "unit_phase": "Fase (0 = zelf meten)"
         },
         "data_description": {
           "name": "Wordt gebruikt in de sensornamen van deze integratie. Moet uniek zijn: twee packs met dezelfde naam worden als een behandeld.",
@@ -54,7 +55,8 @@
           "target_power_number": "Het getal waar het aandeel van deze pack in geschreven wordt. Altijd positief; de richting komt uit de richting-select.",
           "soc_sensor": "Bepaalt de verdeling tussen packs en elke SoC-grens. Een pack waarvan de SoC niet leesbaar is wordt volledig overgeslagen.",
           "charge_limit_number": "De eigen bovengrens van de pack, in procenten. Leeglaten betekent 100 %. Wijs hier nooit een watt-entiteit aan.",
-          "discharge_limit_number": "De eigen ondergrens van de pack. Leeglaten betekent 5 %. Dit is het hardware-vangnet waar de coordinator boven blijft."
+          "discharge_limit_number": "De eigen ondergrens van de pack. Leeglaten betekent 5 %. Dit is het hardware-vangnet waar de coordinator boven blijft.",
+          "unit_phase": "Op welke fase deze accu zit: 1, 2 of 3. Laat op 0 staan en het wordt gemeten. Wat je hier invult wint van elke meting - wie de meterkast heeft bekeken weet het beter dan een proefmeting."
         }
       },
       "unit_modes": {
@@ -86,7 +88,8 @@
           "tuning": "Regelparameters",
           "units": "Entiteiten van de accu-units",
           "dynamic": "Dynamisch tarief",
-          "shadow": "Schaduwdraaien"
+          "shadow": "Schaduwdraaien",
+          "phases": "Zekeringbewaking per fase"
         }
       },
       "tuning": {
@@ -125,7 +128,8 @@
           "target_power_number": "Target grid power",
           "soc_sensor": "SoC-sensor (%)",
           "charge_limit_number": "Laadlimiet (%, optioneel)",
-          "discharge_limit_number": "Ontlaadlimiet (%, optioneel)"
+          "discharge_limit_number": "Ontlaadlimiet (%, optioneel)",
+          "unit_phase": "Fase (0 = zelf meten)"
         },
         "data_description": {
           "name": "Wordt gebruikt in de sensornamen van deze integratie. Moet uniek zijn: twee packs met dezelfde naam worden als een behandeld.",
@@ -134,7 +138,8 @@
           "target_power_number": "Het getal waar het aandeel van deze pack in geschreven wordt. Altijd positief; de richting komt uit de richting-select.",
           "soc_sensor": "Bepaalt de verdeling tussen packs en elke SoC-grens. Een pack waarvan de SoC niet leesbaar is wordt volledig overgeslagen.",
           "charge_limit_number": "De eigen bovengrens van de pack, in procenten. Leeglaten betekent 100 %. Wijs hier nooit een watt-entiteit aan.",
-          "discharge_limit_number": "De eigen ondergrens van de pack. Leeglaten betekent 5 %. Dit is het hardware-vangnet waar de coordinator boven blijft."
+          "discharge_limit_number": "De eigen ondergrens van de pack. Leeglaten betekent 5 %. Dit is het hardware-vangnet waar de coordinator boven blijft.",
+          "unit_phase": "Op welke fase deze accu zit: 1, 2 of 3. Laat op 0 staan en het wordt gemeten. Wat je hier invult wint van elke meting - wie de meterkast heeft bekeken weet het beter dan een proefmeting."
         }
       },
       "dynamic": {
@@ -184,6 +189,28 @@
           "mode_control": "De stand waar deze pack in moet staan voordat hij opdrachten aanneemt. Meestal third_party_control.",
           "mode_safe": "Waar hij naartoe gezet wordt als je uitschakelt of Home Assistant afsluit. Leeg laten bij een pack zonder eigen meter: die krijgt dan alleen 0 W en zijn modus blijft ongemoeid, wat een veilige ruststand is."
         }
+      },
+      "phases": {
+        "title": "Zekeringbewaking per fase",
+        "description": "De accu's zijn eenfasig en de regellus kent alleen het totaal van het huis. Een accu die 3500 W bijlaadt op een fase die al 20 A trekt, brengt die fase op 35 A - terwijl de andere twee half stil staan en het totaal er keurig uitziet.\n\nWijs hier de vermogenssensoren per fase aan, in de volgorde L1, L2, L3, en dan krijgt elke fase zijn eigen plafond. Laat de lijst leeg en er verandert niets.\n\nWelke accu op welke fase zit wordt gemeten, niet ingesteld: één accu krijgt opdracht terwijl de rest stil blijft, en de fase die meebeweegt is het antwoord.",
+        "data": {
+          "phase_power_sensors": "Vermogenssensoren per fase (L1, L2, L3)",
+          "phase_limit_amps": "Hoofdzekering per fase (A)",
+          "phase_voltage": "Nominale spanning (V)",
+          "phase_margin": "Marge die vrij blijft (%)",
+          "phase_detect": "Zelf uitzoeken welke accu op welke fase zit",
+          "phase_redetect": "Opnieuw meten na een herstart",
+          "phase_probe_seconds": "Meetduur (s)"
+        },
+        "data_description": {
+          "phase_power_sensors": "In de volgorde L1, L2, L3 - die volgorde bepaalt welke fase welke is. Zelfde teken als de hoofdmeter: + afname, - teruglevering. Leeg schakelt de hele bewaking uit. Eén sensor betekent een eenfase-aansluiting, en dan zit alles op die fase.",
+          "phase_limit_amps": "Waar je hoofdzekering per fase op staat, in Nederland meestal 25 of 35. Lees het af van de zekering zelf, niet van je contract.",
+          "phase_voltage": "Alleen gebruikt om ampères naar watt om te rekenen. 230 tenzij je beter weet.",
+          "phase_margin": "Blijft ongebruikt, voor de waterkoker die iemand aanzet terwijl wij aan het beslissen zijn. Tien procent van 25 A is 2,5 A speling. Een zekering is geen klif, maar hem tot de laatste ampère volzetten laat niets over voor de rest van het huis.",
+          "phase_detect": "Nergens in de Modbus-gegevens staat hoe de kabels lopen, dus het wordt gemeten: één accu krijgt opdracht terwijl de andere op 0 blijven, en de fase die meebeweegt is het antwoord. Duurt ongeveer een minuut per accu, en zolang regelen de accu's niet. Zet het uit als je de fases liever zelf invult bij elke unit.",
+          "phase_redetect": "Standaard aan: een integratie die uit heeft gestaan kan niet weten wat er ondertussen veranderd is. Zet het uit zodra de bedrading bekend en stabiel is - anders staan de accu's na elke herstart een minuut stil.",
+          "phase_probe_seconds": "Hoe lang één accu op vermogen wordt gehouden voordat de fases worden afgelezen. Langer is betrouwbaarder en storender; de accu's reageren pas na een paar seconden en de meter nog wat later."
+        }
       }
     },
     "error": {
@@ -217,7 +244,9 @@
           "external_plan": "Volgt een extern plan",
           "external_stale": "Extern plan is stilgevallen, regelt zelf",
           "dynamic_hold": "Bewaart de lading voor duurdere uren",
-          "solar_headroom": "Koopt niet in, de zon past er nog in"
+          "solar_headroom": "Koopt niet in, de zon past er nog in",
+          "phase_limit": "Afgeremd door de hoofdzekering",
+          "phase_detect": "Meten welke accu op welke fase zit"
         }
       },
       "solar_remaining": {
@@ -237,6 +266,19 @@
       },
       "other_controller": {
         "name": "Ander systeem"
+      },
+      "phase_detection": {
+        "name": "Fasedetectie",
+        "state": {
+          "done": "Gemeten",
+          "manual": "Handmatig ingevuld",
+          "partial": "Deels bekend",
+          "running": "Wordt nu gemeten",
+          "inconclusive": "Kon het niet vaststellen",
+          "unknown": "Nog niet gemeten",
+          "blocked": "Niet tijdens proefdraaien",
+          "off": "Niet in gebruik"
+        }
       }
     },
     "select": {

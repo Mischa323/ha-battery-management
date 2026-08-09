@@ -194,6 +194,101 @@ Deliberately *not* a scheduler inside the integration: less to maintain, and
 anything the blueprints did not anticipate you can still build with an ordinary
 automation.
 
+## Staying inside the main fuse
+
+The control loop regulates the household **total**. The packs are
+**single-phase**, and each one sits on one leg of the supply. Nothing in the
+Modbus data connects those two facts, so on its own the loop will happily tell a
+pack to charge at 3500 W on a leg that is already pulling 20 A — taking that leg
+to 35 A while the other two sit half idle and the total looks perfectly
+reasonable. That is how a main fuse drops.
+
+This is **off unless you configure it**. Point *Configure → Fuse protection per
+phase* at your meter's per-phase power sensors, in L1, L2, L3 order, and each
+leg gets its own ceiling.
+
+### How the limit works
+
+The ceiling is a **bound on the setpoint**, applied per unit — the same
+mechanism as the SoC reserve and the modes, at the same anti-windup clamp. So
+grid-zero keeps regulating inside it and the integrator can never build pressure
+against a fuse it may not cross.
+
+For each leg it works out what the household is drawing *without us*:
+
+```
+without us = leg reading + our own command on that leg
+room to charge    = fuse limit - without us
+room to discharge = fuse limit + without us
+```
+
+Two things are worth knowing about that:
+
+- **Both directions count.** A main fuse carries the net current through it, so
+  a leg exporting 25 A is as far into the fuse as a leg importing 25 A.
+  Discharging into a leg already full of sun is a real way to trip one.
+- **It only bites when it matters.** A leg doing 500 W of a 5175 W budget has
+  more room than a pack can use, so nothing is limited and you will never notice
+  this is running. It appears exactly when it was going to matter.
+
+The margin (10 % by default) is deliberate. A fuse is not a cliff — a B-curve
+holds well above its rating for a long time — but running it to the last ampere
+leaves nothing for the kettle somebody switches on while we are deciding, and
+our picture of the leg is up to 30 s stale anyway (gotcha 2).
+
+**Fast charge respects this too.** It is the one place that commands full rating
+outright, so it is the single most likely thing to drop a leg.
+
+### Which pack is on which phase
+
+The limit is worthless without knowing where each pack is, and nothing reports
+it. So it is **measured**: every other pack is held at 0, one pack is commanded,
+and after 20 s the leg that moved with it is the answer. It takes about a minute
+per pack, during which the packs do not regulate.
+
+The probe is itself bounded by the fuse — the legs are unknown, so its power is
+capped by whichever leg has least room. On a busy evening there may be no room
+to push into, and then it simply declines and tries again later.
+
+It **refuses to answer** rather than guess. The winning leg has to show at least
+half of what was asked for, and stand clearly above the runner-up, or the oven
+that switched on halfway through gets a vote. A pack placed on the wrong leg
+would mean guarding the leg that was never in danger, so no answer is much better
+than a wrong one. Whatever it saw is kept in the **Phase detection** sensor's
+`probes` attribute, and in the diagnostics download.
+
+It measures when:
+
+- a placement is missing — including on a fresh install,
+- a pack dropped offline and came back (it is no longer provably the same pack
+  on the same wiring),
+- Home Assistant restarted — an integration that has been down cannot vouch for
+  what changed while it was. Switch *Measure again after a restart* off once the
+  wiring is known and stable, otherwise every restart parks the packs for a
+  minute,
+- you press the **Detect phases** button.
+
+It never measures during a **dry run**: a shadow run writes nothing, and this
+has to write to see anything. So during a shadow month the detection sensor
+reads *Not while in dry run* — either type the phases in by hand on each unit,
+or accept that the first probe happens when you go live.
+
+**Typing them in wins.** Each unit's page in the wizard has a *Phase* field;
+anything other than 0 there overrides every measurement. If you have read the
+meter cupboard, you know better than a probe does.
+
+### When a pack has not been placed
+
+A pack whose leg is unknown is treated as if it were on whichever leg has least
+room — because it might be. That is deliberately the pessimistic reading, and it
+is why it is worth letting the detection finish or typing the phases in. On a
+quiet house it changes nothing at all; on a loaded one it will hold that pack
+back.
+
+If the phase sensors are configured but **cannot be read**, the packs are held
+at 0. Falling back to "no limit" would disarm the guard at exactly the moment
+the meter is misbehaving.
+
 ## The icon
 
 Home Assistant does not read an integration icon from its own repository — it
@@ -271,6 +366,8 @@ capped — that would be throwing sun away.
 | **Solar remaining** | Sun still expected today. Its attributes break down every forecast sensor separately, so "0 kWh" can be told apart from a sensor that is not reading. | no forecast sensors configured |
 | **Charge ceiling** | How full it is worth buying to: 100 % − remaining sun ÷ capacity, within your two bounds. | the charge time has not been measured |
 | **Plan** | Today's cheap and dear hours with their prices, plus the numbers the ceiling was computed from, all in attributes. | never |
+| **Fuse headroom** | Amps still available on the busiest leg of your supply. Per-leg detail — load, room, and which packs sit on it — is in the attributes. | no per-phase sensors configured |
+| **Phase detection** | Whether it knows which pack is on which leg, and how it found out. The `probes` attribute holds the measurements behind each placement. | never |
 
 ### Binary sensors
 
@@ -278,6 +375,12 @@ capped — that would be throwing sun away.
 | --- | --- |
 | **Healthy** | Off is good. On means the control loop is degraded — usually the grid sensor cannot be read. |
 | **‹unit› online** | Whether that pack's state of charge could be read on the last tick. Off means it was skipped; it keeps running its last command regardless, so check its target sensor too. |
+
+### Buttons
+
+| Button | What it does |
+| --- | --- |
+| **Detect phases** | Measures again which pack sits on which leg of the supply. Takes about a minute per pack, during which they hold at 0. A phase you typed in yourself is left alone — set that field back to 0 first if you want it re-measured. |
 
 ### What the active policy is telling you
 
@@ -288,6 +391,8 @@ capped — that would be throwing sun away.
 | Holding the SoC reserve | Would discharge, but the reserve says no |
 | Packs empty / Packs full | Nothing left to give, or nowhere to put it |
 | Mode: … | Your chosen mode is the limit |
+| Held back by the main fuse | One leg of your supply is close to its fuse; see the Fuse headroom sensor |
+| Measuring which pack is on which phase | A detection run is in progress; the packs hold at 0 for about a minute |
 | Buying now, prices are low | A cheap hour, packs low, little sun coming |
 | Holding the charge for dearer hours | Refusing to discharge now so the kWh go to the peak |
 | Not buying, the sun still fits | What is coming free would not fit if it bought now |

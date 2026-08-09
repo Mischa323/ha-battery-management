@@ -43,11 +43,19 @@ from .const import (
     CONF_MODE_CONTROL,
     CONF_MODE_SAFE,
     CONF_MODE_SELECT,
+    CONF_PHASE_DETECT,
+    CONF_PHASE_LIMIT_AMPS,
+    CONF_PHASE_MARGIN,
+    CONF_PHASE_PROBE_SECONDS,
+    CONF_PHASE_REDETECT,
+    CONF_PHASE_SENSORS,
+    CONF_PHASE_VOLTAGE,
     CONF_SOC_SENSOR,
     CONF_TARGET_NUMBER,
     CONF_UNIT_COUNT,
     CONF_UNIT_MAX,
     CONF_UNIT_NAME,
+    CONF_UNIT_PHASE,
     CONF_UNITS,
     DEFAULT_BIAS,
     DEFAULT_DEADBAND,
@@ -63,6 +71,12 @@ from .const import (
     DEFAULT_INTERVAL,
     DEFAULT_KP,
     DEFAULT_MIN_OUTPUT,
+    DEFAULT_PHASE_DETECT,
+    DEFAULT_PHASE_LIMIT_AMPS,
+    DEFAULT_PHASE_MARGIN,
+    DEFAULT_PHASE_PROBE_SECONDS,
+    DEFAULT_PHASE_REDETECT,
+    DEFAULT_PHASE_VOLTAGE,
     DEFAULT_UNIT_MAX,
     DEVICE_MODE_SELF,
     DEVICE_MODE_THIRD_PARTY,
@@ -87,6 +101,11 @@ def _unit_schema() -> vol.Schema:
             vol.Required(CONF_SOC_SENSOR): _SENSOR,
             vol.Optional(CONF_CHARGE_LIMIT): _NUMBER,
             vol.Optional(CONF_DISCHARGE_LIMIT): _NUMBER,
+            # 0 = work it out by probing. Anyone who has read the meter cupboard
+            # can just say so, and what they say wins over any measurement.
+            vol.Optional(CONF_UNIT_PHASE, default=0): vol.All(
+                int, vol.Range(min=0, max=3)
+            ),
         }
     )
 
@@ -210,6 +229,48 @@ def _dynamic_schema(defaults: dict) -> vol.Schema:
                     CONF_SOLAR_FORECAST_MAX, DEFAULT_SOLAR_FORECAST_MAX
                 ),
             ): vol.Coerce(float),
+        }
+    )
+
+
+def _phases_schema(defaults: dict) -> vol.Schema:
+    """Fuse protection. Empty sensor list = the whole feature is off."""
+    return vol.Schema(
+        {
+            vol.Optional(
+                CONF_PHASE_SENSORS,
+                description={"suggested_value": defaults.get(CONF_PHASE_SENSORS)},
+            ): selector.EntitySelector(
+                selector.EntitySelectorConfig(domain="sensor", multiple=True)
+            ),
+            vol.Optional(
+                CONF_PHASE_LIMIT_AMPS,
+                default=defaults.get(
+                    CONF_PHASE_LIMIT_AMPS, DEFAULT_PHASE_LIMIT_AMPS
+                ),
+            ): vol.All(vol.Coerce(float), vol.Range(min=6, max=100)),
+            vol.Optional(
+                CONF_PHASE_VOLTAGE,
+                default=defaults.get(CONF_PHASE_VOLTAGE, DEFAULT_PHASE_VOLTAGE),
+            ): vol.All(vol.Coerce(float), vol.Range(min=100, max=300)),
+            vol.Optional(
+                CONF_PHASE_MARGIN,
+                default=defaults.get(CONF_PHASE_MARGIN, DEFAULT_PHASE_MARGIN),
+            ): vol.All(vol.Coerce(float), vol.Range(min=0, max=50)),
+            vol.Optional(
+                CONF_PHASE_DETECT,
+                default=defaults.get(CONF_PHASE_DETECT, DEFAULT_PHASE_DETECT),
+            ): bool,
+            vol.Optional(
+                CONF_PHASE_REDETECT,
+                default=defaults.get(CONF_PHASE_REDETECT, DEFAULT_PHASE_REDETECT),
+            ): bool,
+            vol.Optional(
+                CONF_PHASE_PROBE_SECONDS,
+                default=defaults.get(
+                    CONF_PHASE_PROBE_SECONDS, DEFAULT_PHASE_PROBE_SECONDS
+                ),
+            ): vol.All(vol.Coerce(int), vol.Range(min=10, max=120)),
         }
     )
 
@@ -373,7 +434,8 @@ class BatteryManagementOptionsFlow(OptionsFlow):
 
     async def async_step_init(self, user_input: dict | None = None) -> ConfigFlowResult:
         return self.async_show_menu(
-            step_id="init", menu_options=["tuning", "units", "dynamic", "shadow"]
+            step_id="init",
+            menu_options=["tuning", "units", "dynamic", "phases", "shadow"],
         )
 
     async def async_step_tuning(self, user_input: dict | None = None) -> ConfigFlowResult:
@@ -433,6 +495,22 @@ class BatteryManagementOptionsFlow(OptionsFlow):
                 "name": unit.get(CONF_UNIT_NAME, ""),
                 "options": ", ".join(options),
             },
+        )
+
+    async def async_step_phases(
+        self, user_input: dict | None = None
+    ) -> ConfigFlowResult:
+        if user_input is not None:
+            # emptying the sensor list must switch the protection off, not
+            # silently keep guarding with yesterday's entities
+            merged = {**self._entry.options}
+            merged.pop(CONF_PHASE_SENSORS, None)
+            merged.update(user_input)
+            return self.async_create_entry(title="", data=merged)
+
+        defaults = {**self._entry.data, **self._entry.options}
+        return self.async_show_form(
+            step_id="phases", data_schema=_phases_schema(defaults)
         )
 
     async def async_step_shadow(

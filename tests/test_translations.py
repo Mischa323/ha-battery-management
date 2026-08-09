@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import pathlib
+import re
 
 import pytest
 
@@ -114,3 +115,52 @@ def test_the_two_languages_explain_the_same_fields():
             assert set(step.get("data_description", {})) == set(
                 dutch[section]["step"][name].get("data_description", {})
             ), f"{section}.{name}"
+
+
+def menu_options() -> set[str]:
+    """The options menu as the flow actually declares it.
+
+    Read out of the source rather than imported: this file runs against the
+    stubbed Home Assistant too, where the config flow cannot be imported at all.
+    """
+    source = (COMPONENT / "config_flow.py").read_text(encoding="utf-8")
+    listing = re.search(r"menu_options=\[(.*?)\]", source, re.S)
+    assert listing, "could not find the options menu"
+    return set(re.findall(r'"([^"]+)"', listing.group(1)))
+
+
+@pytest.mark.parametrize("path", FILES, ids=lambda p: p.name)
+def test_every_menu_entry_has_a_label(path):
+    """An untranslated menu entry renders as its raw key, which looks broken."""
+    labels = load(path)["options"]["step"]["init"].get("menu_options", {})
+    steps = load(path)["options"]["step"]
+
+    assert menu_options() == set(labels)
+    for name in labels:
+        assert name in steps, f"menu points at a step that does not exist: {name}"
+
+
+@pytest.mark.parametrize("path", FILES, ids=lambda p: p.name)
+def test_every_policy_and_detection_state_is_named(path):
+    """These are enum sensors: an untranslated state shows the bare slug on a
+    dashboard, which is where somebody is trying to work out what the packs are
+    doing."""
+    from custom_components.battery_management.const import (
+        PHASE_DETECT_STATES,
+        POLICIES,
+    )
+
+    sensors = load(path)["entity"]["sensor"]
+    assert set(POLICIES) <= set(sensors["active_policy"]["state"])
+    assert set(PHASE_DETECT_STATES) <= set(sensors["phase_detection"]["state"])
+
+
+def test_translated_entities_are_reached_by_a_translation_key():
+    """`_attr_name` bypasses the translation file entirely, so a state listed
+    here would never be applied and the dashboard would show the raw slug."""
+    source = (COMPONENT / "sensor.py").read_text(encoding="utf-8")
+    keys = set(re.findall(r'_attr_translation_key = "([^"]+)"', source))
+
+    for key, entity in load(FILES[0])["entity"]["sensor"].items():
+        if "state" in entity:
+            assert key in keys, f"{key} has state translations but no entity uses it"

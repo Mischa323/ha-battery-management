@@ -64,6 +64,7 @@ def _install_homeassistant_stub() -> None:
 
     class Platform(StrEnum):
         SWITCH = "switch"
+        BUTTON = "button"
         SENSOR = "sensor"
         BINARY_SENSOR = "binary_sensor"
         NUMBER = "number"

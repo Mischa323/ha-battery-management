@@ -27,14 +27,32 @@ def test_conserves_the_requested_total():
 
 def test_clamps_each_unit_to_its_own_maximum():
     result = distribute(1000, {"a": 1.0, "b": 1.0}, umax={"a": 300.0, "b": 3500.0})
-    assert result == {"a": 300, "b": 500}
+    assert result["a"] == 300
 
 
-def test_does_not_redistribute_capacity_lost_to_a_clamp():
-    # Pinned deliberately: a clamped unit's remainder is dropped rather than
-    # pushed onto the other unit, so the pair never overshoots the setpoint.
-    result = distribute(7000, {"a": 3.0, "b": 1.0})
-    assert result == {"a": 3500, "b": 1750}
+def test_redistributes_what_a_ceiling_refused():
+    # This used to be pinned the other way round, on the reasoning that dropping
+    # the remainder kept the pair from overshooting. It cannot overshoot: only
+    # what is left of the request is ever handed on, and the tick has already
+    # clamped the request to the sum of the ceilings. What the old behaviour did
+    # produce was a steady-state error - a shortfall the integrator cannot
+    # correct, because it is already sitting on its own bound.
+    assert distribute(7000, {"a": 3.0, "b": 1.0}) == {"a": 3500, "b": 3500}
+    assert distribute(1000, {"a": 1.0, "b": 1.0}, umax={"a": 300.0, "b": 3500.0}) == {
+        "a": 300,
+        "b": 700,
+    }
+
+
+def test_redistribution_still_never_exceeds_the_request():
+    result = distribute(1000, {"a": 3.0, "b": 1.0}, umax={"a": 200.0, "b": 3500.0})
+    assert sum(result.values()) == 1000
+    assert result["a"] == 200
+
+
+def test_a_request_beyond_every_ceiling_simply_maxes_out():
+    result = distribute(99000, {"a": 1.0, "b": 1.0}, umax={"a": 300.0, "b": 900.0})
+    assert result == {"a": 300, "b": 900}
 
 
 def test_consolidates_a_sub_minimum_share_onto_the_larger_unit():

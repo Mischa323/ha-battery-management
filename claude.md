@@ -39,8 +39,10 @@ custom_components/battery_management/
   __init__.py          # setup/unload; reverts units to self_consumption on unload
   const.py             # domain, config keys, defaults, mode/flow option strings
   coordinator.py       # BatteryCoordinator: the control loop + _distribute()
+  phases.py            # pure: per-leg fuse room, and attributing a probe to a leg
   config_flow.py       # wizard: grid sensor + N units + tunables; options flow
   switch.py            # "Coordinator enabled" (kill-switch), "Fast charge"
+  button.py            # "Detect phases"
   sensor.py            # "Setpoint" (W, +discharge/-charge), "Status"
   binary_sensor.py     # "Healthy" (problem device_class)
   strings.json + translations/{en,nl}.json
@@ -84,7 +86,12 @@ splits proportionally; low load consolidates onto one unit; offline unit (weight
 4. **`target_grid_power` max attribute is unreliable per unit** — 052 reports
    3500, 093 reported a bogus 10000. Always cap at `min(reported_max, unit_max)`
    (unit_max default 3500 = the Max AC AC rating). Coordinator already does this.
-5. **Solar is limited by a 16 A breaker (~3.68 kW)** at the primary site — not
+5. **The packs are single-phase; the loop regulates a three-phase total.**
+   Nothing in the Modbus data joins those up, so without the fuse protection a
+   pack will charge at 3500 W on a leg already pulling 20 A while the other two
+   idle and the total looks fine. The per-leg placement is *measured*, because
+   nothing reports it - see 18.
+6. **Solar is limited by a 16 A breaker (~3.68 kW)** at the primary site — not
    relevant to the coordinator (it's grid-driven) but relevant if you ever model
    PV.
 
@@ -360,7 +367,56 @@ possible, and they gate section A.
 17. **Card rendering unverified** — the card is served and registered, but nobody
     has looked at how it actually renders on a dashboard.
 
-### F. Done
+### F. Not tripping the main fuse
+
+18. ~~**Per-phase fuse protection**~~ - **done, and it is the first thing here
+    that moves the packs on its own initiative.** Asked for by the owner: the
+    packs could draw their full rating onto a leg that was already near 25 A.
+
+    *The limit* is a bound per leg applied per unit, at the existing anti-windup
+    clamp, so it composes with the modes and the SoC reserve and the integrator
+    cannot wind up against it. `without us = leg reading + our own command`,
+    then `room = fuse limit -/+ that`. **Both directions count** - a fuse
+    carries net current, so a leg full of sun is as close to it as a loaded one.
+    Fast charge is capped too; it is the one place that commands full rating
+    outright. Configured but unreadable sensors **hold the packs at 0** rather
+    than falling back to "no limit". Entirely opt-in: no per-phase sensors, no
+    behaviour change at all.
+
+    *The placement* is measured, per the owner's proposal: hold everything at 0,
+    command one pack, see which leg moves. Refinements on top of that: the probe
+    is capped by whichever leg has least room (the leg is unknown, so worst
+    case), it declines below 600 W of room rather than measuring noise, and it
+    **refuses to answer** unless the winner shows half the probe power *and*
+    twice the runner-up. A pack on the wrong leg guards the leg that was never
+    in danger, so no answer beats a wrong one. Re-measures when a pack returns
+    from offline and after a restart, both as asked, both switchable; a
+    hand-typed phase always wins.
+
+    Two things fell out of building it:
+    - **`_distribute` now redistributes what a ceiling refused.** It used to
+      drop it, on the reasoning that this prevented overshoot - it cannot
+      overshoot, only what is left of the request is handed on, and the request
+      is already clamped to the sum of the ceilings. What the old behaviour did
+      produce was a steady-state shortfall the integrator could not correct.
+      Invisible at 3500 W ceilings, glaring at the few-hundred-watt ones the
+      fuse produces.
+    - **The detection flag has to be set before the task is created**, not
+      inside it. In between, the same tick regulated the packs and the next tick
+      launched a second probe on top of the first.
+
+    Still open, and it needs hardware:
+    - **The probe has never run against real packs.** 20 s is a guess sitting on
+      top of gotcha 2; if the packs ramp slowly it will read too small and
+      decline. Watch the `probes` attribute on the first live run.
+    - **`phase_voltage` is nominal.** The meter usually publishes real per-phase
+      voltages; using them would make the amps honest. Not worth it until the
+      rest is proven.
+    - **Cannot run during the shadow month** (it writes, dry run does not), so
+      the phases have to be typed in by hand until go-live, or the first probe
+      happens the moment it goes live. Say so out loud when switching over.
+
+### G. Done
 
 - **Per-unit observability.** `coordinator.unit_status` feeds a per-unit
   `binary_sensor` (connectivity) and a per-unit target `sensor` (signed,

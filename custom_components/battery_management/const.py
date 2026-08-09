@@ -100,6 +100,62 @@ DEFAULT_FAST_CHARGE_HOLD = True
 # of falling off a cliff. 0 = off, which is the default: nothing is mandatory.
 DEFAULT_SOC_RESERVE = 0
 
+# --- Per-phase fuse protection -----------------------------------------------
+# The packs are single-phase and each sits on one leg of a three-phase supply.
+# Nothing in the grid-zero loop knows that: it regulates the *total*, so a pack
+# charging at 3500 W on a leg that is already pulling 20 A takes that leg to
+# 35 A and drops the main fuse - while the other two legs sit half idle and the
+# total looks perfectly reasonable.
+#
+# So the fuse is a bound per leg, applied per unit, and it needs to know which
+# unit is on which leg. Entirely opt-in: without per-phase sensors none of this
+# exists and the loop behaves exactly as before.
+CONF_PHASE_SENSORS = "phase_power_sensors"   # per-phase power, in L1..Ln order
+CONF_PHASE_LIMIT_AMPS = "phase_limit_amps"   # the main fuse per leg
+CONF_PHASE_VOLTAGE = "phase_voltage"         # to turn amps into watts
+CONF_PHASE_MARGIN = "phase_margin"           # % of the fuse left unused
+CONF_PHASE_DETECT = "phase_detect"           # may we probe to find the wiring?
+CONF_PHASE_REDETECT = "phase_redetect"       # probe again after a restart
+CONF_PHASE_PROBE_SECONDS = "phase_probe_seconds"
+CONF_UNIT_PHASE = "unit_phase"               # per unit: 0 = work it out yourself
+
+DEFAULT_PHASE_LIMIT_AMPS = 25     # the common Dutch 3x25 A connection
+DEFAULT_PHASE_VOLTAGE = 230
+# A fuse is not a cliff - a B-curve holds ~1.13x for a long time - but running
+# it to the last ampere leaves nothing for the kettle somebody just switched on
+# while we were deciding. Ten per cent of 25 A is 2.5 A of room.
+DEFAULT_PHASE_MARGIN = 10
+DEFAULT_PHASE_DETECT = True
+DEFAULT_PHASE_REDETECT = True
+DEFAULT_PHASE_PROBE_SECONDS = 20
+
+# Detection: command one pack, watch which leg moves. Deliberately crude,
+# because the alternative is asking the user to read a meter cupboard.
+PHASE_SETTLE_SECONDS = 10       # everything at 0 before the baseline is taken
+PHASE_PROBE_MIN_WATTS = 600     # below this the signal drowns in the household
+PHASE_PROBE_MIN_FRACTION = 0.5  # the winning leg must show at least this much
+PHASE_PROBE_MARGIN = 2.0        # ...and this many times the runner-up
+
+PHASE_DETECT_UNKNOWN = "unknown"          # never looked
+PHASE_DETECT_RUNNING = "running"          # probing right now
+PHASE_DETECT_DONE = "done"                # every unit placed
+PHASE_DETECT_PARTIAL = "partial"          # some placed, some not
+PHASE_DETECT_INCONCLUSIVE = "inconclusive"  # looked, could not tell
+PHASE_DETECT_MANUAL = "manual"            # the user typed it in
+PHASE_DETECT_OFF = "off"                  # probing not allowed
+PHASE_DETECT_BLOCKED = "blocked"          # dry run, or no room to probe in
+
+PHASE_DETECT_STATES = [
+    PHASE_DETECT_DONE,
+    PHASE_DETECT_MANUAL,
+    PHASE_DETECT_PARTIAL,
+    PHASE_DETECT_RUNNING,
+    PHASE_DETECT_INCONCLUSIVE,
+    PHASE_DETECT_UNKNOWN,
+    PHASE_DETECT_BLOCKED,
+    PHASE_DETECT_OFF,
+]
+
 # --- Active policy: what decided this tick -----------------------------------
 # Answers "why is the battery doing this?" without digging through logs, which
 # matters most at the sites the owner does not live at.
@@ -119,12 +175,16 @@ POLICY_SOLAR_HEADROOM = "solar_headroom"      # not buying, the sun still fits
 POLICY_EXTERNAL = "external_plan"             # following someone else's plan
 POLICY_EXTERNAL_STALE = "external_stale"      # plan went quiet, regulating ourselves
 POLICY_DYNAMIC_NO_PRICES = "dynamic_no_prices"  # dynamic, but the sensor is mute
+POLICY_PHASE_LIMIT = "phase_limit"      # the main fuse on one leg says no
+POLICY_PHASE_DETECT = "phase_detect"    # working out which pack is on which leg
 POLICY_DEADBAND = "deadband"            # error too small to act on
 POLICY_GRID_ZERO = "grid_zero"          # regulating normally, nothing limiting
 
 POLICIES = [
     POLICY_GRID_ZERO,
     POLICY_DEADBAND,
+    POLICY_PHASE_LIMIT,
+    POLICY_PHASE_DETECT,
     POLICY_MODE_CHARGE_ONLY,
     POLICY_MODE_DISCHARGE_ONLY,
     POLICY_MODE_PAUSE,

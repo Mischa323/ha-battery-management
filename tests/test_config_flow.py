@@ -29,6 +29,13 @@ from custom_components.battery_management.const import (  # noqa: E402
     CONF_TARGET_NUMBER,
     CONF_UNIT_COUNT,
     CONF_UNIT_NAME,
+    CONF_PHASE_DETECT,
+    CONF_PHASE_LIMIT_AMPS,
+    CONF_PHASE_MARGIN,
+    CONF_PHASE_PROBE_SECONDS,
+    CONF_PHASE_REDETECT,
+    CONF_PHASE_SENSORS,
+    CONF_PHASE_VOLTAGE,
     CONF_UNITS,
     DOMAIN,
 )
@@ -170,7 +177,13 @@ async def test_options_menu_offers_every_section(hass: HomeAssistant):
     result = await hass.config_entries.options.async_init(entry.entry_id)
 
     assert result["type"] is FlowResultType.MENU
-    assert set(result["menu_options"]) == {"tuning", "units", "dynamic", "shadow"}
+    assert set(result["menu_options"]) == {
+        "tuning",
+        "units",
+        "dynamic",
+        "phases",
+        "shadow",
+    }
 
 
 async def test_options_dynamic_stores_a_price_sensor(hass: HomeAssistant):
@@ -341,3 +354,56 @@ async def test_the_mode_mapping_can_be_corrected_afterwards(hass: HomeAssistant)
     unit = entry.data[CONF_UNITS][0]
     assert unit[CONF_MODE_CONTROL] == "third_party_control"
     assert not unit.get(CONF_MODE_SAFE)
+
+
+async def test_options_phases_stores_the_fuse_settings(hass: HomeAssistant):
+    """Opt-in: the sensors are what switch the protection on."""
+    entry = await _create_entry(hass)
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {"next_step_id": "phases"}
+    )
+    assert result["step_id"] == "phases"
+
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {
+            CONF_PHASE_SENSORS: [
+                "sensor.p1_meter_power_phase_1",
+                "sensor.p1_meter_power_phase_2",
+                "sensor.p1_meter_power_phase_3",
+            ],
+            CONF_PHASE_LIMIT_AMPS: 35,
+            CONF_PHASE_VOLTAGE: 230,
+            CONF_PHASE_MARGIN: 5,
+            CONF_PHASE_DETECT: True,
+            CONF_PHASE_REDETECT: False,
+            CONF_PHASE_PROBE_SECONDS: 25,
+        },
+    )
+    await hass.async_block_till_done()
+
+    assert entry.options[CONF_PHASE_LIMIT_AMPS] == 35
+    assert len(entry.options[CONF_PHASE_SENSORS]) == 3
+
+
+async def test_clearing_the_phase_sensors_switches_the_protection_off(
+    hass: HomeAssistant,
+):
+    """Otherwise it would keep guarding with yesterday's entities."""
+    entry = await _create_entry(hass)
+    hass.config_entries.async_update_entry(
+        entry, options={CONF_PHASE_SENSORS: ["sensor.p1_meter_power_phase_1"]}
+    )
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {"next_step_id": "phases"}
+    )
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {CONF_PHASE_LIMIT_AMPS: 25}
+    )
+    await hass.async_block_till_done()
+
+    assert not entry.options.get(CONF_PHASE_SENSORS)
