@@ -90,6 +90,24 @@ _SELECT = selector.EntitySelector(selector.EntitySelectorConfig(domain="select")
 _NUMBER = selector.EntitySelector(selector.EntitySelectorConfig(domain="number"))
 
 
+def _amount(minimum, maximum, unit: str, step: float = 1):
+    """A plain box with a unit on it.
+
+    `vol.Range` on a bare int makes Home Assistant infer a slider with an
+    enable-checkbox in front of it, which reads as an optional feature rather
+    than a number you type. Say what is wanted instead of letting it guess.
+    """
+    return selector.NumberSelector(
+        selector.NumberSelectorConfig(
+            min=minimum,
+            max=maximum,
+            step=step,
+            unit_of_measurement=unit,
+            mode=selector.NumberSelectorMode.BOX,
+        )
+    )
+
+
 def _unit_schema() -> vol.Schema:
     """The per-unit entity picker, shared by setup and reconfiguration."""
     return vol.Schema(
@@ -248,15 +266,15 @@ def _phases_schema(defaults: dict) -> vol.Schema:
                 default=defaults.get(
                     CONF_PHASE_LIMIT_AMPS, DEFAULT_PHASE_LIMIT_AMPS
                 ),
-            ): vol.All(vol.Coerce(float), vol.Range(min=6, max=100)),
+            ): _amount(6, 100, "A"),
             vol.Optional(
                 CONF_PHASE_VOLTAGE,
                 default=defaults.get(CONF_PHASE_VOLTAGE, DEFAULT_PHASE_VOLTAGE),
-            ): vol.All(vol.Coerce(float), vol.Range(min=100, max=300)),
+            ): _amount(100, 300, "V"),
             vol.Optional(
                 CONF_PHASE_MARGIN,
                 default=defaults.get(CONF_PHASE_MARGIN, DEFAULT_PHASE_MARGIN),
-            ): vol.All(vol.Coerce(float), vol.Range(min=0, max=50)),
+            ): _amount(0, 50, "%"),
             vol.Optional(
                 CONF_PHASE_DETECT,
                 default=defaults.get(CONF_PHASE_DETECT, DEFAULT_PHASE_DETECT),
@@ -270,7 +288,7 @@ def _phases_schema(defaults: dict) -> vol.Schema:
                 default=defaults.get(
                     CONF_PHASE_PROBE_SECONDS, DEFAULT_PHASE_PROBE_SECONDS
                 ),
-            ): vol.All(vol.Coerce(int), vol.Range(min=10, max=120)),
+            ): _amount(10, 120, "s", step=5),
         }
     )
 
