@@ -145,6 +145,21 @@ def slot_at(slots: list[Slot], moment: datetime) -> Slot | None:
     return next((slot for slot in slots if slot.covers(moment)), None)
 
 
+def slots_in_window(
+    slots: list[Slot], now: datetime, window_hours: float = 24.0
+) -> list[Slot]:
+    """The slots the ranking actually considers: still running, and near enough.
+
+    Both rankings and the chart have to agree on this set, or a bar would be
+    coloured by a decision it was never part of.
+    """
+    horizon = now + timedelta(hours=window_hours)
+    return sorted(
+        (slot for slot in slots if slot.end > now and slot.start < horizon),
+        key=lambda slot: slot.start,
+    )
+
+
 def cheapest_slots(
     slots: list[Slot], now: datetime, cheap_hours: float, window_hours: float = 24.0
 ) -> list[Slot]:
@@ -156,8 +171,7 @@ def cheapest_slots(
     """
     if cheap_hours <= 0:
         return []
-    horizon = now + timedelta(hours=window_hours)
-    upcoming = [slot for slot in slots if slot.end > now and slot.start < horizon]
+    upcoming = slots_in_window(slots, now, window_hours)
     if not upcoming:
         return []
 
@@ -175,8 +189,7 @@ def dearest_slots(
     """The most expensive `hours` worth of slots in the window ahead."""
     if hours <= 0:
         return []
-    horizon = now + timedelta(hours=window_hours)
-    upcoming = [slot for slot in slots if slot.end > now and slot.start < horizon]
+    upcoming = slots_in_window(slots, now, window_hours)
     if not upcoming:
         return []
     span_minutes = min(

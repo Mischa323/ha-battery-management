@@ -365,7 +365,14 @@ possible, and they gate section A.
     laid out as that repository expects; it stays legible down to 32 px. The
     pull request is a public contribution under the owner's name, so the owner
     submits it. The HACS step keeps `ignore: brands` until it lands.
-17. **Card rendering unverified** — the card is served and registered, but nobody
+17. **Card rendering unverified** - and the price chart added in 0.6.1 raises
+    the stakes: its geometry is checked (negative prices hang below the zero
+    line rather than being clipped) but nobody has looked at how it lays out.
+    The colours were validated rather than eyeballed - green/red is the worst
+    possible pair for deuteranopia, so the steps were chosen to clear CVD
+    dE 9.7 on both a light and a dark card, and the role is also in the tooltip
+    and the legend so hue never carries it alone.
+17b. **Old text:** card rendering unverified — the card is served and registered, but nobody
     has looked at how it actually renders on a dashboard.
 
 ### F. Not tripping the main fuse

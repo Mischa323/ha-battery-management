@@ -33,7 +33,14 @@ from .phases import (
     unit_ceilings,
 )
 from .suppliers import FETCHERS, SOURCE_ENTITY, SOURCE_NONE
-from .prices import cheapest_slots, dearest_slots, is_cheap_now, is_dear_now, parse_forecast
+from .prices import (
+    cheapest_slots,
+    dearest_slots,
+    is_cheap_now,
+    is_dear_now,
+    parse_forecast,
+    slots_in_window,
+)
 from .const import (
     CONF_BIAS,
     CONF_CHARGE_LIMIT,
@@ -819,17 +826,40 @@ class BatteryCoordinator:
                 for slot in chosen
             ]
 
-        cheap = describe(
-            cheapest_slots(slots, now, self._cheap_hours, PRICE_WINDOW_HOURS)
+        cheapest = cheapest_slots(
+            slots, now, self._cheap_hours, PRICE_WINDOW_HOURS
         ) if slots else []
-        dear = describe(
-            dearest_slots(slots, now, self._expensive_hours, PRICE_WINDOW_HOURS)
+        dearest = dearest_slots(
+            slots, now, self._expensive_hours, PRICE_WINDOW_HOURS
         ) if slots else []
+
+        # The whole series, each slot carrying the decision it belongs to. The
+        # role is computed here rather than left to a dashboard picking a
+        # threshold: "cheap" has to mean the hours this will actually buy on,
+        # not the ones somebody's card thought looked low.
+        cheap_at = {slot.start for slot in cheapest}
+        dear_at = {slot.start for slot in dearest}
+        hours = [
+            {
+                "start": slot.start.isoformat(),
+                "end": slot.end.isoformat(),
+                "price": round(slot.price, 4),
+                "role": (
+                    "cheap" if slot.start in cheap_at
+                    else "dear" if slot.start in dear_at
+                    else "normal"
+                ),
+            }
+            for slot in (
+                slots_in_window(slots, now, PRICE_WINDOW_HOURS) if slots else []
+            )
+        ]
 
         return {
             "has_prices": slots is not None,
-            "cheap_hours": cheap,
-            "dear_hours": dear,
+            "hours": hours,
+            "cheap_hours": describe(cheapest),
+            "dear_hours": describe(dearest),
             "solar_remaining_kwh": self.solar_remaining(),
             "usable_capacity_kwh": self.usable_capacity_kwh(),
             "charge_ceiling": self.charge_ceiling(),

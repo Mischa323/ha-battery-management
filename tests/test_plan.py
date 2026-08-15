@@ -188,3 +188,56 @@ def test_the_plan_works_without_any_of_it_configured(build_system):
     assert plan["has_prices"] is False
     assert plan["solar_remaining_kwh"] is None
     assert plan["charge_ceiling"] is None
+
+
+# -- the whole series, for the chart -------------------------------------------
+
+
+def test_the_plan_carries_every_hour_not_just_the_chosen_ones(planned):
+    """A chart needs the shape of the day, not the two ends of it."""
+    system = planned()
+
+    hours = system.coordinator.plan()["hours"]
+
+    assert len(hours) > len(system.coordinator.plan()["cheap_hours"])
+    assert all({"start", "end", "price", "role"} <= set(h) for h in hours)
+
+
+def test_each_hour_says_which_decision_it_belongs_to(planned):
+    """Computed here, not by a dashboard picking a threshold: "cheap" has to
+    mean the hours this will actually buy on."""
+    system = planned()
+
+    roles = {h["role"] for h in system.coordinator.plan()["hours"]}
+
+    assert roles <= {"cheap", "dear", "normal"}
+    assert "cheap" in roles and "dear" in roles
+
+
+def test_the_cheap_hours_really_are_the_cheapest_ones(planned):
+    system = planned()
+
+    hours = system.coordinator.plan()["hours"]
+    cheap = [h["price"] for h in hours if h["role"] == "cheap"]
+    dear = [h["price"] for h in hours if h["role"] == "dear"]
+    rest = [h["price"] for h in hours if h["role"] == "normal"]
+
+    assert max(cheap) <= min(rest)
+    assert min(dear) >= max(rest)
+
+
+def test_the_series_is_in_time_order(planned):
+    system = planned()
+
+    starts = [h["start"] for h in system.coordinator.plan()["hours"]]
+
+    assert starts == sorted(starts)
+
+
+def test_no_prices_means_no_series_rather_than_an_empty_looking_chart(build_system):
+    system = build_system(grid=0)
+
+    plan = system.coordinator.plan()
+
+    assert plan["has_prices"] is False
+    assert plan["hours"] == []

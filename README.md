@@ -228,6 +228,29 @@ answer is kept, because prices do not change retroactively and old slots fall
 out of the ranking window by themselves. `prices_error` and `prices_fetched_at`
 in the diagnostics say which of those is happening.
 
+### The price chart
+
+Add `prices:` to the card and it draws one bar per hour, coloured by the
+decision that hour belongs to:
+
+```yaml
+type: custom:battery-management-card
+prices: sensor.battery_management_plan
+```
+
+Green is **not** "a low number" — it is the hours the coordinator will actually
+buy on, and red the hours it is keeping the charge for. Those are computed by
+the integration, so the chart cannot draw a different plan than the one being
+executed; a card picking its own threshold could. Everything else stays grey:
+following the meter, no price decision involved.
+
+The two hues clear a colourblind-separation check on both a light and a dark
+card (CVD ΔE 9.7, contrast ≥ 3:1 on both), but colour never carries the meaning
+on its own — every bar names its role in its tooltip and the legend spells all
+three out. The current hour is marked by an outline rather than another colour.
+Negative prices hang below the zero line instead of being clipped, because on a
+dynamic tariff they are real.
+
 ## Staying inside the main fuse
 
 The control loop regulates the household **total**. The packs are
@@ -399,7 +422,7 @@ capped — that would be throwing sun away.
 | **Fast charge duration** | How long a *fast charge* would take from now — at full power, which is what the be-full-by blueprint triggers. Slowest pack, since they charge in parallel. Its `at_current_rate_minutes` attribute answers the other question: how long at the rate being commanded right now, which on solar surplus alone is far longer. | the charge time has not been measured |
 | **Solar remaining** | Sun still expected today. Its attributes break down every forecast sensor separately, so "0 kWh" can be told apart from a sensor that is not reading. | no forecast sensors configured |
 | **Charge ceiling** | How full it is worth buying to: 100 % − remaining sun ÷ capacity, within your two bounds. | the charge time has not been measured |
-| **Plan** | Today's cheap and dear hours with their prices, plus the numbers the ceiling was computed from, all in attributes. | never |
+| **Plan** | Today's cheap and dear hours with their prices, plus the numbers the ceiling was computed from, all in attributes. Its `hours` attribute is the whole series, each slot carrying the `role` it belongs to — `cheap`, `dear` or `normal` — which is what the card's chart is drawn from. | never |
 | **Fuse headroom** | Amps still available on the busiest leg of your supply. Per-leg detail — load, room, and which packs sit on it — is in the attributes. | no per-phase sensors configured |
 | **Phase detection** | Whether it knows which pack is on which leg, and how it found out. The `probes` attribute holds the measurements behind each placement. | never |
 | **‹unit› phase** | Which leg that pack is on — `L1`, `L2` or `L3`. Its `source` attribute says whether that was measured or typed in. | no per-phase sensors configured |

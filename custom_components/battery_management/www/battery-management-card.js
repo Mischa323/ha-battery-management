@@ -33,8 +33,84 @@ class BatteryManagementCard extends HTMLElement {
     this._update();
   }
 
+  /**
+   * The hourly prices, coloured by the decision each hour belongs to.
+   *
+   * Green is not "a low number" - it is the hours this will actually buy on,
+   * and red the hours it is keeping the charge for. The integration works that
+   * out (a card picking its own threshold would draw a different plan than the
+   * one being executed), so this only has to render what it is told.
+   *
+   * The two hues clear a colourblind-separation check on both a light and a
+   * dark card (CVD dE 9.7), but they still never carry the meaning alone: every
+   * bar names its role in its tooltip and the legend spells all three out.
+   */
+  _renderPrices() {
+    const wrap = this.querySelector("#prices");
+    if (!wrap) return;
+    const attrs = this._attrs(this._config.prices);
+    const hours = Array.isArray(attrs.hours) ? attrs.hours : [];
+    if (!hours.length) {
+      wrap.style.display = "none";
+      return;
+    }
+    wrap.style.display = "block";
+
+    const prices = hours.map((h) => Number(h.price) || 0);
+    // negative prices are real on a dynamic tariff, so the baseline is 0 and
+    // bars hang below it rather than being clipped away
+    const top = Math.max(0, ...prices);
+    const bottom = Math.min(0, ...prices);
+    const span = top - bottom || 1;
+    const zero = ((0 - bottom) / span) * 100;
+
+    const nowIso = new Date().toISOString();
+    const colour = {
+      cheap: "#089408",
+      dear: "#e07070",
+      normal: "var(--disabled-text-color, #8a8a8a)",
+    };
+    const says = {
+      cheap: "goedkoop, hier wordt geladen",
+      dear: "duur, hiervoor wordt bewaard",
+      normal: "gewoon de meter volgen",
+    };
+
+    const plot = this.querySelector("#plot");
+    plot.innerHTML =
+      `<div class="zero" style="bottom:${zero}%"></div>` +
+      hours
+        .map((h) => {
+          const price = Number(h.price) || 0;
+          const size = (Math.abs(price) / span) * 100;
+          const base = zero + (price < 0 ? -size : 0);
+          const role = colour[h.role] ? h.role : "normal";
+          const now = h.start <= nowIso && nowIso < h.end ? " now" : "";
+          const hour = String(h.start).slice(11, 16);
+          const label = `${hour} — ${price.toFixed(3)} €/kWh — ${says[role]}`;
+          return (
+            `<div class="slot${now}" title="${esc(label)}">` +
+            `<div class="pbar ${price < 0 ? "down" : "up"}" ` +
+            `style="bottom:${base}%;height:${size}%;background:${colour[role]}"></div>` +
+            `</div>`
+          );
+        })
+        .join("");
+
+    // a label every few hours, not on every bar
+    const every = Math.max(1, Math.round(hours.length / 6));
+    this.querySelector("#paxis").innerHTML = hours
+      .map((h, i) => `<span>${i % every === 0 ? String(h.start).slice(11, 16) : ""}</span>`)
+      .join("");
+
+    const current = hours.find((h) => h.start <= nowIso && nowIso < h.end);
+    this.querySelector("#pnow").textContent = current
+      ? `nu ${Number(current.price).toFixed(3)} €/kWh`
+      : "";
+  }
+
   getCardSize() {
-    return 4 + (this._config?.units?.length || 0);
+    return 4 + (this._config?.units?.length || 0) + (this._config?.prices ? 3 : 0);
   }
 
   _s(id) {
@@ -45,6 +121,11 @@ class BatteryManagementCard extends HTMLElement {
   _num(id) {
     const v = parseFloat(this._s(id));
     return isNaN(v) ? null : v;
+  }
+
+  _attrs(id) {
+    const st = this._hass && id ? this._hass.states[id] : undefined;
+    return (st && st.attributes) || {};
   }
 
   _svc(domain, service, data) {
@@ -72,6 +153,27 @@ class BatteryManagementCard extends HTMLElement {
           .uname { font-weight:600; }
           .bar { height:10px; border-radius:6px; background: var(--divider-color); overflow:hidden; margin:6px 0 4px; }
           .fill { height:100%; width:0%; background: var(--success-color, #4caf50); transition:width .4s; }
+          .prices { margin-top:12px; padding:10px 10px 6px; border-radius:10px;
+                    background: var(--secondary-background-color); }
+          .phead { display:flex; justify-content:space-between; align-items:baseline;
+                   font-size:.92em; margin-bottom:8px; }
+          /* the plot: one column per slot, 2px of surface between them */
+          .plot { display:flex; align-items:flex-end; gap:2px; height:96px; position:relative; }
+          .zero { position:absolute; left:0; right:0; height:1px;
+                  background: var(--divider-color); }
+          .slot { flex:1 1 0; height:100%; position:relative; min-width:0; }
+          .pbar { position:absolute; left:0; right:0; }
+          .pbar.up { border-radius:4px 4px 0 0; }
+          .pbar.down { border-radius:0 0 4px 4px; }
+          /* now is found by outline, not by hue - colour is already spoken for */
+          .slot.now .pbar { outline:2px solid var(--primary-text-color); outline-offset:1px; }
+          .paxis { display:flex; gap:2px; margin-top:4px; font-size:.72em;
+                   color: var(--secondary-text-color); }
+          .paxis span { flex:1 1 0; text-align:center; min-width:0; }
+          .legend { display:flex; flex-wrap:wrap; gap:12px; margin-top:8px;
+                    font-size:.78em; color: var(--secondary-text-color); }
+          .legend i { display:inline-block; width:10px; height:10px; border-radius:3px;
+                      margin-right:5px; vertical-align:middle; font-style:normal; }
           .plan { margin-top:12px; padding:10px; border-radius:10px; background: var(--secondary-background-color); font-size:.92em; }
         </style>
         <div class="sbc">
@@ -86,6 +188,16 @@ class BatteryManagementCard extends HTMLElement {
             <div class="btn warn" id="fast">Snelladen</div>
           </div>
           <div id="units"></div>
+          <div class="prices" id="prices" style="display:none">
+            <div class="phead"><span>Prijs per uur</span><span id="pnow" class="muted"></span></div>
+            <div class="plot" id="plot"></div>
+            <div class="paxis" id="paxis"></div>
+            <div class="legend">
+              <span><i style="background:#089408"></i>Goedkoop — hier wordt geladen</span>
+              <span><i style="background:#e07070"></i>Duur — hiervoor wordt bewaard</span>
+              <span><i style="background:var(--disabled-text-color,#8a8a8a)"></i>Verder de meter volgen</span>
+            </div>
+          </div>
           <div class="plan" id="plan" style="display:none"></div>
         </div>
       </ha-card>`;
@@ -165,6 +277,8 @@ class BatteryManagementCard extends HTMLElement {
         soc === null ? "var(--error-color,#f44)" :
         soc < 15 ? "var(--warning-color,#ff9800)" : "var(--success-color,#4caf50)";
     });
+
+    this._renderPrices();
 
     const plan = this.querySelector("#plan");
     if (c.forecast_today || c.forecast_tomorrow) {
