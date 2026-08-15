@@ -230,17 +230,17 @@ in the diagnostics say which of those is happening.
 
 ### The price chart
 
-Add `prices:` to the card and it draws one bar per hour, coloured by the
-decision that hour belongs to:
+The chart lives on the card that ships with the integration, not on the device
+page — a device page lists entities, and a chart is not one.
 
-```yaml
-type: custom:battery-management-card
-prices: sensor.battery_management_plan
-```
+**Add card → search "Battery Management"** (the *card* tab, not *by entity*).
+It fills itself in: the switches, the packs, the meter and the price chart are
+all found from the entities that are there. No YAML.
 
-Green is **not** "a low number" — it is the hours the coordinator will actually
-buy on, and red the hours it is keeping the charge for. Those are computed by
-the integration, so the chart cannot draw a different plan than the one being
+It draws one bar per hour, coloured by the decision that hour belongs to. Green
+is **not** "a low number" — it is the hours the coordinator will actually buy
+on, and red the hours it is keeping the charge for. Those are computed by the
+integration, so the chart cannot draw a different plan than the one being
 executed; a card picking its own threshold could. Everything else stays grey:
 following the meter, no price decision involved.
 
@@ -250,6 +250,15 @@ on its own — every bar names its role in its tooltip and the legend spells all
 three out. The current hour is marked by an outline rather than another colour.
 Negative prices hang below the zero line instead of being clipped, because on a
 dynamic tariff they are real.
+
+To place it by hand instead, the only line the chart needs is `prices:`, and it
+points at the **Plan** sensor rather than a price sensor — that is where the
+whole series lives, each hour carrying its role:
+
+```yaml
+type: custom:battery-management-card
+prices: sensor.battery_management_plan
+```
 
 ## Staying inside the main fuse
 

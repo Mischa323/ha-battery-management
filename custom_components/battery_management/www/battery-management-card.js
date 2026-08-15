@@ -109,6 +109,56 @@ class BatteryManagementCard extends HTMLElement {
       : "";
   }
 
+  /**
+   * What you get when the card is picked out of Home Assistant's card list.
+   *
+   * Without this it arrives empty and every entity has to be typed by hand,
+   * which is not what "add a card" means anywhere else in Home Assistant.
+   * Everything is derived from one anchor - the Setpoint sensor - so a renamed
+   * device still resolves, and nothing is written into the config unless the
+   * entity actually exists.
+   */
+  static getStubConfig(hass, entities) {
+    const all =
+      (Array.isArray(entities) && entities.length ? entities : null) ||
+      Object.keys((hass && hass.states) || {});
+    const config = { type: "custom:battery-management-card" };
+
+    const setpoint = all.find(
+      (id) => id.startsWith("sensor.") && id.endsWith("_setpoint")
+    );
+    if (!setpoint) return config;
+    const prefix = setpoint.slice(7, -"_setpoint".length);
+    const has = (id) => (all.includes(id) ? id : undefined);
+    const put = (key, id) => {
+      if (id) config[key] = id;
+    };
+
+    put("setpoint", setpoint);
+    put("status", has(`sensor.${prefix}_status`));
+    put("enable", has(`switch.${prefix}_coordinator_enabled`));
+    put("fast_charge", has(`switch.${prefix}_fast_charge_emergency`));
+    put("grid_power", has(`sensor.${prefix}_grid_power_as_read`));
+    // the plan carries the whole price series, which is what the chart draws
+    put("prices", has(`sensor.${prefix}_plan`));
+
+    // one row per pack, found by its target sensor - the state of charge comes
+    // out of that sensor's own attributes, so no Anker entity has to be guessed
+    const units = all
+      .filter((id) => id.startsWith(`sensor.${prefix}_`) && id.endsWith("_target"))
+      .sort()
+      .map((target) => {
+        const slug = target.slice(`sensor.${prefix}_`.length, -"_target".length);
+        const name = slug.replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase());
+        const row = { name, target };
+        const online = has(`binary_sensor.${prefix}_${slug}_online`);
+        if (online) row.status = online;
+        return row;
+      });
+    if (units.length) config.units = units;
+    return config;
+  }
+
   getCardSize() {
     return 4 + (this._config?.units?.length || 0) + (this._config?.prices ? 3 : 0);
   }
@@ -260,7 +310,10 @@ class BatteryManagementCard extends HTMLElement {
     fBtn.textContent = fOn ? "Snelladen: bezig (stop)" : "Snelladen starten";
 
     (c.units || []).forEach((u, i) => {
-      const soc = this._num(u.soc);
+      // the pack's own SoC sensor if one was named, otherwise the value our
+      // target sensor already publishes alongside what it commanded
+      const attr = this._attrs(u.target).soc;
+      const soc = u.soc ? this._num(u.soc) : attr === undefined ? null : Number(attr);
       const tar = this._num(u.target);
       const ust = this._s(u.status);
       this.querySelector(`#usoc${i}`).textContent = soc !== null ? soc + "%" : "—";
@@ -304,7 +357,8 @@ window.customCards = window.customCards || [];
 window.customCards.push({
   type: "battery-management-card",
   name: "Battery Management Card",
-  description: "Management panel for the Battery Management integration.",
+  description:
+    "Controls, per-pack state of charge, and the hourly price chart.",
   preview: false,
 });
 
