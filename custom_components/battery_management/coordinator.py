@@ -672,6 +672,11 @@ class BatteryCoordinator:
             return True
         return self._price_source == SOURCE_ENTITY and bool(self._price_sensor)
 
+    def _session(self):
+        """Home Assistant's shared HTTP session. A seam, like `_sleep`: the
+        tests hand in their own rather than standing up a real hass."""
+        return async_get_clientsession(self.hass)
+
     async def async_refresh_prices(self, _now=None) -> None:
         """Ask the supplier what today and tomorrow cost.
 
@@ -687,7 +692,7 @@ class BatteryCoordinator:
         build, parse = fetcher
         url, body = build(dt_util.now().date())
         try:
-            session = async_get_clientsession(self.hass)
+            session = self._session()
             async with session.post(url, json=body, timeout=PRICE_TIMEOUT) as response:
                 response.raise_for_status()
                 payload = await response.json()

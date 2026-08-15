@@ -81,8 +81,13 @@ def frank_payload(*prices: float) -> dict:
 
 def with_frank(build_system, session, **kwargs):
     system = build_system(grid=0, **{CONF_PRICE_SOURCE: SUPPLIER_FRANK}, **kwargs)
-    system.hass.session = session
+    use(system, session)
     return system
+
+
+def use(system, session) -> None:
+    """Hand the coordinator this session instead of Home Assistant's."""
+    system.coordinator._session = lambda: session
 
 
 # -- which route is configured -------------------------------------------------
@@ -179,7 +184,7 @@ async def test_a_failed_refresh_keeps_the_previous_answer(build_system):
     system = with_frank(build_system, session)
     await system.coordinator.async_refresh_prices()
 
-    system.hass.session = FakeSession(boom=OSError("gone"))
+    use(system, FakeSession(boom=OSError("gone")))
     await system.coordinator.async_refresh_prices()
 
     assert len(system.coordinator._price_attributes()["prices"]) == 2
@@ -201,7 +206,7 @@ async def test_the_sensor_route_never_calls_out(build_system):
         grid=0,
         **{CONF_PRICE_SOURCE: SOURCE_ENTITY, CONF_PRICE_SENSOR: "sensor.prices"},
     )
-    system.hass.session = session
+    use(system, session)
 
     await system.coordinator.async_refresh_prices()
 

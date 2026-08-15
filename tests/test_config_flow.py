@@ -197,9 +197,14 @@ async def test_options_dynamic_stores_a_price_sensor(hass: HomeAssistant):
     )
     assert result["step_id"] == "dynamic"
 
+    # the sensor now lives behind the source question, so this is two screens
     result = await hass.config_entries.options.async_configure(
         result["flow_id"],
-        {CONF_PRICE_SENSOR: "sensor.energy_prices", CONF_CHEAP_HOURS: 4},
+        {CONF_PRICE_SOURCE: SOURCE_ENTITY, CONF_CHEAP_HOURS: 4},
+    )
+    assert result["step_id"] == "price_entity"
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {CONF_PRICE_SENSOR: "sensor.energy_prices"}
     )
     await hass.async_block_till_done()
 
@@ -212,20 +217,20 @@ async def test_options_dynamic_can_clear_the_price_sensor_again(hass: HomeAssist
     """An emptied picker must clear, not silently keep the old sensor."""
     entry = await _create_entry(hass)
 
-    for payload in (
-        {CONF_PRICE_SENSOR: "sensor.energy_prices"},
-        {CONF_CHEAP_HOURS: 4},
-    ):
+    for second in ({CONF_PRICE_SENSOR: "sensor.energy_prices"}, {}):
         result = await hass.config_entries.options.async_init(entry.entry_id)
         result = await hass.config_entries.options.async_configure(
             result["flow_id"], {"next_step_id": "dynamic"}
         )
         result = await hass.config_entries.options.async_configure(
-            result["flow_id"], payload
+            result["flow_id"], {CONF_PRICE_SOURCE: SOURCE_ENTITY}
+        )
+        result = await hass.config_entries.options.async_configure(
+            result["flow_id"], second
         )
         await hass.async_block_till_done()
 
-    assert CONF_PRICE_SENSOR not in entry.options
+    assert not entry.options.get(CONF_PRICE_SENSOR)
 
 
 async def test_options_tuning_saves_without_touching_the_units(hass: HomeAssistant):
