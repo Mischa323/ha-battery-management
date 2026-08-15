@@ -472,6 +472,27 @@ class BatteryManagementOptionsFlow(OptionsFlow):
         self._pending_unit: dict = {}
         self._pending_options: dict = {}
 
+    def _merged(self, user_input: dict, *clears: str) -> dict:
+        """One section's answers, folded into the options already stored.
+
+        Home Assistant replaces the *whole* options dict with whatever a step
+        hands back, so a step returning only its own fields silently deletes
+        every other section. That is how a tuning save wiped the solar sensors
+        at the primary site: nothing looked wrong, the settings were simply
+        gone. Every step goes through here now, and a test walks all of them.
+
+        `clears` names the pickers where emptying the field has to mean
+        "remove it" rather than "fall back to the old value".
+        """
+        merged = {**self._entry.options}
+        for key in clears:
+            merged.pop(key, None)
+        merged.update(user_input)
+        return merged
+
+    def _save(self, user_input: dict, *clears: str) -> ConfigFlowResult:
+        return self.async_create_entry(title="", data=self._merged(user_input, *clears))
+
     async def async_step_init(self, user_input: dict | None = None) -> ConfigFlowResult:
         return self.async_show_menu(
             step_id="init",
@@ -480,7 +501,7 @@ class BatteryManagementOptionsFlow(OptionsFlow):
 
     async def async_step_tuning(self, user_input: dict | None = None) -> ConfigFlowResult:
         if user_input is not None:
-            return self.async_create_entry(title="", data=user_input)
+            return self._save(user_input)
         defaults = {**self._entry.data, **self._entry.options}
         return self.async_show_form(
             step_id="tuning", data_schema=_options_schema(defaults)
@@ -491,10 +512,9 @@ class BatteryManagementOptionsFlow(OptionsFlow):
     ) -> ConfigFlowResult:
         if user_input is not None:
             # an emptied picker must actually clear, not fall back to the old one
-            merged = {**self._entry.options}
-            for key in (CONF_SOLAR_FORECAST_SENSORS, CONF_SOLAR_PRODUCED_SENSOR):
-                merged.pop(key, None)
-            merged.update(user_input)
+            merged = self._merged(
+                user_input, CONF_SOLAR_FORECAST_SENSORS, CONF_SOLAR_PRODUCED_SENSOR
+            )
             # Which price source, then which supplier or which sensor. Only the
             # sensor route needs a second screen; asking anyway would be a form
             # with one disabled field on it.
@@ -566,10 +586,7 @@ class BatteryManagementOptionsFlow(OptionsFlow):
             if not errors:
                 # emptying the sensor list must switch the protection off, not
                 # silently keep guarding with yesterday's entities
-                merged = {**self._entry.options}
-                merged.pop(CONF_PHASE_SENSORS, None)
-                merged.update(user_input)
-                return self.async_create_entry(title="", data=merged)
+                return self._save(user_input, CONF_PHASE_SENSORS)
             defaults = {**defaults, **user_input}
 
         return self.async_show_form(
@@ -585,10 +602,7 @@ class BatteryManagementOptionsFlow(OptionsFlow):
         if user_input is not None:
             errors = validate_shadow(user_input, defaults.get(CONF_GRID_POWER))
             if not errors:
-                merged = {**self._entry.options}
-                merged.pop(CONF_BATTERY_POWER_SENSOR, None)
-                merged.update(user_input)
-                return self.async_create_entry(title="", data=merged)
+                return self._save(user_input, CONF_BATTERY_POWER_SENSOR)
             defaults = {**defaults, **user_input}
 
         return self.async_show_form(

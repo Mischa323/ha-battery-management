@@ -31,6 +31,8 @@ from custom_components.battery_management.const import (  # noqa: E402
     CONF_UNIT_COUNT,
     CONF_UNIT_NAME,
     CONF_PHASE_DETECT,
+    CONF_SHADOW_SIMULATE,
+    CONF_SOLAR_FORECAST_SENSORS,
     CONF_PRICE_SOURCE,
     CONF_PHASE_LIMIT_AMPS,
     CONF_PHASE_MARGIN,
@@ -471,3 +473,61 @@ async def test_switching_to_a_supplier_clears_the_old_sensor(hass: HomeAssistant
     await hass.async_block_till_done()
 
     assert not entry.options.get(CONF_PRICE_SENSOR)
+
+
+async def test_saving_one_section_does_not_erase_the_others(hass: HomeAssistant):
+    """Home Assistant replaces the whole options dict, so a step that hands back
+    only its own fields deletes every other section - silently. That is how a
+    tuning save wiped the solar sensors at the primary site."""
+    entry = await _create_entry(hass)
+    hass.config_entries.async_update_entry(
+        entry,
+        options={
+            CONF_SOLAR_FORECAST_SENSORS: ["sensor.plane_a", "sensor.plane_b"],
+            CONF_PHASE_LIMIT_AMPS: 35,
+            CONF_KP: 0.4,
+        },
+    )
+
+    # every screen that can be saved on its own, one at a time
+    for section, payload in (
+        ("tuning", {CONF_KP: 0.3}),
+        ("phases", {CONF_PHASE_LIMIT_AMPS: 40}),
+        ("shadow", {CONF_SHADOW_SIMULATE: False}),
+    ):
+        result = await hass.config_entries.options.async_init(entry.entry_id)
+        result = await hass.config_entries.options.async_configure(
+            result["flow_id"], {"next_step_id": section}
+        )
+        result = await hass.config_entries.options.async_configure(
+            result["flow_id"], payload
+        )
+        await hass.async_block_till_done()
+
+        assert entry.options[CONF_SOLAR_FORECAST_SENSORS] == [
+            "sensor.plane_a",
+            "sensor.plane_b",
+        ], f"the {section} screen erased the solar sensors"
+
+    # and the last write of each is what survived
+    assert entry.options[CONF_KP] == 0.3
+    assert entry.options[CONF_PHASE_LIMIT_AMPS] == 40
+
+
+async def test_the_dynamic_screen_keeps_the_phase_settings(hass: HomeAssistant):
+    entry = await _create_entry(hass)
+    hass.config_entries.async_update_entry(
+        entry, options={CONF_PHASE_LIMIT_AMPS: 35}
+    )
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {"next_step_id": "dynamic"}
+    )
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {CONF_PRICE_SOURCE: SUPPLIER_FRANK, CONF_CHEAP_HOURS: 5}
+    )
+    await hass.async_block_till_done()
+
+    assert entry.options[CONF_PHASE_LIMIT_AMPS] == 35
+    assert entry.options[CONF_CHEAP_HOURS] == 5
