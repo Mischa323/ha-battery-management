@@ -886,6 +886,23 @@ class BatteryCoordinator:
             "next_price": round(nxt.price, 4) if nxt else None,
         }
 
+    def current_market_price(self) -> float | None:
+        """The exchange component of this hour, without tax or markup.
+
+        Import is billed all-in; export is not, so the two need different
+        numbers. What a supplier actually pays back is their own arrangement -
+        this is the exchange price it is calculated from, and nothing more is
+        claimed for it. Only available on the direct route; a third-party
+        sensor publishes whichever single number it publishes.
+        """
+        attributes = self._price_attributes() or {}
+        rows = attributes.get("market_prices")
+        if not rows:
+            return None
+        slots = parse_forecast({"prices": rows}, dt_util.utcnow())
+        current = slot_at(slots, dt_util.utcnow()) if slots else None
+        return None if current is None else round(current.price, 4)
+
     def _price_role(self, slot, now) -> str:
         """Which decision this slot belongs to - the same one the chart draws."""
         forecast = self._price_forecast() or []

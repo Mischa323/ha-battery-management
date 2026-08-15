@@ -223,3 +223,61 @@ async def test_the_diagnostics_say_where_prices_come_from(build_system):
     assert report["settings"]["price_source"] == SUPPLIER_FRANK
     assert report["state"]["price_slots"] == 2
     assert report["state"]["prices_error"] is None
+
+
+# -- for the Energy dashboard --------------------------------------------------
+
+
+async def test_the_exchange_component_is_kept_apart_from_the_all_in_price(
+    build_system,
+):
+    """Import is billed all-in, export is not. One number cannot be both, and a
+    wrong number on an energy dashboard looks exactly like a right one."""
+    session = FakeSession(
+        {
+            "data": {
+                "marketPricesElectricity": [
+                    {
+                        # a slot wide enough to cover whenever this runs
+                        "from": "2020-01-01T00:00:00.000Z",
+                        "till": "2099-01-01T00:00:00.000Z",
+                        "marketPrice": 0.10,
+                        "marketPriceTax": 0.021,
+                        "sourcingMarkupPrice": 0.02,
+                        "energyTaxPrice": 0.13,
+                    }
+                ]
+            }
+        }
+    )
+    system = with_frank(build_system, session)
+
+    await system.coordinator.async_refresh_prices()
+
+    assert system.coordinator.current_price()["price"] == 0.271
+    assert system.coordinator.current_market_price() == 0.10
+
+
+async def test_the_exchange_price_does_not_disturb_the_ranking(build_system):
+    """It rides alongside under a key the shape parser deliberately ignores."""
+    session = FakeSession(frank_payload(0.10, 0.05, 0.20))
+    system = with_frank(build_system, session)
+
+    await system.coordinator.async_refresh_prices()
+
+    assert len(system.coordinator._price_forecast()) == 3
+
+
+async def test_a_third_party_sensor_has_no_exchange_price_to_offer(build_system):
+    """It publishes whichever single number it publishes; do not invent one."""
+    system = build_system(
+        grid=0,
+        **{CONF_PRICE_SOURCE: SOURCE_ENTITY, CONF_PRICE_SENSOR: "sensor.prices"},
+    )
+    system.hass.states.set(
+        "sensor.prices",
+        0.2,
+        {"prices": [{"from": "2026-09-01T00:00:00Z", "price": 0.2}]},
+    )
+
+    assert system.coordinator.current_market_price() is None

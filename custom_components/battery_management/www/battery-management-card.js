@@ -20,6 +20,110 @@ const esc = (value) =>
     (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[ch]
   );
 
+/** The three decisions a price slot can belong to, and how they are drawn. */
+const PRICE_COLOUR = {
+  cheap: "#089408",
+  dear: "#e07070",
+  normal: "var(--disabled-text-color, #8a8a8a)",
+};
+const PRICE_SAYS = {
+  cheap: "goedkoop, hier wordt geladen",
+  dear: "duur, hiervoor wordt bewaard",
+  normal: "gewoon de meter volgen",
+};
+
+/** Chart styles, shared by both cards. */
+const PRICE_CSS = `
+          .phead { display:flex; justify-content:space-between; align-items:baseline;
+                   font-size:.92em; margin-bottom:8px; }
+          .plot { display:flex; align-items:flex-end; gap:2px; height:96px; position:relative; }
+          .zero { position:absolute; left:0; right:0; height:1px; background: var(--divider-color); }
+          .slot { flex:1 1 0; height:100%; position:relative; min-width:0; }
+          .pbar { position:absolute; left:0; right:0; }
+          .pbar.up { border-radius:4px 4px 0 0; }
+          .pbar.down { border-radius:0 0 4px 4px; }
+          .slot.now .pbar { outline:2px solid var(--primary-text-color); outline-offset:1px; }
+          .paxis { display:flex; gap:2px; margin-top:4px; font-size:.72em;
+                   color: var(--secondary-text-color); }
+          .paxis span { flex:1 1 0; text-align:center; min-width:0; }
+          .legend { display:flex; flex-wrap:wrap; gap:12px; margin-top:8px; font-size:.78em;
+                    color: var(--secondary-text-color); }
+          .legend i { display:inline-block; width:10px; height:10px; border-radius:3px;
+                      margin-right:5px; vertical-align:middle; font-style:normal; }
+`;
+
+const PRICE_LEGEND = `
+            <div class="legend">
+              <span><i style="background:${PRICE_COLOUR.cheap}"></i>Goedkoop — hier wordt geladen</span>
+              <span><i style="background:${PRICE_COLOUR.dear}"></i>Duur — hiervoor wordt bewaard</span>
+              <span><i style="background:${PRICE_COLOUR.normal}"></i>Verder de meter volgen</span>
+            </div>`;
+
+const hhmm = (iso) => String(iso).slice(11, 16);
+
+/**
+ * Bar geometry. The baseline is zero and negative prices hang below it rather
+ * than being clipped: on a dynamic tariff they are real, and they are exactly
+ * the hours worth noticing.
+ */
+function priceBars(hours) {
+  const prices = hours.map((h) => Number(h.price) || 0);
+  const top = Math.max(0, ...prices);
+  const bottom = Math.min(0, ...prices);
+  const span = top - bottom || 1;
+  const zero = ((0 - bottom) / span) * 100;
+  const now = new Date().toISOString();
+  return {
+    zero,
+    bars: hours.map((h) => {
+      const price = Number(h.price) || 0;
+      const size = (Math.abs(price) / span) * 100;
+      const role = PRICE_COLOUR[h.role] ? h.role : "normal";
+      return {
+        role,
+        price,
+        bottom: zero + (price < 0 ? -size : 0),
+        height: size,
+        down: price < 0,
+        current: h.start <= now && now < h.end,
+        label: `${hhmm(h.start)} — ${price.toFixed(3)} €/kWh — ${PRICE_SAYS[role]}`,
+      };
+    }),
+  };
+}
+
+/** Fill a plot and its axis from the plan's `hours`. */
+function drawPrices(plot, axis, hours) {
+  const { zero, bars } = priceBars(hours);
+  plot.innerHTML =
+    `<div class="zero" style="bottom:${zero}%"></div>` +
+    bars
+      .map(
+        (b) =>
+          `<div class="slot${b.current ? " now" : ""}" title="${esc(b.label)}">` +
+          `<div class="pbar ${b.down ? "down" : "up"}" style="bottom:${b.bottom}%;` +
+          `height:${b.height}%;background:${PRICE_COLOUR[b.role]}"></div></div>`
+      )
+      .join("");
+  if (!axis) return;
+  // a label every few hours, not one on every bar
+  const every = Math.max(1, Math.round(hours.length / 6));
+  axis.innerHTML = hours
+    .map((h, i) => `<span>${i % every === 0 ? hhmm(h.start) : ""}</span>`)
+    .join("");
+}
+
+/** The numbers worth reading out loud: now, the extremes, and when they fall. */
+function priceSummary(hours) {
+  if (!hours.length) return null;
+  const now = new Date().toISOString();
+  const priced = hours.map((h) => ({ ...h, value: Number(h.price) || 0 }));
+  const low = priced.reduce((a, b) => (b.value < a.value ? b : a));
+  const high = priced.reduce((a, b) => (b.value > a.value ? b : a));
+  const current = priced.find((h) => h.start <= now && now < h.end);
+  return { current, low, high };
+}
+
 class BatteryManagementCard extends HTMLElement {
   setConfig(config) {
     if (!config) throw new Error("Invalid configuration");
@@ -48,64 +152,16 @@ class BatteryManagementCard extends HTMLElement {
   _renderPrices() {
     const wrap = this.querySelector("#prices");
     if (!wrap) return;
-    const attrs = this._attrs(this._config.prices);
-    const hours = Array.isArray(attrs.hours) ? attrs.hours : [];
-    if (!hours.length) {
+    const hours = this._attrs(this._config.prices).hours;
+    if (!Array.isArray(hours) || !hours.length) {
       wrap.style.display = "none";
       return;
     }
     wrap.style.display = "block";
-
-    const prices = hours.map((h) => Number(h.price) || 0);
-    // negative prices are real on a dynamic tariff, so the baseline is 0 and
-    // bars hang below it rather than being clipped away
-    const top = Math.max(0, ...prices);
-    const bottom = Math.min(0, ...prices);
-    const span = top - bottom || 1;
-    const zero = ((0 - bottom) / span) * 100;
-
-    const nowIso = new Date().toISOString();
-    const colour = {
-      cheap: "#089408",
-      dear: "#e07070",
-      normal: "var(--disabled-text-color, #8a8a8a)",
-    };
-    const says = {
-      cheap: "goedkoop, hier wordt geladen",
-      dear: "duur, hiervoor wordt bewaard",
-      normal: "gewoon de meter volgen",
-    };
-
-    const plot = this.querySelector("#plot");
-    plot.innerHTML =
-      `<div class="zero" style="bottom:${zero}%"></div>` +
-      hours
-        .map((h) => {
-          const price = Number(h.price) || 0;
-          const size = (Math.abs(price) / span) * 100;
-          const base = zero + (price < 0 ? -size : 0);
-          const role = colour[h.role] ? h.role : "normal";
-          const now = h.start <= nowIso && nowIso < h.end ? " now" : "";
-          const hour = String(h.start).slice(11, 16);
-          const label = `${hour} — ${price.toFixed(3)} €/kWh — ${says[role]}`;
-          return (
-            `<div class="slot${now}" title="${esc(label)}">` +
-            `<div class="pbar ${price < 0 ? "down" : "up"}" ` +
-            `style="bottom:${base}%;height:${size}%;background:${colour[role]}"></div>` +
-            `</div>`
-          );
-        })
-        .join("");
-
-    // a label every few hours, not on every bar
-    const every = Math.max(1, Math.round(hours.length / 6));
-    this.querySelector("#paxis").innerHTML = hours
-      .map((h, i) => `<span>${i % every === 0 ? String(h.start).slice(11, 16) : ""}</span>`)
-      .join("");
-
-    const current = hours.find((h) => h.start <= nowIso && nowIso < h.end);
-    this.querySelector("#pnow").textContent = current
-      ? `nu ${Number(current.price).toFixed(3)} €/kWh`
+    drawPrices(this.querySelector("#plot"), this.querySelector("#paxis"), hours);
+    const s = priceSummary(hours);
+    this.querySelector("#pnow").textContent = s.current
+      ? `nu ${s.current.value.toFixed(3)} €/kWh`
       : "";
   }
 
@@ -205,25 +261,7 @@ class BatteryManagementCard extends HTMLElement {
           .fill { height:100%; width:0%; background: var(--success-color, #4caf50); transition:width .4s; }
           .prices { margin-top:12px; padding:10px 10px 6px; border-radius:10px;
                     background: var(--secondary-background-color); }
-          .phead { display:flex; justify-content:space-between; align-items:baseline;
-                   font-size:.92em; margin-bottom:8px; }
-          /* the plot: one column per slot, 2px of surface between them */
-          .plot { display:flex; align-items:flex-end; gap:2px; height:96px; position:relative; }
-          .zero { position:absolute; left:0; right:0; height:1px;
-                  background: var(--divider-color); }
-          .slot { flex:1 1 0; height:100%; position:relative; min-width:0; }
-          .pbar { position:absolute; left:0; right:0; }
-          .pbar.up { border-radius:4px 4px 0 0; }
-          .pbar.down { border-radius:0 0 4px 4px; }
-          /* now is found by outline, not by hue - colour is already spoken for */
-          .slot.now .pbar { outline:2px solid var(--primary-text-color); outline-offset:1px; }
-          .paxis { display:flex; gap:2px; margin-top:4px; font-size:.72em;
-                   color: var(--secondary-text-color); }
-          .paxis span { flex:1 1 0; text-align:center; min-width:0; }
-          .legend { display:flex; flex-wrap:wrap; gap:12px; margin-top:8px;
-                    font-size:.78em; color: var(--secondary-text-color); }
-          .legend i { display:inline-block; width:10px; height:10px; border-radius:3px;
-                      margin-right:5px; vertical-align:middle; font-style:normal; }
+${PRICE_CSS}
           .plan { margin-top:12px; padding:10px; border-radius:10px; background: var(--secondary-background-color); font-size:.92em; }
         </style>
         <div class="sbc">
@@ -242,12 +280,7 @@ class BatteryManagementCard extends HTMLElement {
             <div class="phead"><span>Prijs per uur</span><span id="pnow" class="muted"></span></div>
             <div class="plot" id="plot"></div>
             <div class="paxis" id="paxis"></div>
-            <div class="legend">
-              <span><i style="background:#089408"></i>Goedkoop — hier wordt geladen</span>
-              <span><i style="background:#e07070"></i>Duur — hiervoor wordt bewaard</span>
-              <span><i style="background:var(--disabled-text-color,#8a8a8a)"></i>Verder de meter volgen</span>
-            </div>
-          </div>
+${PRICE_LEGEND}
           <div class="plan" id="plan" style="display:none"></div>
         </div>
       </ha-card>`;
@@ -363,3 +396,116 @@ window.customCards.push({
 });
 
 console.info("%c BATTERY-MANAGEMENT-CARD %c loaded ", "background:#039be5;color:#fff", "");
+
+
+/**
+ * Just the prices - so the supplier's app can stay shut.
+ *
+ * Deliberately its own card. Somebody deciding whether to run the dishwasher
+ * wants the prices, not a battery control panel, and a chart bolted inside a
+ * control panel cannot be put on a dashboard on its own.
+ *
+ * Same colours and the same meaning as the chart in the management card: green
+ * is the hours the coordinator will buy on, not "a low number".
+ */
+class BatteryManagementPricesCard extends HTMLElement {
+  setConfig(config) {
+    if (!config) throw new Error("Invalid configuration");
+    this._config = config;
+    this._built = false;
+  }
+
+  set hass(hass) {
+    this._hass = hass;
+    if (!this._built) this._build();
+    this._update();
+  }
+
+  static getStubConfig(hass, entities) {
+    const all =
+      (Array.isArray(entities) && entities.length ? entities : null) ||
+      Object.keys((hass && hass.states) || {});
+    const plan = all.find((id) => id.startsWith("sensor.") && id.endsWith("_plan"));
+    const config = { type: "custom:battery-management-prices-card" };
+    if (plan) config.prices = plan;
+    return config;
+  }
+
+  getCardSize() {
+    return 4;
+  }
+
+  _build() {
+    const c = this._config;
+    this.innerHTML = `
+      <ha-card header="${esc(c.title || "Stroomprijs")}">
+        <style>
+          .pc { padding: 4px 16px 16px; }
+          .big { font-size:2em; font-weight:600; line-height:1.15; }
+          .sub { color: var(--secondary-text-color); font-size:.85em; margin-bottom:14px; }
+          .ends { display:flex; gap:20px; margin-top:10px; font-size:.85em; }
+          .muted { color: var(--secondary-text-color); }
+${PRICE_CSS}
+        </style>
+        <div class="pc">
+          <div class="big" id="pnow">—</div>
+          <div class="sub" id="psub"></div>
+          <div class="plot" id="plot"></div>
+          <div class="paxis" id="paxis"></div>
+          <div class="ends" id="pends"></div>
+${PRICE_LEGEND}
+        </div>
+      </ha-card>`;
+    this._built = true;
+  }
+
+  _update() {
+    if (!this._hass || !this._built) return;
+    const st = this._hass.states[this._config.prices];
+    const hours =
+      (st && Array.isArray(st.attributes.hours) && st.attributes.hours) || [];
+    const big = this.querySelector("#pnow");
+    const sub = this.querySelector("#psub");
+
+    if (!hours.length) {
+      big.textContent = "—";
+      // which of the two it is; "no chart" on its own is not an answer
+      sub.textContent = st
+        ? "Nog geen prijzen ontvangen."
+        : "Prijssensor niet gevonden — controleer de kaartinstelling.";
+      for (const id of ["#plot", "#paxis", "#pends"]) {
+        this.querySelector(id).innerHTML = "";
+      }
+      return;
+    }
+
+    drawPrices(this.querySelector("#plot"), this.querySelector("#paxis"), hours);
+
+    const s = priceSummary(hours);
+    big.textContent = s.current ? `${s.current.value.toFixed(3)} €/kWh` : "—";
+    big.style.color = s.current
+      ? PRICE_COLOUR[PRICE_COLOUR[s.current.role] ? s.current.role : "normal"]
+      : "var(--primary-text-color)";
+    sub.textContent = s.current
+      ? `nu — ${PRICE_SAYS[s.current.role] || ""}, tot ${hhmm(s.current.end)}`
+      : "buiten de gepubliceerde uren";
+    this.querySelector("#pends").innerHTML =
+      `<span><span class="muted">laagste</span> <b>${s.low.value.toFixed(3)}</b>` +
+      ` <span class="muted">om ${hhmm(s.low.start)}</span></span>` +
+      `<span><span class="muted">hoogste</span> <b>${s.high.value.toFixed(3)}</b>` +
+      ` <span class="muted">om ${hhmm(s.high.start)}</span></span>`;
+  }
+}
+
+customElements.define(
+  "battery-management-prices-card",
+  BatteryManagementPricesCard
+);
+
+window.customCards.push({
+  type: "battery-management-prices-card",
+  name: "Battery Management Prices",
+  description:
+    "Today's electricity prices per hour, with the cheap and dear ones marked.",
+  preview: false,
+});

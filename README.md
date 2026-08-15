@@ -260,6 +260,29 @@ type: custom:battery-management-card
 prices: sensor.battery_management_plan
 ```
 
+### A prices-only card
+
+For a dashboard that just wants to know whether to run the dishwasher, there is
+a second card: **Add card → "Battery Management Prices"**. It fills itself in.
+Current price large at the top, the same chart underneath, and the cheapest and
+dearest hour of the day with the times they fall.
+
+### Wiring it into the Energy dashboard
+
+*Settings → Dashboards → Energy → Grid consumption → **Use an entity with
+current price*** and pick **Current price**. That is the all-in price, which is
+what import is billed at.
+
+**Export is a different number.** Energy tax and VAT are not paid back to you,
+so pointing export compensation at the same entity overstates what you earn —
+and a wrong figure on an energy dashboard looks exactly like a right one. Use
+**Market price** instead, which is the exchange component on its own.
+
+What your supplier actually pays back is calculated *from* that, with their own
+fee or deduction on top. This integration does not know your contract and does
+not guess at it: if Frank deducts a fixed amount per kWh, a static rate or a
+template sensor built on Market price will be closer than either raw number.
+
 ## Staying inside the main fuse
 
 The control loop regulates the household **total**. The packs are
@@ -431,6 +454,7 @@ capped — that would be throwing sun away.
 | **Fast charge duration** | How long a *fast charge* would take from now — at full power, which is what the be-full-by blueprint triggers. Slowest pack, since they charge in parallel. Its `at_current_rate_minutes` attribute answers the other question: how long at the rate being commanded right now, which on solar surplus alone is far longer. | the charge time has not been measured |
 | **Solar remaining** | Sun still expected today. Its attributes break down every forecast sensor separately, so "0 kWh" can be told apart from a sensor that is not reading. | no forecast sensors configured |
 | **Charge ceiling** | How full it is worth buying to: 100 % − remaining sun ÷ capacity, within your two bounds. | the charge time has not been measured |
+| **Market price** | The exchange component of this hour, without tax or markup. For the Energy dashboard's *export compensation* — see below. | not on the direct route |
 | **Current price** | What this hour costs, in EUR/kWh. Its attributes say which decision the hour belongs to, when it changes, and what the next one is. | no prices available |
 | **Plan** | Today's cheap and dear hours with their prices, plus the numbers the ceiling was computed from, all in attributes. Its `hours` attribute is the whole series, each slot carrying the `role` it belongs to — `cheap`, `dear` or `normal` — which is what the card's chart is drawn from. | never |
 | **Fuse headroom** | Amps still available on **the busiest single leg** — not a total, and not per leg. It is the one that would trip first; `tightest_phase` in the attributes says which. Measured against the usable limit (the fuse less your margin), so the margin is still there underneath. Per-leg detail — `amps` through the fuse, `amps_without_us`, headroom, and which packs sit on it — is in the attributes. | no per-phase sensors configured |

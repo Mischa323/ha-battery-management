@@ -33,6 +33,7 @@ async def async_setup_entry(
             ChargeCeilingSensor(coordinator, entry),
             PlanSensor(coordinator, entry),
             CurrentPriceSensor(coordinator, entry),
+            MarketPriceSensor(coordinator, entry),
             GridObservedSensor(coordinator, entry),
             GridUsedSensor(coordinator, entry),
             OtherControllerSensor(coordinator, entry),
@@ -350,6 +351,33 @@ class CurrentPriceSensor(_BaseSensor):
         # the role is the same one the chart colours by, so a dashboard never
         # has to invent its own idea of "expensive"
         return {k: v for k, v in now.items() if k != "price"}
+
+
+class MarketPriceSensor(_BaseSensor):
+    """The exchange price this hour, without tax or markup.
+
+    For the Energy dashboard: import is billed all-in, export is not, so the
+    two want different entities. What a supplier pays back is calculated from
+    this - check your own contract for what they add or take off.
+    """
+
+    _attr_name = "Market price"
+    _attr_native_unit_of_measurement = "EUR/kWh"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_suggested_display_precision = 3
+    _attr_icon = "mdi:transmission-tower-export"
+
+    def __init__(self, coordinator, entry) -> None:
+        super().__init__(coordinator, entry)
+        self._attr_unique_id = f"{entry.entry_id}_market_price"
+
+    @property
+    def available(self) -> bool:
+        return self.coordinator.current_market_price() is not None
+
+    @property
+    def native_value(self) -> float | None:
+        return self.coordinator.current_market_price()
 
 
 class UnitTargetSensor(_BaseSensor):

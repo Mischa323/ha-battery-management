@@ -85,6 +85,7 @@ def parse_frank(payload: dict) -> dict:
         return {}
 
     prices = []
+    market_prices = []
     for row in rows:
         if not isinstance(row, dict):
             continue
@@ -98,13 +99,21 @@ def parse_frank(payload: dict) -> dict:
             if isinstance(value, (int, float)):
                 total += float(value)
         slot = {"from": start, "price": round(total, 6)}
+        bare = {"from": start, "price": round(float(market), 6)}
         if row.get("till"):
-            slot["till"] = row["till"]
+            slot["till"] = bare["till"] = row["till"]
         prices.append(slot)
+        market_prices.append(bare)
 
-    # the same key an ordinary price sensor would publish, so the shape-based
-    # parser handles it and this module needs no special case anywhere else
-    return {"prices": prices} if prices else {}
+    # `prices` is the key an ordinary price sensor would publish, so the
+    # shape-based parser handles it with no special case anywhere else.
+    #
+    # `market_prices` rides alongside and is deliberately NOT one of the keys
+    # that parser looks at: it is the exchange component on its own, which is
+    # what export is settled against. Paying tax on power you sold back would
+    # be a strange arrangement, so the all-in price is the wrong number there -
+    # and a wrong number on an energy dashboard looks exactly like a right one.
+    return {"prices": prices, "market_prices": market_prices} if prices else {}
 
 
 #: key -> (build the request, read the answer)

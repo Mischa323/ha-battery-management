@@ -9,7 +9,6 @@ globalThis.window = globalThis;
 globalThis.customElements = { define() {} };
 globalThis.HTMLElement = class {};
 globalThis.console.info = () => {};
-const mod = new Function(src + "\nreturn BatteryManagementCard;")();
 
 const P = "sensor.battery_management_";
 const entities = [
@@ -29,7 +28,10 @@ const check = (name, cond, got) => {
   else console.log("ok  ", name);
 };
 
-const cfg = mod.getStubConfig({ states: {} }, entities);
+const [Manage, Prices] = new Function(
+  src + ";return [BatteryManagementCard, BatteryManagementPricesCard];"
+)();
+const cfg = Manage.getStubConfig({ states: {} }, entities);
 check("type", cfg.type === "custom:battery-management-card", cfg.type);
 check("setpoint", cfg.setpoint === `${P}setpoint`, cfg.setpoint);
 check("chart wired to the plan", cfg.prices === `${P}plan`, cfg.prices);
@@ -41,13 +43,20 @@ check("no soc entity guessed", cfg.units?.every((u) => !u.soc), cfg.units);
 check("phase sensor not mistaken for a unit", cfg.units?.length === 2, cfg.units);
 
 // a site whose device was renamed, and one with nothing installed
-const renamed = mod.getStubConfig({ states: {} }, ["sensor.accus_setpoint", "sensor.accus_plan"]);
+const renamed = Manage.getStubConfig({ states: {} }, ["sensor.accus_setpoint", "sensor.accus_plan"]);
 check("renamed device still resolves", renamed.prices === "sensor.accus_plan", renamed);
-const empty = mod.getStubConfig({ states: {} }, ["sensor.something_else"]);
+const empty = Manage.getStubConfig({ states: {} }, ["sensor.something_else"]);
 check("nothing found -> bare config", Object.keys(empty).length === 1, empty);
 // and nothing is written that does not exist
-const partial = mod.getStubConfig({ states: {} }, [`${P}setpoint`]);
+const partial = Manage.getStubConfig({ states: {} }, [`${P}setpoint`]);
 check("no dangling entities", !partial.enable && !partial.prices, partial);
+
+// the prices-only card needs nothing but the plan
+const pc = Prices.getStubConfig({ states: {} }, entities);
+check("prices card type", pc.type === "custom:battery-management-prices-card", pc);
+check("prices card finds the plan", pc.prices === P + "plan", pc);
+const bare = Prices.getStubConfig({ states: {} }, ["sensor.other"]);
+check("prices card without a plan", !bare.prices, bare);
 
 console.log(fails ? `\n${fails} FAILED` : "\nstub config checks pass");
 process.exit(fails ? 1 : 0);
