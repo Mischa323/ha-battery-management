@@ -955,26 +955,35 @@ class BatteryCoordinator:
             slots, now, self._expensive_hours, PRICE_WINDOW_HOURS
         ) if slots else []
 
-        # The whole series, each slot carrying the decision it belongs to. The
-        # role is computed here rather than left to a dashboard picking a
-        # threshold: "cheap" has to mean the hours this will actually buy on,
-        # not the ones somebody's card thought looked low.
+        # The whole day, not just what is left of it. A chart that starts at
+        # "now" shows nothing of today by the evening, which is the opposite of
+        # what somebody asking for today's prices wants.
+        #
+        # The roles are computed here rather than left to a dashboard picking a
+        # threshold: "cheap" has to mean the hours this will actually buy on.
+        # An hour that has already passed gets no role at all - the ranking is
+        # forward-looking, so claiming one would be inventing a decision that
+        # was never made.
         cheap_at = {slot.start for slot in cheapest}
         dear_at = {slot.start for slot in dearest}
+        day_start = dt_util.as_local(now).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
         hours = [
             {
                 "start": slot.start.isoformat(),
                 "end": slot.end.isoformat(),
                 "price": round(slot.price, 4),
+                "past": slot.end <= now,
                 "role": (
-                    "cheap" if slot.start in cheap_at
+                    "past" if slot.end <= now
+                    else "cheap" if slot.start in cheap_at
                     else "dear" if slot.start in dear_at
                     else "normal"
                 ),
             }
-            for slot in (
-                slots_in_window(slots, now, PRICE_WINDOW_HOURS) if slots else []
-            )
+            for slot in sorted(slots or [], key=lambda s: s.start)
+            if slot.end > day_start
         ]
 
         return {

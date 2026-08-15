@@ -139,6 +139,9 @@ def _install_homeassistant_stub() -> None:
     dt.utcnow = lambda: datetime.now(timezone.utc)
     # the real one is local time; tests that care pin it themselves
     dt.now = lambda: datetime.now(timezone.utc)
+    # the real one converts to the configured zone; the stub has none,
+    # so tests that care about a day boundary pin the clock themselves
+    dt.as_local = lambda value: value
 
     # bind submodules as attributes too, so `from homeassistant.util import dt`
     # resolves without touching the real import machinery

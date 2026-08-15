@@ -237,7 +237,10 @@ page — a device page lists entities, and a chart is not one.
 It fills itself in: the switches, the packs, the meter and the price chart are
 all found from the entities that are there. No YAML.
 
-It draws one bar per hour, coloured by the decision that hour belongs to. Green
+It draws **the whole day** — one bar per hour, from midnight, coloured by the
+decision that hour belongs to. Hours that have already gone are drawn faint and
+carry no colour of their own: the ranking looks forward, so calling a past hour
+"cheap" would be inventing a decision that was never made. Green
 is **not** "a low number" — it is the hours the coordinator will actually buy
 on, and red the hours it is keeping the charge for. Those are computed by the
 integration, so the chart cannot draw a different plan than the one being

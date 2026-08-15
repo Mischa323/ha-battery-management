@@ -25,11 +25,15 @@ const PRICE_COLOUR = {
   cheap: "#089408",
   dear: "#e07070",
   normal: "var(--disabled-text-color, #8a8a8a)",
+  // hours already gone: drawn so the shape of the day is there, but without
+  // claiming a decision. The ranking looks forward, so they never had one.
+  past: "var(--disabled-text-color, #8a8a8a)",
 };
 const PRICE_SAYS = {
   cheap: "goedkoop, hier wordt geladen",
   dear: "duur, hiervoor wordt bewaard",
   normal: "gewoon de meter volgen",
+  past: "geweest",
 };
 
 /** Chart styles, shared by both cards. */
@@ -42,6 +46,7 @@ const PRICE_CSS = `
           .pbar { position:absolute; left:0; right:0; }
           .pbar.up { border-radius:4px 4px 0 0; }
           .pbar.down { border-radius:0 0 4px 4px; }
+  .pbar.past { opacity:.35; }
           .slot.now .pbar { outline:2px solid var(--primary-text-color); outline-offset:1px; }
           .paxis { display:flex; gap:2px; margin-top:4px; font-size:.72em;
                    color: var(--secondary-text-color); }
@@ -57,6 +62,7 @@ const PRICE_LEGEND = `
               <span><i style="background:${PRICE_COLOUR.cheap}"></i>Goedkoop — hier wordt geladen</span>
               <span><i style="background:${PRICE_COLOUR.dear}"></i>Duur — hiervoor wordt bewaard</span>
               <span><i style="background:${PRICE_COLOUR.normal}"></i>Verder de meter volgen</span>
+              <span><i style="background:${PRICE_COLOUR.past};opacity:.35"></i>Geweest</span>
             </div>`;
 
 const hhmm = (iso) => String(iso).slice(11, 16);
@@ -81,6 +87,7 @@ function priceBars(hours) {
       const role = PRICE_COLOUR[h.role] ? h.role : "normal";
       return {
         role,
+        past: role === "past",
         price,
         bottom: zero + (price < 0 ? -size : 0),
         height: size,
@@ -104,8 +111,9 @@ function drawPrices(plot, axis, hours) {
       .map(
         (b) =>
           `<div class="slot${b.current ? " now" : ""}" title="${esc(b.label)}">` +
-          `<div class="pbar ${b.down ? "down" : "up"}" style="bottom:${b.bottom}%;` +
-          `height:${b.height}%;background:${PRICE_COLOUR[b.role]}"></div></div>`
+          `<div class="pbar ${b.down ? "down" : "up"}${b.past ? " past" : ""}" ` +
+          `style="bottom:${b.bottom}%;height:${b.height}%;` +
+          `background:${PRICE_COLOUR[b.role]}"></div></div>`
       )
       .join("");
   if (!axis) return;

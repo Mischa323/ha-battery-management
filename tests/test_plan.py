@@ -210,7 +210,7 @@ def test_each_hour_says_which_decision_it_belongs_to(planned):
 
     roles = {h["role"] for h in system.coordinator.plan()["hours"]}
 
-    assert roles <= {"cheap", "dear", "normal"}
+    assert roles <= {"cheap", "dear", "normal", "past"}
     assert "cheap" in roles and "dear" in roles
 
 
@@ -279,3 +279,36 @@ def test_no_prices_means_no_current_price_rather_than_zero(build_system):
     system = build_system(grid=0)
 
     assert system.coordinator.current_price() is None
+
+
+# -- the whole day, not just what is left of it --------------------------------
+
+
+def test_the_series_starts_at_midnight_not_at_now(planned):
+    """A chart that starts at "now" shows nothing of today by the evening,
+    which is the opposite of what "today's prices" means."""
+    system = planned()          # the fixture pins the clock at 12:00
+
+    hours = system.coordinator.plan()["hours"]
+
+    assert hours[0]["start"].endswith("T00:00:00+00:00")
+    assert len([h for h in hours if h["past"]]) == 12
+
+
+def test_an_hour_that_has_passed_claims_no_decision(planned):
+    """The ranking looks forward, so calling a past hour "cheap" would be
+    inventing a decision that was never made."""
+    system = planned()
+
+    past = [h for h in system.coordinator.plan()["hours"] if h["past"]]
+
+    assert past
+    assert all(h["role"] == "past" for h in past)
+
+
+def test_the_hours_still_to_come_keep_their_roles(planned):
+    system = planned()
+
+    ahead = [h for h in system.coordinator.plan()["hours"] if not h["past"]]
+
+    assert {h["role"] for h in ahead} >= {"cheap", "dear"}
