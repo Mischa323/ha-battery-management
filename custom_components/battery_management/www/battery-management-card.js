@@ -65,7 +65,26 @@ const PRICE_LEGEND = `
               <span><i style="background:${PRICE_COLOUR.past};opacity:.35"></i>Geweest</span>
             </div>`;
 
-const hhmm = (iso) => String(iso).slice(11, 16);
+/**
+ * A published timestamp, shown in the reader's own clock.
+ *
+ * Slicing the ISO string was two hours wrong for half of Europe: Frank
+ * publishes in UTC, so midnight arrived on the chart labelled 22:00 and the
+ * evening peak looked like an afternoon one. Parse it, then format it.
+ */
+const hhmm = (iso) => {
+  const at = new Date(iso);
+  if (isNaN(at.getTime())) return String(iso).slice(11, 16);
+  return `${String(at.getHours()).padStart(2, "0")}:${String(
+    at.getMinutes()
+  ).padStart(2, "0")}`;
+};
+
+/** Comparing ISO strings as text only works while every one carries the same
+ *  offset. A sensor publishing +02:00 alongside our own Z would sort wrong, so
+ *  moments are compared as moments. */
+const at = (iso) => new Date(iso).getTime();
+const covers = (slot, moment) => at(slot.start) <= moment && moment < at(slot.end);
 
 /**
  * Bar geometry. The baseline is zero and negative prices hang below it rather
@@ -78,7 +97,7 @@ function priceBars(hours) {
   const bottom = Math.min(0, ...prices);
   const span = top - bottom || 1;
   const zero = ((0 - bottom) / span) * 100;
-  const now = new Date().toISOString();
+  const now = Date.now();
   return {
     zero,
     bars: hours.map((h) => {
@@ -92,7 +111,7 @@ function priceBars(hours) {
         bottom: zero + (price < 0 ? -size : 0),
         height: size,
         down: price < 0,
-        current: h.start <= now && now < h.end,
+        current: covers(h, now),
         label: `${hhmm(h.start)} — ${price.toFixed(3)} €/kWh — ${PRICE_SAYS[role]}`,
       };
     }),
@@ -127,11 +146,11 @@ function drawPrices(plot, axis, hours) {
 /** The numbers worth reading out loud: now, the extremes, and when they fall. */
 function priceSummary(hours) {
   if (!hours.length) return null;
-  const now = new Date().toISOString();
+  const now = Date.now();
   const priced = hours.map((h) => ({ ...h, value: Number(h.price) || 0 }));
   const low = priced.reduce((a, b) => (b.value < a.value ? b : a));
   const high = priced.reduce((a, b) => (b.value > a.value ? b : a));
-  const current = priced.find((h) => h.start <= now && now < h.end);
+  const current = priced.find((h) => covers(h, now));
   return { current, low, high };
 }
 

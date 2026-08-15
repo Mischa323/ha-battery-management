@@ -365,7 +365,20 @@ possible, and they gate section A.
     laid out as that repository expects; it stays legible down to 32 px. The
     pull request is a public contribution under the owner's name, so the owner
     submits it. The HACS step keeps `ignore: brands` until it lands.
-17. **Card rendering unverified** - and the price chart added in 0.6.1 raises
+17. ~~**Card rendering unverified**~~ - **seen at last, 2026-08-16.** It lays
+    out fine: labels do not collide at dashboard width, green and red are
+    distinguishable, the summary line reads well. Two things the render caught
+    that no test had:
+    - **The chart spoke UTC.** `hhmm` sliced the ISO string instead of parsing
+      it, so midnight was labelled 22:00 and the evening peak looked like an
+      afternoon one. Two hours wrong for half of Europe, and invisible in the
+      arithmetic tests because they never asked what a slot was *called*.
+    - **Moments were compared as text.** Fine while everything carries `Z`, as
+      Frank does, but a sensor publishing `+02:00` would have sorted wrong and
+      lost the "now" marker entirely - a latent break in the third-party route.
+    `tests/card/clock.mjs` pins both against a real payload under a real zone.
+
+17b. **Old note:** card rendering unverified - and the price chart added in 0.6.1 raises
     the stakes: its geometry is checked (negative prices hang below the zero
     line rather than being clipped) but nobody has looked at how it lays out.
     The colours were validated rather than eyeballed - green/red is the worst

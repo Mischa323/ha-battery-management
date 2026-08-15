@@ -118,6 +118,52 @@ python -m pytest
 CI runs the suite both ways — stubbed and against a real Home Assistant — plus
 hassfest and HACS validation.
 
+## The two cards, and where to find them
+
+The integration ships two Lovelace cards and registers them itself, so there is
+no manual resource step:
+
+| Card | What it is for |
+| --- | --- |
+| **Battery Management Card** | The control panel: on/off, fast charge, state of charge per pack, and the price chart underneath. |
+| **Battery Management Prices** | Only the prices — current price large, today's bars, and the cheapest and dearest hour with their times. |
+
+### Adding one
+
+Edit the dashboard → **+ Add card** → the **By card** tab → type `battery`.
+
+That tab is the one that matters, and it is worth saying why: **By entity**
+builds a standard card around an entity you pick, and a custom card is not an
+entity — it can never appear there, however hard you look. The **By card** tab
+may also open on *Suggestions* for whatever was selected; either search in it,
+or use the **"Can't find the card you want? → Browse all cards"** link at the
+bottom, where custom cards are grouped at the end.
+
+Pick either card and press **Save**. They fill themselves in: the switches, the
+packs, the meter and the price chart are all found from the entities that exist,
+so there is no YAML to write. Both can sit on the same dashboard.
+
+### If the card is not in that list
+
+Almost always a stale script. The browser caches the card file hard, so an
+update can appear to do nothing — the old script keeps running, and a card
+added in a later release is simply not in it.
+
+1. **Check the version** in HACS. Cards appeared in `0.8.0`; the cache fix that
+   makes updates take effect at all landed in `0.8.3`. Below that, one manual
+   hard refresh (Ctrl+Shift+R) is needed after each update.
+2. **Check the file is served.** Open
+   `http://<your-ha>:8123/battery_management/battery-management-card.js`
+   directly. You should get JavaScript; search it for `prices-card` to confirm
+   it is the current one. A 404 means the static path was not registered — the
+   log will say so, and the fallback is to add that URL by hand under
+   *Settings → Dashboards → Resources*.
+3. **Restart Home Assistant**, not just reload the integration. The card is
+   registered during setup.
+
+From `0.8.3` the script URL carries the version, so an update busts the cache on
+its own and none of this should be needed again.
+
 ## Management card
 
 The integration **ships and auto-registers** a Lovelace card, so after install
@@ -233,9 +279,8 @@ in the diagnostics say which of those is happening.
 The chart lives on the card that ships with the integration, not on the device
 page — a device page lists entities, and a chart is not one.
 
-**Add card → the *By card* tab → search "Battery Management"** (the *card* tab, not *by entity*).
-It fills itself in: the switches, the packs, the meter and the price chart are
-all found from the entities that are there. No YAML.
+Added the same way as the other card — see **The two cards, and where to find
+them** above.
 
 It draws **the whole day** — one bar per hour, from midnight, coloured by the
 decision that hour belongs to. Hours that have already gone are drawn faint and
@@ -284,7 +329,7 @@ never be able to disagree about what "cheap" meant.
 ### A prices-only card
 
 For a dashboard that just wants to know whether to run the dishwasher, there is
-a second card: **Add card → "Battery Management Prices"**. It fills itself in.
+a second card: **Battery Management Prices**.
 Current price large at the top, the same chart underneath, and the cheapest and
 dearest hour of the day with the times they fall.
 
