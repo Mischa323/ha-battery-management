@@ -39,6 +39,7 @@ custom_components/battery_management/
   __init__.py          # setup/unload; reverts units to self_consumption on unload
   const.py             # domain, config keys, defaults, mode/flow option strings
   coordinator.py       # BatteryCoordinator: the control loop + _distribute()
+  suppliers.py         # fetch prices ourselves (Frank Energie); pure parsing
   phases.py            # pure: per-leg fuse room, and attributing a probe to a leg
   config_flow.py       # wizard: grid sensor + N units + tunables; options flow
   switch.py            # "Coordinator enabled" (kill-switch), "Fast charge"
@@ -429,7 +430,40 @@ possible, and they gate section A.
       phases have to be typed in by hand until go-live, or the first probe
       happens the moment it goes live - which is what happened here.
 
-### G. Done
+### G. Prices without a second integration
+
+19. ~~**Fetch prices without a second integration**~~ - **done.** Asked for by
+    the owner when the site moved to Frank Energie. The sensor route stays the
+    default and stays supplier-agnostic; this is the other half, for a house
+    where installing another custom integration is the obstacle.
+
+    Structured as the owner proposed: **first which kind of source, then which
+    supplier or which sensor**. `CONF_PRICE_SOURCE` is `none` / a supplier key /
+    `entity`, and only the entity route gets a second screen - asking "which
+    sensor" after "fetch it yourself" would be a form with one dead field on it.
+    An entry made before the choice existed has a sensor and no source, which is
+    exactly what `entity` means, so nothing needs migrating.
+
+    `suppliers.py` keeps the HTTP call apart from the arithmetic: `frank_request`
+    builds the GraphQL body, `parse_frank` reads the answer, and both are pure
+    and tested without a network. The result is handed back as
+    `{"prices": [...]}` - a shape `parse_forecast` already understood - so
+    nothing downstream knows where it came from. That seam is what keeps this
+    from becoming per-supplier support creeping through the whole integration.
+
+    Uses the **all-in** price, not the exchange price. Ranking is unaffected
+    (tax and markup are a fixed adder, VAT a fixed multiplier - a monotonic
+    transform cannot reorder anything), but the number shown is then what is
+    actually paid. That closes the open question under 9.
+
+    Still `requirements: []` - the HTTP goes through Home Assistant's own
+    `async_get_clientsession`.
+
+    Open: the endpoint has only ever been called from tests. The first real
+    fetch is the one to watch, and `prices_error` in the diagnostics is where it
+    will say so.
+
+### H. Done
 
 - **Per-unit observability.** `coordinator.unit_status` feeds a per-unit
   `binary_sensor` (connectivity) and a per-unit target `sensor` (signed,

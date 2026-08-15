@@ -14,6 +14,7 @@ from homeassistant import config_entries  # noqa: E402
 from homeassistant.core import HomeAssistant  # noqa: E402
 from homeassistant.data_entry_flow import FlowResultType  # noqa: E402
 
+from custom_components.battery_management.suppliers import SOURCE_ENTITY, SUPPLIER_FRANK
 from custom_components.battery_management.const import (  # noqa: E402
     CONF_CHARGE_LIMIT,
     CONF_DISCHARGE_LIMIT,
@@ -30,6 +31,7 @@ from custom_components.battery_management.const import (  # noqa: E402
     CONF_UNIT_COUNT,
     CONF_UNIT_NAME,
     CONF_PHASE_DETECT,
+    CONF_PRICE_SOURCE,
     CONF_PHASE_LIMIT_AMPS,
     CONF_PHASE_MARGIN,
     CONF_PHASE_PROBE_SECONDS,
@@ -407,3 +409,60 @@ async def test_clearing_the_phase_sensors_switches_the_protection_off(
     await hass.async_block_till_done()
 
     assert not entry.options.get(CONF_PHASE_SENSORS)
+
+
+async def test_options_price_source_frank_needs_no_second_screen(hass: HomeAssistant):
+    """Asking which sensor after "fetch it yourself" would be a dead field."""
+    entry = await _create_entry(hass)
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {"next_step_id": "dynamic"}
+    )
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {CONF_PRICE_SOURCE: SUPPLIER_FRANK}
+    )
+    await hass.async_block_till_done()
+
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert entry.options[CONF_PRICE_SOURCE] == SUPPLIER_FRANK
+    assert not entry.options.get(CONF_PRICE_SENSOR)
+
+
+async def test_options_price_source_entity_asks_which_sensor(hass: HomeAssistant):
+    entry = await _create_entry(hass)
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {"next_step_id": "dynamic"}
+    )
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {CONF_PRICE_SOURCE: SOURCE_ENTITY}
+    )
+    assert result["step_id"] == "price_entity"
+
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {CONF_PRICE_SENSOR: "sensor.electricity_price"}
+    )
+    await hass.async_block_till_done()
+
+    assert entry.options[CONF_PRICE_SENSOR] == "sensor.electricity_price"
+
+
+async def test_switching_to_a_supplier_clears_the_old_sensor(hass: HomeAssistant):
+    """Otherwise a stale entity sits in the options looking like it is in use."""
+    entry = await _create_entry(hass)
+    hass.config_entries.async_update_entry(
+        entry, options={CONF_PRICE_SENSOR: "sensor.old_prices"}
+    )
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {"next_step_id": "dynamic"}
+    )
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {CONF_PRICE_SOURCE: SUPPLIER_FRANK}
+    )
+    await hass.async_block_till_done()
+
+    assert not entry.options.get(CONF_PRICE_SENSOR)

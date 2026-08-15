@@ -146,7 +146,7 @@
         "title": "Dynamic tariff",
         "description": "Optional. Without a price sensor the Dynamic mode is not offered and nothing else changes. Exchange (day-ahead) prices are enough: tax and markup shift every hour equally, so the cheap-to-expensive order is the same.",
         "data": {
-          "price_sensor": "Price sensor",
+          "price_source": "Where prices come from",
           "cheap_hours": "Hours a day to buy on",
           "charge_below_soc": "Only buy below this state of charge (%)",
           "solar_forecast_max": "Fallback: skip buying above this many kWh expected",
@@ -156,7 +156,7 @@
           "solar_produced_sensor": "Produced so far today"
         },
         "data_description": {
-          "price_sensor": "Any integration publishing upcoming prices. Exchange prices are enough: tax and markup shift every hour equally, so the cheap-to-expensive order is unchanged. Without one, Dynamic mode is not offered.",
+          "price_source": "Fetching them ourselves saves installing a second custom integration, which matters at a house you do not live in. Frank Energie publishes its market prices openly, so no login is needed - and the price used is the all-in one, including tax and markup, not the bare exchange price. Pick the sensor option for any other supplier: Nord Pool, ENTSO-e, EnergyZero, Tibber and the rest are all read by shape.",
           "cheap_hours": "How many of the coming day's cheapest slots may be used to charge from the grid. Ranked over a rolling 24 hours, not over everything published.",
           "charge_below_soc": "Fallback ceiling, used only while the charge time is unmeasured. Once it is, the solar-aware ceiling replaces it.",
           "solar_forecast_max": "Only used while the charge time is unmeasured, since without a capacity there is no way to turn kWh into a percentage. 0 ignores the forecast.",
@@ -210,6 +210,16 @@
           "phase_detect": "Nothing in the Modbus data says how the cables were run, so it is measured: one pack is commanded while the others hold at 0, and the leg that moves with it is the answer. Takes about a minute per pack, during which the packs do not regulate. Switch it off if you would rather type the phases in yourself on each unit's page.",
           "phase_redetect": "On by default: an integration that has been down cannot vouch for what changed while it was. Switch it off once the wiring is known and stable - otherwise every restart parks the packs for a minute.",
           "phase_probe_seconds": "How long one pack is held at power before the legs are read. Longer is more reliable and more disruptive; the packs take a few seconds to respond and the meter a few more."
+        }
+      },
+      "price_entity": {
+        "title": "Which price sensor",
+        "description": "Any sensor that publishes upcoming prices will do. The shapes are recognised rather than the integrations, so changing supplier means pointing this somewhere else.\n\nLeave it empty and Dynamic mode is simply not offered; everything else keeps working exactly as it does now.",
+        "data": {
+          "price_sensor": "Price sensor"
+        },
+        "data_description": {
+          "price_sensor": "Its attributes must hold a list of upcoming prices - most integrations publish one under `prices`, `raw_today` or similar. A shape that is not recognised gives an empty forecast, which disables buying rather than guessing at a price. Exchange prices are fine: tax and markup shift every hour equally, so the cheap-to-expensive order does not change."
         }
       }
     },
@@ -317,6 +327,15 @@
     "hand_back_impossible": {
       "title": "{unit} cannot be handed back to {mode}",
       "description": "**{unit}** is set to return to `{mode}` when the coordinator is switched off or Home Assistant unloads. That pack does not offer that option — it only offers: {options}.\n\nThe command would simply be refused, and these packs have no watchdog: one would keep running its last instruction indefinitely, which is exactly what the safe revert exists to prevent. Dry run never reveals this, because nothing is written.\n\nA pack without its own P1 meter has no self-consumption mode at all. For that one, **leave the hand-back empty**: it is then commanded 0 W and its mode is left alone, which is a safe resting state.\n\nFix it under **Configure → Battery unit entities**, walking through to the screen that asks what this unit's modes mean."
+    }
+  },
+  "selector": {
+    "price_source": {
+      "options": {
+        "none": "No prices (Dynamic mode is not offered)",
+        "frank_energie": "Frank Energie — fetched directly, no account needed",
+        "entity": "A sensor from another integration"
+      }
     }
   }
 }

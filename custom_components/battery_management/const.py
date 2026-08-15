@@ -44,10 +44,23 @@ CONF_FULL_CHARGE_MINUTES = "full_charge_minutes"  # empty -> full at max power
 DEFAULT_FULL_CHARGE_MINUTES = 0
 
 # --- Dynamic tariff ----------------------------------------------------------
-# One entity picker, not per-supplier support: any sensor publishing upcoming
-# prices works, and a site can change supplier by pointing somewhere else.
-# Without a price sensor the Dynamic mode is not even offered.
+# Where prices come from: a sensor somebody else's integration publishes, or
+# straight from a supplier that makes them public. The sensor route stays the
+# default and is what makes this supplier-agnostic; the direct route exists
+# because "first install another custom integration" is a real obstacle at a
+# site the maintainer does not live at. Either way the Dynamic mode is not
+# offered until one of the two is configured.
+CONF_PRICE_SOURCE = "price_source"
 CONF_PRICE_SENSOR = "price_sensor"
+# Prices are published once or twice a day, so this is about noticing that
+# tomorrow has arrived, not about tracking anything.
+PRICE_REFRESH_MINUTES = 60
+# Seconds. A supplier that is slow to answer must not hold up a control tick.
+PRICE_TIMEOUT = 20
+# A fetched forecast older than this is dropped rather than ranked on. In
+# practice the slots expire by themselves - the ranking window starts at now -
+# but a stale cache should not linger in the diagnostics looking authoritative.
+MAX_PRICE_AGE = 36 * 3600
 CONF_CHEAP_HOURS = "cheap_hours"                # hours per day to grid-charge on
 CONF_CHARGE_BELOW_SOC = "charge_below_soc"      # only top up when emptier than this
 # Several sensors, summed: Forecast.Solar publishes one per roof plane, and the

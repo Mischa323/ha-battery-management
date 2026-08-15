@@ -19,6 +19,7 @@ from collections import deque
 from dataclasses import dataclass
 
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.helpers.storage import Store
@@ -31,6 +32,7 @@ from .phases import (
     room,
     unit_ceilings,
 )
+from .suppliers import FETCHERS, SOURCE_ENTITY, SOURCE_NONE
 from .prices import cheapest_slots, dearest_slots, is_cheap_now, is_dear_now, parse_forecast
 from .const import (
     CONF_BIAS,
@@ -64,6 +66,7 @@ from .const import (
     CONF_EXTERNAL_TIMEOUT,
     CONF_FULL_CHARGE_MINUTES,
     CONF_PRICE_SENSOR,
+    CONF_PRICE_SOURCE,
     CONF_SOLAR_FORECAST_MAX,
     CONF_SHADOW_SIMULATE,
     CONF_SOLAR_FORECAST_SENSOR,
@@ -97,6 +100,8 @@ from .const import (
     DEFAULT_SHADOW_SIMULATE,
     DEFAULT_SOC_RESERVE,
     DEFAULT_SOLAR_FORECAST_MAX,
+    PRICE_REFRESH_MINUTES,
+    PRICE_TIMEOUT,
     PRICE_WINDOW_HOURS,
     DEFAULT_UNIT_MAX,
     DOMAIN,
@@ -104,6 +109,7 @@ from .const import (
     FALLBACK_DISCHARGE_LIMIT,
     FLOW_CHARGE,
     FLOW_DISCHARGE,
+    MAX_PRICE_AGE,
     MAX_SETPOINT_AGE,
     MODE_CHARGE_ONLY,
     MODE_DISCHARGE_ONLY,
@@ -259,6 +265,11 @@ class BatteryCoordinator:
             data.get(CONF_FULL_CHARGE_MINUTES, DEFAULT_FULL_CHARGE_MINUTES)
         )
         self._price_sensor: str | None = data.get(CONF_PRICE_SENSOR) or None
+        # entries made before suppliers could be asked directly have a sensor
+        # and no source, which is exactly what SOURCE_ENTITY means
+        self._price_source: str = data.get(CONF_PRICE_SOURCE) or (
+            SOURCE_ENTITY if self._price_sensor else SOURCE_NONE
+        )
         self._cheap_hours: float = float(
             data.get(CONF_CHEAP_HOURS, DEFAULT_CHEAP_HOURS)
         )
@@ -360,6 +371,11 @@ class BatteryCoordinator:
         # placement is retired the moment it goes offline
         self._was_online: dict[str, bool] = {u.name: False for u in self._units}
         self._unsub = None
+        self._unsub_prices = None
+        # what a supplier last told us, in the shape parse_forecast reads
+        self._supplier_prices: dict = {}
+        self.prices_fetched_at: float | None = None
+        self.prices_error: str | None = None
         # entities subscribe to this to refresh
         self._listeners: list = []
         # survives restarts and option changes (both of which reload the entry)
@@ -385,6 +401,15 @@ class BatteryCoordinator:
         self._unsub = async_track_time_interval(
             self.hass, self._async_tick, self._interval_timedelta()
         )
+        if self._price_source in FETCHERS:
+            from datetime import timedelta
+
+            await self.async_refresh_prices()
+            self._unsub_prices = async_track_time_interval(
+                self.hass,
+                self.async_refresh_prices,
+                timedelta(minutes=PRICE_REFRESH_MINUTES),
+            )
 
     # -- persisted state -----------------------------------------------------
     def _state_to_save(self) -> dict:
@@ -478,6 +503,9 @@ class BatteryCoordinator:
         if self._unsub:
             self._unsub()
             self._unsub = None
+        if self._unsub_prices:
+            self._unsub_prices()
+            self._unsub_prices = None
         # A probe left running would command a pack *after* the safe revert had
         # already let go of it, and per gotcha 1 that pack then holds power
         # indefinitely. Cancel first, revert second.
@@ -630,17 +658,83 @@ class BatteryCoordinator:
     # -- dynamic tariff ------------------------------------------------------
     @property
     def available_modes(self) -> list[str]:
-        """Dynamic is only offered once a price sensor is configured."""
-        return [*MODES, MODE_DYNAMIC] if self._price_sensor else list(MODES)
+        """Dynamic is only offered once prices can actually be had."""
+        return [*MODES, MODE_DYNAMIC] if self.prices_configured else list(MODES)
 
-    def _price_forecast(self):
-        """Upcoming price slots, or None when the sensor cannot be read."""
-        if not self._price_sensor:
+    @property
+    def price_source(self) -> str:
+        return self._price_source
+
+    @property
+    def prices_configured(self) -> bool:
+        """Is there anywhere for prices to come from at all?"""
+        if self._price_source in FETCHERS:
+            return True
+        return self._price_source == SOURCE_ENTITY and bool(self._price_sensor)
+
+    async def async_refresh_prices(self, _now=None) -> None:
+        """Ask the supplier what today and tomorrow cost.
+
+        Failure is not an error state to recover from: an unreachable supplier
+        means no forecast, which disables cheap-hour charging and leaves
+        grid-zero regulating exactly as it does without a dynamic contract.
+        The previous answer is kept - prices do not change retroactively, and
+        its slots expire on their own because the ranking window starts at now.
+        """
+        fetcher = FETCHERS.get(self._price_source)
+        if fetcher is None:
+            return
+        build, parse = fetcher
+        url, body = build(dt_util.now().date())
+        try:
+            session = async_get_clientsession(self.hass)
+            async with session.post(url, json=body, timeout=PRICE_TIMEOUT) as response:
+                response.raise_for_status()
+                payload = await response.json()
+        except Exception as err:  # noqa: BLE001 - a supplier is not our problem
+            self.prices_error = f"{type(err).__name__}: {err}"
+            _LOGGER.warning("Could not fetch prices from %s: %s", self._price_source, err)
+            self._notify()
+            return
+
+        parsed = parse(payload)
+        if not parsed:
+            # reached them and understood nothing: say so rather than keeping
+            # yesterday's answer around looking healthy
+            self.prices_error = "no prices in the response"
+            _LOGGER.warning("%s returned no usable prices", self._price_source)
+        else:
+            self._supplier_prices = parsed
+            self.prices_fetched_at = time.time()
+            self.prices_error = None
+            _LOGGER.debug(
+                "fetched %d price slots from %s",
+                len(parsed.get("prices", [])),
+                self._price_source,
+            )
+        self._notify()
+
+    def _price_attributes(self) -> dict | None:
+        """Whatever currently passes for a published price list."""
+        if self._price_source in FETCHERS:
+            if not self._supplier_prices or self.prices_fetched_at is None:
+                return None
+            if time.time() - self.prices_fetched_at > MAX_PRICE_AGE:
+                return None
+            return self._supplier_prices
+        if self._price_source != SOURCE_ENTITY or not self._price_sensor:
             return None
         state = self.hass.states.get(self._price_sensor)
         if state is None or state.state in UNAVAILABLE_STATES:
             return None
-        slots = parse_forecast(dict(state.attributes), dt_util.utcnow())
+        return dict(state.attributes)
+
+    def _price_forecast(self):
+        """Upcoming price slots, or None when there are none to be had."""
+        attributes = self._price_attributes()
+        if attributes is None:
+            return None
+        slots = parse_forecast(attributes, dt_util.utcnow())
         return slots or None
 
     def solar_remaining(self) -> float | None:
@@ -1118,6 +1212,7 @@ class BatteryCoordinator:
                 "unit_max_w": self._unit_ceiling,
                 "fast_charge_hold": self._fast_charge_hold,
                 "full_charge_minutes": self._full_charge_minutes,
+                "price_source": self._price_source,
                 "price_sensor": self._price_sensor,
                 "cheap_hours": self._cheap_hours,
                 "charge_below_soc": self._charge_below_soc,
@@ -1162,6 +1257,9 @@ class BatteryCoordinator:
                 "external_setpoint_w": self.external_setpoint,
                 "external_plan_age_s": self.external_plan_age(),
                 "external_timeout_min": self._external_timeout,
+                "prices_fetched_at": self.prices_fetched_at,
+                "prices_error": self.prices_error,
+                "price_slots": len((self._price_attributes() or {}).get("prices", [])),
                 "last_tick": self.last_tick.isoformat() if self.last_tick else None,
                 # the fuse protection, including the evidence behind each
                 # placement - a probe that guessed wrong is only findable here

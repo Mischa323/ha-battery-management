@@ -28,6 +28,7 @@ from .const import (
     CONF_EXTERNAL_TIMEOUT,
     CONF_FULL_CHARGE_MINUTES,
     CONF_PRICE_SENSOR,
+    CONF_PRICE_SOURCE,
     CONF_SOLAR_FORECAST_MAX,
     CONF_SHADOW_SIMULATE,
     CONF_DISCHARGE_ANYWAY_SOC,
@@ -83,6 +84,7 @@ from .const import (
     DOMAIN,
 )
 from .discovery import match_unit_entities
+from .suppliers import SOURCE_ENTITY, SOURCE_NONE, SUPPLIERS
 from .validate import validate_phases, validate_shadow, validate_unit
 
 _SENSOR = selector.EntitySelector(selector.EntitySelectorConfig(domain="sensor"))
@@ -204,10 +206,17 @@ def _dynamic_schema(defaults: dict) -> vol.Schema:
     unaffected."""
     return vol.Schema(
         {
-            vol.Optional(
-                CONF_PRICE_SENSOR,
-                description={"suggested_value": defaults.get(CONF_PRICE_SENSOR)},
-            ): _SENSOR,
+            vol.Required(
+                CONF_PRICE_SOURCE,
+                default=defaults.get(CONF_PRICE_SOURCE)
+                or (SOURCE_ENTITY if defaults.get(CONF_PRICE_SENSOR) else SOURCE_NONE),
+            ): selector.SelectSelector(
+                selector.SelectSelectorConfig(
+                    options=[SOURCE_NONE, *SUPPLIERS, SOURCE_ENTITY],
+                    translation_key="price_source",
+                    mode=selector.SelectSelectorMode.LIST,
+                )
+            ),
             vol.Optional(
                 CONF_CHEAP_HOURS,
                 default=defaults.get(CONF_CHEAP_HOURS, DEFAULT_CHEAP_HOURS),
@@ -289,6 +298,18 @@ def _phases_schema(defaults: dict) -> vol.Schema:
                     CONF_PHASE_PROBE_SECONDS, DEFAULT_PHASE_PROBE_SECONDS
                 ),
             ): _amount(10, 120, "s", step=5),
+        }
+    )
+
+
+def _price_entity_schema(defaults: dict) -> vol.Schema:
+    """The second half of the price question, when it is somebody else's sensor."""
+    return vol.Schema(
+        {
+            vol.Optional(
+                CONF_PRICE_SENSOR,
+                description={"suggested_value": defaults.get(CONF_PRICE_SENSOR)},
+            ): _SENSOR,
         }
     )
 
@@ -449,6 +470,7 @@ class BatteryManagementOptionsFlow(OptionsFlow):
         self._units: list[dict] = [dict(u) for u in entry.data.get(CONF_UNITS, [])]
         self._unit_index = 0
         self._pending_unit: dict = {}
+        self._pending_options: dict = {}
 
     async def async_step_init(self, user_input: dict | None = None) -> ConfigFlowResult:
         return self.async_show_menu(
@@ -470,18 +492,36 @@ class BatteryManagementOptionsFlow(OptionsFlow):
         if user_input is not None:
             # an emptied picker must actually clear, not fall back to the old one
             merged = {**self._entry.options}
-            for key in (
-                CONF_PRICE_SENSOR,
-                CONF_SOLAR_FORECAST_SENSORS,
-                CONF_SOLAR_PRODUCED_SENSOR,
-            ):
+            for key in (CONF_SOLAR_FORECAST_SENSORS, CONF_SOLAR_PRODUCED_SENSOR):
                 merged.pop(key, None)
             merged.update(user_input)
+            # Which price source, then which supplier or which sensor. Only the
+            # sensor route needs a second screen; asking anyway would be a form
+            # with one disabled field on it.
+            if merged.get(CONF_PRICE_SOURCE) == SOURCE_ENTITY:
+                self._pending_options = merged
+                return await self.async_step_price_entity()
+            merged.pop(CONF_PRICE_SENSOR, None)
             return self.async_create_entry(title="", data=merged)
 
         defaults = {**self._entry.data, **self._entry.options}
         return self.async_show_form(
             step_id="dynamic", data_schema=_dynamic_schema(defaults)
+        )
+
+    async def async_step_price_entity(
+        self, user_input: dict | None = None
+    ) -> ConfigFlowResult:
+        """Which sensor, when the prices come from another integration."""
+        merged = self._pending_options
+        if user_input is not None:
+            merged.pop(CONF_PRICE_SENSOR, None)
+            merged.update(user_input)
+            return self.async_create_entry(title="", data=merged)
+
+        defaults = {**self._entry.data, **self._entry.options}
+        return self.async_show_form(
+            step_id="price_entity", data_schema=_price_entity_schema(defaults)
         )
 
     async def async_step_unit_modes(

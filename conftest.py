@@ -83,6 +83,15 @@ def _install_homeassistant_stub() -> None:
 
     event.async_track_time_interval = async_track_time_interval
 
+    aiohttp_client = types.ModuleType("homeassistant.helpers.aiohttp_client")
+
+    def async_get_clientsession(hass, *args, **kwargs):
+        """Whatever the fake hass was given. The stub never reaches a network:
+        tests that care hand `hass.session` a fake, and the rest never ask."""
+        return getattr(hass, "session", None)
+
+    aiohttp_client.async_get_clientsession = async_get_clientsession
+
     storage = types.ModuleType("homeassistant.helpers.storage")
 
     class Store:
@@ -128,6 +137,8 @@ def _install_homeassistant_stub() -> None:
     util.__path__ = []
     dt = types.ModuleType("homeassistant.util.dt")
     dt.utcnow = lambda: datetime.now(timezone.utc)
+    # the real one is local time; tests that care pin it themselves
+    dt.now = lambda: datetime.now(timezone.utc)
 
     # bind submodules as attributes too, so `from homeassistant.util import dt`
     # resolves without touching the real import machinery
@@ -137,6 +148,7 @@ def _install_homeassistant_stub() -> None:
     ha.helpers = helpers
     ha.util = util
     helpers.event = event
+    helpers.aiohttp_client = aiohttp_client
     helpers.storage = storage
     helpers.config_validation = config_validation
     helpers.issue_registry = issue_registry
@@ -150,6 +162,7 @@ def _install_homeassistant_stub() -> None:
             "homeassistant.const": ha_const,
             "homeassistant.helpers": helpers,
             "homeassistant.helpers.event": event,
+            "homeassistant.helpers.aiohttp_client": aiohttp_client,
             "homeassistant.helpers.storage": storage,
             "homeassistant.helpers.config_validation": config_validation,
             "homeassistant.helpers.issue_registry": issue_registry,

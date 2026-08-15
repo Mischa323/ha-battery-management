@@ -194,6 +194,40 @@ Deliberately *not* a scheduler inside the integration: less to maintain, and
 anything the blueprints did not anticipate you can still build with an ordinary
 automation.
 
+## Where the prices come from
+
+Dynamic mode needs to know what electricity costs. There are two ways to tell
+it, chosen under *Configure → Dynamic tariff*.
+
+**A sensor from another integration** is the original route and still the
+default. Nord Pool, ENTSO-e, EnergyZero, Tibber, Zonneplan — anything that
+publishes a list of upcoming prices in its attributes works, because
+`prices.py` recognises the *shapes* rather than the integrations. Changing
+supplier means pointing this at a different entity. A shape it does not
+recognise gives an **empty** forecast, which disables buying rather than
+guessing at a price.
+
+**Fetched directly** is for suppliers who publish their prices openly. Today
+that is **Frank Energie**, whose market-price API needs no account. It exists
+because "first install another custom integration" is a real obstacle at a
+house you do not live in, and this is meant to be maintained centrally across
+several of them.
+
+The direct route uses the **all-in** price — market price plus VAT, sourcing
+markup and energy tax — not the bare exchange price. That matters less than it
+sounds for *deciding*: tax and markup are a fixed adder and VAT a fixed
+multiplier, so the transform is monotonic and the cheap-to-expensive ranking is
+identical either way. It matters for *reading*: the number on the Plan sensor is
+then what you actually pay.
+
+Prices are re-fetched hourly, which is about noticing that tomorrow has been
+published rather than tracking anything. A supplier that cannot be reached is
+not an error state — no forecast disables cheap-hour charging and leaves
+grid-zero regulating exactly as it does without a dynamic contract. The previous
+answer is kept, because prices do not change retroactively and old slots fall
+out of the ranking window by themselves. `prices_error` and `prices_fetched_at`
+in the diagnostics say which of those is happening.
+
 ## Staying inside the main fuse
 
 The control loop regulates the household **total**. The packs are
