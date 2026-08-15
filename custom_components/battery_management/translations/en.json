@@ -155,7 +155,8 @@
           "expensive_hours": "Hours a day to save the charge for",
           "discharge_anyway_soc": "Discharge anyway above (%)",
           "solar_forecast_sensors": "Solar forecast sensors",
-          "solar_produced_sensor": "Produced so far today"
+          "solar_produced_sensor": "Produced so far today",
+          "price_resolution": "How to read the prices"
         },
         "data_description": {
           "price_source": "Fetching them ourselves saves installing a second custom integration, which matters at a house you do not live in. Frank Energie publishes its market prices openly, so no login is needed - and the price used is the all-in one, including tax and markup, not the bare exchange price. Pick the sensor option for any other supplier: Nord Pool, ENTSO-e, EnergyZero, Tibber and the rest are all read by shape.",
@@ -165,7 +166,8 @@
           "expensive_hours": "Outside the dearest hours the packs do not discharge, so a cheap hour is bought from the grid and the stored kWh go to the peak instead. 0 switches this off.",
           "discharge_anyway_soc": "A pack this full discharges even during a cheap hour. Refusing would leave nowhere for the sun still coming, and spilling free energy to save a few cents is a bad trade.",
           "solar_forecast_sensors": "Pick every roof plane; they are summed. Prefer the 'remaining today' variants - a whole-day total is right at 02:00 and wrong at 17:00.",
-          "solar_produced_sensor": "Only needed if the sensors above give a day total: this is subtracted, leaving what is still to come."
+          "solar_produced_sensor": "Only needed if the sensors above give a day total: this is subtracted, leaving what is still to come.",
+          "price_resolution": "The market settles in 15-minute blocks and suppliers are starting to publish that way. Taking the feed as published is the more precise choice - the coordinator will happily buy on a single cheap quarter. By the hour is easier to read: 24 bars on a chart instead of 96, at the cost of averaging away the peaks inside each hour. Whichever you pick applies to the decisions and the chart alike, so they can never disagree."
         }
       },
       "shadow": {
@@ -338,6 +340,12 @@
         "none": "No prices (Dynamic mode is not offered)",
         "frank_energie": "Frank Energie — fetched directly, no account needed",
         "entity": "A sensor from another integration"
+      }
+    },
+    "price_resolution": {
+      "options": {
+        "published": "As the supplier publishes them (quarter-hourly if they do)",
+        "hourly": "By the hour"
       }
     }
   }

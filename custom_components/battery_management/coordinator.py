@@ -40,6 +40,7 @@ from .prices import (
     is_dear_now,
     parse_forecast,
     slot_at,
+    to_hourly,
     slots_in_window,
 )
 from .const import (
@@ -75,6 +76,7 @@ from .const import (
     CONF_EXTERNAL_TIMEOUT,
     CONF_FULL_CHARGE_MINUTES,
     CONF_PRICE_SENSOR,
+    CONF_PRICE_RESOLUTION,
     CONF_PRICE_SOURCE,
     CONF_SOLAR_FORECAST_MAX,
     CONF_SHADOW_SIMULATE,
@@ -107,10 +109,12 @@ from .const import (
     DEFAULT_PHASE_PROBE_SECONDS,
     DEFAULT_PHASE_REDETECT,
     DEFAULT_PHASE_VOLTAGE,
+    DEFAULT_PRICE_RESOLUTION,
     DEFAULT_SHADOW_SIMULATE,
     DEFAULT_SOC_RESERVE,
     DEFAULT_SOLAR_FORECAST_MAX,
     PRICE_REFRESH_MINUTES,
+    RESOLUTION_HOURLY,
     PRICE_TIMEOUT,
     PRICE_WINDOW_HOURS,
     DEFAULT_UNIT_MAX,
@@ -276,6 +280,9 @@ class BatteryCoordinator:
             data.get(CONF_FULL_CHARGE_MINUTES, DEFAULT_FULL_CHARGE_MINUTES)
         )
         self._price_sensor: str | None = data.get(CONF_PRICE_SENSOR) or None
+        self._price_resolution: str = (
+            data.get(CONF_PRICE_RESOLUTION) or DEFAULT_PRICE_RESOLUTION
+        )
         # entries made before suppliers could be asked directly have a sensor
         # and no source, which is exactly what SOURCE_ENTITY means
         self._price_source: str = data.get(CONF_PRICE_SOURCE) or (
@@ -806,6 +813,10 @@ class BatteryCoordinator:
         if attributes is None:
             return None
         slots = parse_forecast(attributes, dt_util.utcnow())
+        if slots and self._price_resolution == RESOLUTION_HOURLY:
+            # applied here, not at the chart, so the picture and the decisions
+            # cannot end up disagreeing about what "cheap" meant
+            slots = to_hourly(slots)
         return slots or None
 
     def solar_remaining(self) -> float | None:
@@ -1360,6 +1371,7 @@ class BatteryCoordinator:
                 "full_charge_minutes": self._full_charge_minutes,
                 "price_source": self._price_source,
                 "price_sensor": self._price_sensor,
+                "price_resolution": self._price_resolution,
                 "cheap_hours": self._cheap_hours,
                 "charge_below_soc": self._charge_below_soc,
                 "solar_forecast_sensors": self._solar_forecast_sensors,

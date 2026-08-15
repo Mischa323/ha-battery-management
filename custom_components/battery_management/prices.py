@@ -145,6 +145,41 @@ def slot_at(slots: list[Slot], moment: datetime) -> Slot | None:
     return next((slot for slot in slots if slot.covers(moment)), None)
 
 
+
+def to_hourly(slots: list[Slot]) -> list[Slot]:
+    """Fold sub-hourly slots into whole hours, averaging by how long each lasts.
+
+    The Dutch market settles in 15-minute blocks, so a feed can publish 96 slots
+    a day. Nothing in the ranking minds - `cheap_hours` is converted into a
+    number of slots from whatever arrives - but 96 bars is a lot of bars, and
+    somebody who only wants the shape of the day is better served by 24.
+
+    Weighted by duration rather than a plain mean, so a partial hour at the end
+    of a feed does not get the same say as a full one. An already-hourly feed
+    passes through untouched, and the last hour keeps its real end rather than
+    claiming a full one it has no prices for.
+    """
+    if not slots:
+        return []
+    buckets: dict[datetime, list[Slot]] = {}
+    for slot in sorted(slots, key=lambda s: s.start):
+        hour = slot.start.replace(minute=0, second=0, microsecond=0)
+        buckets.setdefault(hour, []).append(slot)
+
+    folded = []
+    for hour, members in sorted(buckets.items()):
+        spans = [(s.end - s.start).total_seconds() for s in members]
+        total = sum(spans) or 1.0
+        price = sum(s.price * span for s, span in zip(members, spans)) / total
+        folded.append(
+            Slot(
+                start=min(s.start for s in members),
+                end=max(s.end for s in members),
+                price=price,
+            )
+        )
+    return folded
+
 def slots_in_window(
     slots: list[Slot], now: datetime, window_hours: float = 24.0
 ) -> list[Slot]:

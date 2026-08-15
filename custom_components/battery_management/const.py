@@ -54,6 +54,16 @@ CONF_PRICE_SOURCE = "price_source"
 CONF_PRICE_SENSOR = "price_sensor"
 # Prices are published once or twice a day, so this is about noticing that
 # tomorrow has arrived, not about tracking anything.
+# How to read the feed. The market settles in 15-minute blocks and suppliers
+# are starting to publish that way; the ranking never cared, but 96 bars on a
+# card is a lot of bars. Folding to hours is a readability choice that costs a
+# little precision, so the default is to take the feed exactly as published.
+CONF_PRICE_RESOLUTION = "price_resolution"
+RESOLUTION_PUBLISHED = "published"
+RESOLUTION_HOURLY = "hourly"
+RESOLUTIONS = [RESOLUTION_PUBLISHED, RESOLUTION_HOURLY]
+DEFAULT_PRICE_RESOLUTION = RESOLUTION_PUBLISHED
+
 PRICE_REFRESH_MINUTES = 60
 # Seconds. A supplier that is slow to answer must not hold up a control tick.
 PRICE_TIMEOUT = 20

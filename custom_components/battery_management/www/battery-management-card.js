@@ -95,6 +95,9 @@ function priceBars(hours) {
 /** Fill a plot and its axis from the plan's `hours`. */
 function drawPrices(plot, axis, hours) {
   const { zero, bars } = priceBars(hours);
+  // a quarter-hourly feed is 96 bars; a 2 px gap between them would be most of
+  // the chart, so the surface separator gives way once they get thin
+  plot.style.gap = hours.length > 48 ? "1px" : "2px";
   plot.innerHTML =
     `<div class="zero" style="bottom:${zero}%"></div>` +
     bars

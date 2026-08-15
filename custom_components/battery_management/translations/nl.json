@@ -155,7 +155,8 @@
           "expensive_hours": "Uren per dag om de lading voor te bewaren",
           "discharge_anyway_soc": "Toch ontladen boven (%)",
           "solar_forecast_sensors": "Zonverwachting-sensoren",
-          "solar_produced_sensor": "Vandaag al geproduceerd"
+          "solar_produced_sensor": "Vandaag al geproduceerd",
+          "price_resolution": "Hoe de prijzen gelezen worden"
         },
         "data_description": {
           "price_source": "Zelf ophalen scheelt het installeren van een tweede custom integratie, en dat telt bij een huis waar je niet woont. Frank Energie publiceert zijn marktprijzen openbaar, dus inloggen is niet nodig - en de prijs die gebruikt wordt is de all-in prijs, inclusief belasting en opslag, niet de kale beursprijs. Kies de sensor-optie voor elke andere leverancier: Nord Pool, ENTSO-e, EnergyZero, Tibber en de rest worden op vorm herkend.",
@@ -165,7 +166,8 @@
           "expensive_hours": "Buiten de duurste uren ontladen de packs niet, dus een goedkoop uur koop je van het net en gaan de opgeslagen kWh naar de piek. 0 zet dit uit.",
           "discharge_anyway_soc": "Een pack die zo vol is ontlaadt ook in een goedkoop uur. Weigeren zou geen ruimte laten voor de zon die nog komt, en gratis energie weggooien om een paar cent te sparen is een slechte ruil.",
           "solar_forecast_sensors": "Kies elk dakvlak; ze worden opgeteld. Liefst de 'resterend vandaag'-varianten - een dagtotaal klopt om 02:00 en niet om 17:00.",
-          "solar_produced_sensor": "Alleen nodig als hierboven een dagtotaal staat: dit wordt eraf getrokken, zodat overblijft wat er nog komt."
+          "solar_produced_sensor": "Alleen nodig als hierboven een dagtotaal staat: dit wordt eraf getrokken, zodat overblijft wat er nog komt.",
+          "price_resolution": "De markt rekent af per kwartier en leveranciers gaan zo publiceren. Nemen zoals gepubliceerd is het nauwkeurigst - de coördinator koopt dan gerust op één goedkoop kwartier. Per uur leest makkelijker: 24 staafjes in plaats van 96, maar de uitschieters binnen een uur middelen weg. Wat je kiest geldt voor de beslissingen én de grafiek, zodat die het nooit oneens kunnen zijn."
         }
       },
       "shadow": {
@@ -338,6 +340,12 @@
         "none": "Geen prijzen (Dynamisch wordt niet aangeboden)",
         "frank_energie": "Frank Energie — rechtstreeks opgehaald, geen account nodig",
         "entity": "Een sensor van een andere integratie"
+      }
+    },
+    "price_resolution": {
+      "options": {
+        "published": "Zoals de leverancier ze publiceert (per kwartier als die dat doet)",
+        "hourly": "Per uur"
       }
     }
   }

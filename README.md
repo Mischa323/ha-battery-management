@@ -260,6 +260,24 @@ type: custom:battery-management-card
 prices: sensor.battery_management_plan
 ```
 
+### Quarter-hourly prices
+
+The market settles in 15-minute blocks and suppliers are starting to publish
+that way. Nothing in the ranking ever assumed hours — `cheap_hours` is a
+duration, converted into however many slots the feed happens to use — so a
+quarter-hourly feed works with no change: ask for 3 cheap hours and it picks
+the 12 cheapest quarters.
+
+*How to read the prices* under **Dynamic tariff** chooses between the two:
+
+- **As the supplier publishes them** (the default) is the more precise: the
+  coordinator will buy on a single cheap quarter.
+- **By the hour** folds them, weighted by duration. 24 bars on a chart instead
+  of 96, at the cost of averaging away the peaks inside each hour.
+
+Whichever you pick applies to the decisions *and* the chart, because they must
+never be able to disagree about what "cheap" meant.
+
 ### A prices-only card
 
 For a dashboard that just wants to know whether to run the dishwasher, there is

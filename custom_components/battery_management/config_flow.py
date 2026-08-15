@@ -28,6 +28,7 @@ from .const import (
     CONF_EXTERNAL_TIMEOUT,
     CONF_FULL_CHARGE_MINUTES,
     CONF_PRICE_SENSOR,
+    CONF_PRICE_RESOLUTION,
     CONF_PRICE_SOURCE,
     CONF_SOLAR_FORECAST_MAX,
     CONF_SHADOW_SIMULATE,
@@ -74,6 +75,7 @@ from .const import (
     DEFAULT_INTERVAL,
     DEFAULT_KP,
     DEFAULT_MIN_OUTPUT,
+    DEFAULT_PRICE_RESOLUTION,
     DEFAULT_PHASE_DETECT,
     DEFAULT_PHASE_LIMIT_AMPS,
     DEFAULT_PHASE_MARGIN,
@@ -85,6 +87,7 @@ from .const import (
     DEVICE_MODE_THIRD_PARTY,
     DOMAIN,
 )
+from .const import RESOLUTIONS
 from .discovery import match_unit_entities
 from .suppliers import SOURCE_ENTITY, SOURCE_NONE, SUPPLIERS
 from .validate import validate_phases, validate_shadow, validate_unit
@@ -222,6 +225,18 @@ def _dynamic_schema(defaults: dict) -> vol.Schema:
                 selector.SelectSelectorConfig(
                     options=[SOURCE_NONE, *SUPPLIERS, SOURCE_ENTITY],
                     translation_key="price_source",
+                    mode=selector.SelectSelectorMode.LIST,
+                )
+            ),
+            vol.Required(
+                CONF_PRICE_RESOLUTION,
+                default=defaults.get(
+                    CONF_PRICE_RESOLUTION, DEFAULT_PRICE_RESOLUTION
+                ),
+            ): selector.SelectSelector(
+                selector.SelectSelectorConfig(
+                    options=RESOLUTIONS,
+                    translation_key="price_resolution",
                     mode=selector.SelectSelectorMode.LIST,
                 )
             ),
