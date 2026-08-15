@@ -1447,7 +1447,13 @@ class BatteryCoordinator:
                 phase: {
                     "measured_w": round(watts),
                     "without_us_w": round(other[phase]),
-                    "amps": round(abs(other[phase]) / volts, 1),
+                    # what the fuse is carrying right now, packs included -
+                    # this is the one the headline headroom is measured from
+                    "amps": round(abs(watts) / volts, 1),
+                    # and the same leg with our own command taken back out,
+                    # which is what the ceilings are computed against
+                    "amps_without_us": round(abs(other[phase]) / volts, 1),
+                    "headroom_amps": round((limit - abs(watts)) / volts, 1),
                     "discharge_room_w": round(discharge_room[phase]),
                     "charge_room_w": round(charge_room[phase]),
                     "units": [
@@ -1456,6 +1462,14 @@ class BatteryCoordinator:
                 }
                 for phase, watts in measured.items()
             },
+            # which leg the headline number is about; without it the sensor
+            # says how close things are without saying to what
+            "tightest_phase": (
+                min(measured, key=lambda p: limit - abs(measured[p]))
+                if measured
+                else None
+            ),
+            "usable_amps": round(self._phase_amps * (1 - self._phase_margin / 100), 1),
             "detection": self.phase_detection,
             "unit_phase": dict(self.unit_phase),
             "detected_at": self.phase_detected_at,

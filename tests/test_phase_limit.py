@@ -209,3 +209,43 @@ async def test_the_headroom_sensor_is_absent_when_unconfigured(build_system):
     system = build_system(grid=0, units=EVEN)
 
     assert system.coordinator.fuse_headroom_amps() is None
+
+
+# -- what the headroom sensor is actually saying -------------------------------
+
+
+async def test_the_headroom_is_the_tightest_leg_not_a_total(build_system):
+    """Three legs, one number: the one that would trip first."""
+    system = build_system(
+        grid=0, units=EVEN, phases=(4600, 1000, 200), unit_phase=(1, 2)
+    )
+
+    await system.coordinator._async_tick(None)
+    report = system.coordinator.phase_report()
+
+    assert system.coordinator.fuse_headroom_amps() == 2.5   # (5175-4600)/230
+    assert report["tightest_phase"] == 1
+    assert report["phases"][2]["headroom_amps"] > 2.5
+
+
+async def test_the_headline_and_the_per_leg_amps_measure_the_same_thing(build_system):
+    """They used to disagree: one counted our own packs, the other did not."""
+    system = build_system(
+        grid=-3000, units=EVEN, phases=(2000, 500, 500), unit_phase=(1, 2)
+    )
+
+    await system.coordinator._async_tick(None)
+    system.settle_phases(2000, 500, 500)
+    report = system.coordinator.phase_report()
+
+    tightest = report["tightest_phase"]
+    assert report["phases"][tightest]["headroom_amps"] == (
+        system.coordinator.fuse_headroom_amps()
+    )
+
+
+async def test_it_reports_what_the_margin_leaves_usable(build_system):
+    """25 A on the fuse, 10 % kept back, so 22.5 A is ours to spend."""
+    system = build_system(grid=0, units=EVEN, phases=(500, 500, 500), unit_phase=(1, 2))
+
+    assert system.coordinator.phase_report()["usable_amps"] == 22.5
