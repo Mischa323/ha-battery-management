@@ -104,7 +104,8 @@
           "unit_max": "Max power per unit (W)",
           "fast_charge_hold": "Keep the packs full after a fast charge",
           "full_charge_minutes": "Minutes from empty to full at max power",
-          "external_timeout": "Minutes an external setpoint stays valid"
+          "external_timeout": "Minutes an external setpoint stays valid",
+          "discharge_recovery": "Charge back this far before discharging again (%)"
         },
         "data_description": {
           "bias": "Aim for this much import instead of exactly zero, so a brief overshoot still exports nothing.",
@@ -115,7 +116,8 @@
           "unit_max": "Hard ceiling per pack, needed because the target entity's own maximum is unreliable - one unit here reports 10000 for a 3500 W device.",
           "fast_charge_hold": "On: the switch stays on at full and holds them there until you release it. Off: it switches itself off and your mode discharges them again.",
           "full_charge_minutes": "Measured once, per pack. Gives both the minutes-to-full estimate and the usable capacity that the solar-aware charge ceiling needs. 0 hides both rather than guessing.",
-          "external_timeout": "In External plan mode: if no new plan arrives within this time, control returns to following the meter instead of freezing on the last instruction."
+          "external_timeout": "In External plan mode: if no new plan arrives within this time, control returns to following the meter instead of freezing on the last instruction.",
+          "discharge_recovery": "Once a pack has been emptied it waits until it is this many points above its floor before it discharges again. Without it, the sun lifting a pack from 5 % to 6 % gets discharged straight back to 5 %, over and over - and the bottom of the pack is the worst place to cycle it. Counted above the floor, so it follows your SoC reserve and each pack's own discharge limit. It never blocks charging, and a pack coming down from full still empties all the way to its limit. 0 switches it off."
         }
       },
       "units": {
@@ -257,7 +259,8 @@
           "dynamic_hold": "Holding the charge for dearer hours",
           "solar_headroom": "Not buying, the sun still fits",
           "phase_limit": "Held back by the main fuse",
-          "phase_detect": "Measuring which pack is on which phase"
+          "phase_detect": "Measuring which pack is on which phase",
+          "recovering": "Charging back up before it discharges again"
         }
       },
       "solar_remaining": {

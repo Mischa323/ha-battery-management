@@ -437,6 +437,20 @@ possible, and they gate section A.
       phases have to be typed in by hand until go-live, or the first probe
       happens the moment it goes live - which is what happened here.
 
+20. ~~**Not bouncing off the bottom of the pack**~~ - **done.** Reported from
+    the primary site: the sun lifts a pack from 5 % to 6 % and it is discharged
+    straight back to 5 %, over and over. The floor was one threshold, so it was
+    both where discharging stops and where it starts again.
+
+    A **latch**, not a raised floor - a pack coming down from full still empties
+    all the way to its own limit, whereas raising the floor to 10 % would simply
+    cost those points. Counted as a delta above the floor, so it composes with
+    the SoC reserve and each pack's own limit. Charging is never blocked. It
+    persists, because coming back at 6 % after a restart and resuming the dump
+    is the whole failure. `POLICY_RECOVERING` keeps it apart from "empty" and
+    from "holding the reserve" - three different silences that want three
+    different answers. Default 5 points; 0 switches it off.
+
 ### G. Prices without a second integration
 
 19. ~~**Fetch prices without a second integration**~~ - **done.** Asked for by

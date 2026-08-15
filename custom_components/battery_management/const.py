@@ -113,6 +113,24 @@ DEFAULT_FAST_CHARGE_HOLD = True
 # of falling off a cliff. 0 = off, which is the default: nothing is mandatory.
 DEFAULT_SOC_RESERVE = 0
 
+# --- Recovering after being emptied ------------------------------------------
+# The floor is one threshold, so it is both where discharging stops and where it
+# may start again. A pack sitting on 5 % that the sun lifts to 6 % is therefore
+# discharged straight back to 5 %, and again, and again - micro-cycling at the
+# deepest point of the pack, which is where cycling costs the most. Observed at
+# the primary site.
+#
+# So once a pack has been emptied it has to climb this far above its floor
+# before it may discharge again. A delta rather than an absolute percentage, so
+# it composes with the SoC reserve and with each pack's own discharge limit. It
+# never blocks charging - only the way back out.
+#
+# A latch, not a raised floor: a pack coming down from full still discharges all
+# the way to its limit. Raising the floor to 10 % would simply cost you those
+# points. 0 disables it.
+CONF_DISCHARGE_RECOVERY = "discharge_recovery"
+DEFAULT_DISCHARGE_RECOVERY = 5
+
 # --- Per-phase fuse protection -----------------------------------------------
 # The packs are single-phase and each sits on one leg of a three-phase supply.
 # Nothing in the grid-zero loop knows that: it regulates the *total*, so a pack
@@ -187,6 +205,7 @@ POLICY_FAST_CHARGE = "fast_charge"      # emergency override running
 POLICY_FAST_CHARGE_HOLD = "fast_charge_hold"  # charged, now kept full on purpose
 POLICY_SOC_RESERVE = "soc_reserve"      # would discharge, but the reserve says no
 POLICY_PACKS_EMPTY = "packs_empty"      # would discharge, but nothing left
+POLICY_RECOVERING = "recovering"        # emptied, not yet charged far enough back
 POLICY_PACKS_FULL = "packs_full"        # would charge, but nowhere to put it
 POLICY_MODE_CHARGE_ONLY = "mode_charge_only"        # mode forbids discharging
 POLICY_MODE_DISCHARGE_ONLY = "mode_discharge_only"  # mode forbids charging
@@ -218,6 +237,7 @@ POLICIES = [
     POLICY_DYNAMIC_NO_PRICES,
     POLICY_SOC_RESERVE,
     POLICY_PACKS_EMPTY,
+    POLICY_RECOVERING,
     POLICY_PACKS_FULL,
     POLICY_FAST_CHARGE,
     POLICY_FAST_CHARGE_HOLD,

@@ -32,6 +32,7 @@ async def async_setup_entry(
             SolarRemainingSensor(coordinator, entry),
             ChargeCeilingSensor(coordinator, entry),
             PlanSensor(coordinator, entry),
+            CurrentPriceSensor(coordinator, entry),
             GridObservedSensor(coordinator, entry),
             GridUsedSensor(coordinator, entry),
             OtherControllerSensor(coordinator, entry),
@@ -316,6 +317,39 @@ class PlanSensor(_BaseSensor):
     @property
     def extra_state_attributes(self) -> dict:
         return self.coordinator.plan()
+
+
+class CurrentPriceSensor(_BaseSensor):
+    """What this hour costs. The first thing anyone looks for, and it was
+    only reachable by reading an attribute of the Plan sensor."""
+
+    _attr_name = "Current price"
+    _attr_native_unit_of_measurement = "EUR/kWh"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_suggested_display_precision = 3
+    _attr_icon = "mdi:cash-clock"
+
+    def __init__(self, coordinator, entry) -> None:
+        super().__init__(coordinator, entry)
+        self._attr_unique_id = f"{entry.entry_id}_current_price"
+
+    @property
+    def available(self) -> bool:
+        return self.coordinator.current_price() is not None
+
+    @property
+    def native_value(self) -> float | None:
+        now = self.coordinator.current_price()
+        return None if now is None else now["price"]
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        now = self.coordinator.current_price()
+        if now is None:
+            return {}
+        # the role is the same one the chart colours by, so a dashboard never
+        # has to invent its own idea of "expensive"
+        return {k: v for k, v in now.items() if k != "price"}
 
 
 class UnitTargetSensor(_BaseSensor):

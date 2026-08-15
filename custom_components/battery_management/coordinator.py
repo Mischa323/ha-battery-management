@@ -39,6 +39,7 @@ from .prices import (
     is_cheap_now,
     is_dear_now,
     parse_forecast,
+    slot_at,
     slots_in_window,
 )
 from .const import (
@@ -46,6 +47,7 @@ from .const import (
     CONF_CHARGE_LIMIT,
     CONF_DEADBAND,
     CONF_DISCHARGE_LIMIT,
+    CONF_DISCHARGE_RECOVERY,
     CONF_FLOW_SELECT,
     CONF_GRID_POWER,
     CONF_INTERVAL,
@@ -92,6 +94,7 @@ from .const import (
     DEFAULT_BUY_CEILING_MAX,
     DEFAULT_BUY_CEILING_MIN,
     DEFAULT_DISCHARGE_ANYWAY_SOC,
+    DEFAULT_DISCHARGE_RECOVERY,
     DEFAULT_EXPENSIVE_HOURS,
     DEFAULT_FULL_CHARGE_MINUTES,
     DEFAULT_INTERVAL,
@@ -143,6 +146,7 @@ from .const import (
     POLICY_NO_GRID_DATA,
     POLICY_PACKS_EMPTY,
     POLICY_PACKS_FULL,
+    POLICY_RECOVERING,
     POLICY_PHASE_DETECT,
     POLICY_PHASE_LIMIT,
     POLICY_SOC_RESERVE,
@@ -307,6 +311,9 @@ class BatteryCoordinator:
         self._battery_power_sensor: str | None = (
             data.get(CONF_BATTERY_POWER_SENSOR) or None
         )
+        self._discharge_recovery: float = float(
+            data.get(CONF_DISCHARGE_RECOVERY, DEFAULT_DISCHARGE_RECOVERY)
+        )
         self._external_timeout: float = float(
             data.get(CONF_EXTERNAL_TIMEOUT, DEFAULT_EXTERNAL_TIMEOUT)
         )
@@ -367,6 +374,8 @@ class BatteryCoordinator:
         self.unit_status: dict[str, UnitStatus] = {
             u.name: UnitStatus() for u in self._units
         }
+        # packs that hit their floor and have not climbed back far enough yet
+        self.recovering: dict[str, bool] = {u.name: False for u in self._units}
         # which leg each unit sits on (1-based), and how we came to believe it
         self.unit_phase: dict[str, int | None] = {u.name: None for u in self._units}
         self.phase_detection: str = PHASE_DETECT_UNKNOWN
@@ -428,6 +437,7 @@ class BatteryCoordinator:
             "buy_ceiling_max": self.buy_ceiling_max,
             "dry_run": self.dry_run,
             "mode": self.mode,
+            "recovering": dict(self.recovering),
             "unit_phase": dict(self.unit_phase),
             "phase_detected_at": self.phase_detected_at,
             "saved_at": time.time(),
@@ -461,6 +471,11 @@ class BatteryCoordinator:
         for key in ("buy_ceiling_min", "buy_ceiling_max"):
             if stored and stored.get(key) is not None:
                 setattr(self, key, float(stored[key]))
+        for name, value in (stored or {}).get("recovering", {}).items():
+            # a restart at 6 % would otherwise resume dumping immediately,
+            # which is the whole thing this exists to prevent
+            if name in self.recovering:
+                self.recovering[name] = bool(value)
         self._restore_phases(stored)
         if stored and stored.get("soc_reserve") is not None:
             # a user setting, not runtime state: restore it even when the
@@ -638,6 +653,43 @@ class BatteryCoordinator:
         """
         return max(unit.discharge_limit, self.soc_reserve)
 
+    def _update_recovery(self, online: dict) -> None:
+        """Latch a pack that has been emptied until it has charged back up.
+
+        The floor is one threshold, so without this it is both where
+        discharging stops and where it starts again: the sun lifts a pack off
+        5 % and it is discharged straight back to 5 %. Observed at the primary
+        site, and the bottom of the pack is the worst place to cycle.
+
+        Deliberately a latch rather than a raised floor. A pack coming down
+        from full still discharges all the way to its own limit - raising the
+        floor to 10 % would just cost those points. Only the way back *out*
+        waits.
+        """
+        if self._discharge_recovery <= 0:
+            for name in self.recovering:
+                self.recovering[name] = False
+            return
+        for name, unit in online.items():
+            floor = self._discharge_floor(unit)
+            if unit.soc <= floor:
+                if not self.recovering[name]:
+                    _LOGGER.debug(
+                        "%s reached its floor (%.0f %%); holding until %.0f %%",
+                        name,
+                        floor,
+                        floor + self._discharge_recovery,
+                    )
+                self.recovering[name] = True
+            elif unit.soc >= floor + self._discharge_recovery:
+                if self.recovering[name]:
+                    _LOGGER.debug("%s has recovered to %.0f %%", name, unit.soc)
+                self.recovering[name] = False
+
+    def _may_discharge(self, name: str, unit: UnitState) -> bool:
+        """Is this pack allowed out, given its floor and its recovery?"""
+        return unit.soc > self._discharge_floor(unit) and not self.recovering[name]
+
     def _classify(
         self, error: float, sp: float, online: dict, maxdis: float, maxchg: float
     ) -> str:
@@ -653,6 +705,13 @@ class BatteryCoordinator:
         if wants_charge and self.mode == MODE_DISCHARGE_ONLY:
             return POLICY_MODE_DISCHARGE_ONLY
         if wants_discharge and maxdis <= 0:
+            # three different silences, and they deserve different answers:
+            # holding some back, waiting to recover, or genuinely empty
+            if any(
+                self.recovering[n] and s.soc > self._discharge_floor(s)
+                for n, s in online.items()
+            ):
+                return POLICY_RECOVERING
             # would the packs have had anything to give without the reserve?
             free = any(s.soc > s.discharge_limit for s in online.values())
             return POLICY_SOC_RESERVE if free else POLICY_PACKS_EMPTY
@@ -804,6 +863,41 @@ class BatteryCoordinator:
         if computed is None:
             return None
         return self._bound_ceiling(computed)
+
+    def current_price(self) -> dict | None:
+        """What this hour costs, and what the next one does.
+
+        The Plan sensor says how many hours are cheap; it does not say what you
+        are paying right now, which is the first thing anyone looks for.
+        """
+        slots = self._price_forecast()
+        if not slots:
+            return None
+        now = dt_util.utcnow()
+        current = slot_at(slots, now)
+        if current is None:
+            return None
+        later = [s for s in slots if s.start >= current.end]
+        nxt = min(later, key=lambda s: s.start) if later else None
+        return {
+            "price": round(current.price, 4),
+            "role": self._price_role(current, now),
+            "until": current.end.isoformat(),
+            "next_price": round(nxt.price, 4) if nxt else None,
+        }
+
+    def _price_role(self, slot, now) -> str:
+        """Which decision this slot belongs to - the same one the chart draws."""
+        forecast = self._price_forecast() or []
+        if slot in cheapest_slots(
+            forecast, now, self._cheap_hours, PRICE_WINDOW_HOURS
+        ):
+            return "cheap"
+        if slot in dearest_slots(
+            forecast, now, self._expensive_hours, PRICE_WINDOW_HOURS
+        ):
+            return "dear"
+        return "normal"
 
     def plan(self) -> dict:
         """What it expects and intends today, for the dashboard.
@@ -1256,6 +1350,7 @@ class BatteryCoordinator:
                 "solar_forecast_max": self._solar_forecast_max,
                 "expensive_hours": self._expensive_hours,
                 "discharge_anyway_soc": self._discharge_anyway_soc,
+                "discharge_recovery": self._discharge_recovery,
                 "phase_sensors": self._phase_sensors,
                 "phase_limit_amps": self._phase_amps,
                 "phase_voltage": self._phase_volts,
@@ -1295,6 +1390,7 @@ class BatteryCoordinator:
                 "prices_fetched_at": self.prices_fetched_at,
                 "prices_error": self.prices_error,
                 "price_slots": len((self._price_attributes() or {}).get("prices", [])),
+                "current_price": self.current_price(),
                 "last_tick": self.last_tick.isoformat() if self.last_tick else None,
                 # the fuse protection, including the evidence behind each
                 # placement - a probe that guessed wrong is only findable here
@@ -1322,6 +1418,7 @@ class BatteryCoordinator:
                         "explicitly_set": cfg.modes_configured,
                         "select_offers": self._mode_options(cfg.mode_select),
                     },
+                    "recovering": self.recovering[cfg.name],
                     "phase": self.unit_phase.get(cfg.name),
                     "phase_source": self.phase_source(cfg.name),
                     "status": {
@@ -1919,8 +2016,9 @@ class BatteryCoordinator:
             error = grid - self._bias
             online = {n: s for n, s in snaps.items() if s.online}
 
+            self._update_recovery(online)
             can_discharge = {
-                n: s for n, s in online.items() if s.soc > self._discharge_floor(s)
+                n: s for n, s in online.items() if self._may_discharge(n, s)
             }
             can_charge = {n: s for n, s in online.items() if s.soc < s.charge_limit}
 
@@ -2004,7 +2102,7 @@ class BatteryCoordinator:
                 weights = {
                     n: max(s.soc - self._discharge_floor(s), 0.0)
                     for n, s in online.items()
-                    if s.soc > self._discharge_floor(s)
+                    if self._may_discharge(n, s)
                 }
                 alloc = self._distribute(sp, weights, umax, self._min_output)
                 self.status = "discharging"

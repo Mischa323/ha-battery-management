@@ -36,6 +36,7 @@ from .const import (
     CONF_SOLAR_FORECAST_SENSORS,
     CONF_SOLAR_PRODUCED_SENSOR,
     CONF_DISCHARGE_LIMIT,
+    CONF_DISCHARGE_RECOVERY,
     CONF_FLOW_SELECT,
     CONF_GRID_POWER,
     CONF_INTERVAL,
@@ -60,6 +61,7 @@ from .const import (
     CONF_UNITS,
     DEFAULT_BIAS,
     DEFAULT_DEADBAND,
+    DEFAULT_DISCHARGE_RECOVERY,
     DEFAULT_FAST_CHARGE_HOLD,
     DEFAULT_CHARGE_BELOW_SOC,
     DEFAULT_CHEAP_HOURS,
@@ -182,6 +184,12 @@ def _options_schema(defaults: dict) -> vol.Schema:
             vol.Optional(CONF_INTERVAL, default=defaults.get(CONF_INTERVAL, DEFAULT_INTERVAL)): int,
             vol.Optional(CONF_MIN_OUTPUT, default=defaults.get(CONF_MIN_OUTPUT, DEFAULT_MIN_OUTPUT)): int,
             vol.Optional(CONF_UNIT_MAX, default=defaults.get(CONF_UNIT_MAX, DEFAULT_UNIT_MAX)): int,
+            vol.Optional(
+                CONF_DISCHARGE_RECOVERY,
+                default=defaults.get(
+                    CONF_DISCHARGE_RECOVERY, DEFAULT_DISCHARGE_RECOVERY
+                ),
+            ): _amount(0, 50, "%"),
             vol.Optional(
                 CONF_FAST_CHARGE_HOLD,
                 default=defaults.get(CONF_FAST_CHARGE_HOLD, DEFAULT_FAST_CHARGE_HOLD),

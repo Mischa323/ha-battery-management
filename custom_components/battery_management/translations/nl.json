@@ -104,7 +104,8 @@
           "unit_max": "Maximaal vermogen per unit (W)",
           "fast_charge_hold": "Accu's vol houden na snelladen",
           "full_charge_minutes": "Minuten van leeg naar vol op vol vermogen",
-          "external_timeout": "Minuten dat een extern setpoint geldig blijft"
+          "external_timeout": "Minuten dat een extern setpoint geldig blijft",
+          "discharge_recovery": "Eerst zover terugladen voordat hij weer ontlaadt (%)"
         },
         "data_description": {
           "bias": "Streef naar zoveel afname in plaats van precies nul, zodat een kleine doorschieter alsnog niets teruglevert.",
@@ -115,7 +116,8 @@
           "unit_max": "Harde bovengrens per pack, nodig omdat het maximum dat de doel-entiteit zelf meldt onbetrouwbaar is - een unit hier meldt 10000 voor een 3500 W-apparaat.",
           "fast_charge_hold": "Aan: de schakelaar blijft aan bij vol en houdt ze daar tot jij hem uitzet. Uit: hij schakelt zichzelf uit en je modus ontlaadt ze weer.",
           "full_charge_minutes": "Eenmalig gemeten, per pack. Levert zowel de minuten-tot-vol-schatting als de bruikbare capaciteit die het zon-plafond nodig heeft. 0 verbergt beide in plaats van te gokken.",
-          "external_timeout": "In de modus Extern plan: komt er binnen deze tijd geen nieuw plan, dan gaat de sturing terug naar de meter volgen in plaats van te bevriezen op het laatste commando."
+          "external_timeout": "In de modus Extern plan: komt er binnen deze tijd geen nieuw plan, dan gaat de sturing terug naar de meter volgen in plaats van te bevriezen op het laatste commando.",
+          "discharge_recovery": "Zodra een accu leeg is, wacht hij tot hij dit aantal procentpunten boven zijn ondergrens zit voordat hij weer ontlaadt. Zonder dit wordt een accu die door de zon van 5 % naar 6 % gaat meteen weer naar 5 % ontladen, keer op keer - en onderin de accu is cyclen het duurst. Geteld bóven de ondergrens, dus hij volgt je SoC-reserve en de eigen ontlaadlimiet van elke accu. Opladen wordt nooit geblokkeerd, en een accu die van vol naar beneden komt loopt gewoon door tot zijn limiet. 0 zet het uit."
         }
       },
       "units": {
@@ -257,7 +259,8 @@
           "dynamic_hold": "Bewaart de lading voor duurdere uren",
           "solar_headroom": "Koopt niet in, de zon past er nog in",
           "phase_limit": "Afgeremd door de hoofdzekering",
-          "phase_detect": "Meten welke accu op welke fase zit"
+          "phase_detect": "Meten welke accu op welke fase zit",
+          "recovering": "Eerst terugladen voordat hij weer ontlaadt"
         }
       },
       "solar_remaining": {

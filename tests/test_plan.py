@@ -241,3 +241,41 @@ def test_no_prices_means_no_series_rather_than_an_empty_looking_chart(build_syst
 
     assert plan["has_prices"] is False
     assert plan["hours"] == []
+
+
+# -- what this hour costs ------------------------------------------------------
+
+
+def test_the_current_price_is_the_slot_we_are_in(planned):
+    """The Plan sensor counts cheap hours; it never said what you are paying."""
+    system = planned()
+
+    now = system.coordinator.current_price()
+
+    assert now["price"] == 0.02          # 12:00 is the cheap hour in the fixture
+    assert now["role"] == "cheap"
+
+
+def test_it_says_when_the_price_changes_and_to_what(planned):
+    system = planned()
+
+    now = system.coordinator.current_price()
+
+    assert now["until"].startswith("2026-08-05T13:00")
+    assert now["next_price"] == 0.20
+
+
+def test_the_role_matches_what_the_chart_would_draw(planned):
+    """Otherwise a dashboard would invent its own idea of "expensive"."""
+    system = planned()
+
+    hours = system.coordinator.plan()["hours"]
+    current = next(h for h in hours if h["start"].startswith("2026-08-05T12:00"))
+
+    assert current["role"] == system.coordinator.current_price()["role"]
+
+
+def test_no_prices_means_no_current_price_rather_than_zero(build_system):
+    system = build_system(grid=0)
+
+    assert system.coordinator.current_price() is None
