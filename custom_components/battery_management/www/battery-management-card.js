@@ -47,7 +47,10 @@ const PRICE_CSS = `
           .pbar.up { border-radius:4px 4px 0 0; }
           .pbar.down { border-radius:0 0 4px 4px; }
   .pbar.past { opacity:.35; }
-          .slot.now .pbar { outline:2px solid var(--primary-text-color); outline-offset:1px; }
+          .slot { cursor:pointer; }
+  .slot.now .pbar { outline:2px solid var(--primary-text-color); outline-offset:1px; }
+  /* dashed, so a tapped bar never gets mistaken for the current one */
+  .slot.picked .pbar { outline:2px dashed var(--primary-text-color); outline-offset:1px; }
           .paxis { display:flex; gap:2px; margin-top:4px; font-size:.72em;
                    color: var(--secondary-text-color); }
           .paxis span { flex:1 1 0; text-align:center; min-width:0; }
@@ -119,7 +122,7 @@ function priceBars(hours) {
 }
 
 /** Fill a plot and its axis from the plan's `hours`. */
-function drawPrices(plot, axis, hours) {
+function drawPrices(plot, axis, hours, picked) {
   const { zero, bars } = priceBars(hours);
   // a quarter-hourly feed is 96 bars; a 2 px gap between them would be most of
   // the chart, so the surface separator gives way once they get thin
@@ -128,8 +131,9 @@ function drawPrices(plot, axis, hours) {
     `<div class="zero" style="bottom:${zero}%"></div>` +
     bars
       .map(
-        (b) =>
-          `<div class="slot${b.current ? " now" : ""}" title="${esc(b.label)}">` +
+        (b, i) =>
+          `<div class="slot${b.current ? " now" : ""}` +
+          `${i === picked ? " picked" : ""}" data-i="${i}" title="${esc(b.label)}">` +
           `<div class="pbar ${b.down ? "down" : "up"}${b.past ? " past" : ""}" ` +
           `style="bottom:${b.bottom}%;height:${b.height}%;` +
           `background:${PRICE_COLOUR[b.role]}"></div></div>`
@@ -142,6 +146,22 @@ function drawPrices(plot, axis, hours) {
     .map((h, i) => `<span>${i % every === 0 ? hhmm(h.start) : ""}</span>`)
     .join("");
 }
+
+/**
+ * Which slot the readout is about: the one tapped, else the one happening now.
+ *
+ * Kept apart from the drawing so it can be tested, and so both cards answer the
+ * question the same way.
+ */
+function pickedSlot(hours, index) {
+  const priced = hours.map((h) => ({ ...h, value: Number(h.price) || 0 }));
+  if (Number.isInteger(index) && priced[index]) {
+    return { slot: priced[index], live: false };
+  }
+  const now = Date.now();
+  return { slot: priced.find((h) => covers(h, now)), live: true };
+}
+
 
 /** The numbers worth reading out loud: now, the extremes, and when they fall. */
 function priceSummary(hours) {
@@ -188,10 +208,15 @@ class BatteryManagementCard extends HTMLElement {
       return;
     }
     wrap.style.display = "block";
-    drawPrices(this.querySelector("#plot"), this.querySelector("#paxis"), hours);
-    const s = priceSummary(hours);
-    this.querySelector("#pnow").textContent = s.current
-      ? `nu ${s.current.value.toFixed(3)} €/kWh`
+    drawPrices(
+      this.querySelector("#plot"),
+      this.querySelector("#paxis"),
+      hours,
+      this._picked
+    );
+    const { slot, live } = pickedSlot(hours, this._picked);
+    this.querySelector("#pnow").textContent = slot
+      ? `${live ? "nu" : hhmm(slot.start)} ${slot.value.toFixed(3)} €/kWh`
       : "";
   }
 
@@ -318,6 +343,13 @@ ${PRICE_LEGEND}
     this.querySelector("#enable").addEventListener("click", () => {
       if (!c.enable) return;
       this._svc("switch", "toggle", { entity_id: c.enable });
+    });
+    this.querySelector("#plot").addEventListener("click", (event) => {
+      const slot = event.target.closest(".slot");
+      if (!slot) return;
+      const index = Number(slot.dataset.i);
+      this._picked = this._picked === index ? null : index;
+      this._update();
     });
     this.querySelector("#fast").addEventListener("click", () => {
       if (!c.fast_charge) return;
@@ -509,15 +541,23 @@ ${PRICE_LEGEND}
       return;
     }
 
-    drawPrices(this.querySelector("#plot"), this.querySelector("#paxis"), hours);
+    drawPrices(
+      this.querySelector("#plot"),
+      this.querySelector("#paxis"),
+      hours,
+      this._picked
+    );
 
-    const s = priceSummary(hours);
+    const { slot, live } = pickedSlot(hours, this._picked);
+    const s = { ...priceSummary(hours), current: slot };
     big.textContent = s.current ? `${s.current.value.toFixed(3)} €/kWh` : "—";
     big.style.color = s.current
       ? PRICE_COLOUR[PRICE_COLOUR[s.current.role] ? s.current.role : "normal"]
       : "var(--primary-text-color)";
     sub.textContent = s.current
-      ? `nu — ${PRICE_SAYS[s.current.role] || ""}, tot ${hhmm(s.current.end)}`
+      ? (live ? "nu" : `${hhmm(s.current.start)}–${hhmm(s.current.end)}`) +
+        ` — ${PRICE_SAYS[s.current.role] || ""}` +
+        (live ? `, tot ${hhmm(s.current.end)}` : " · tik nogmaals voor nu")
       : "buiten de gepubliceerde uren";
     this.querySelector("#pends").innerHTML =
       `<span><span class="muted">laagste</span> <b>${s.low.value.toFixed(3)}</b>` +

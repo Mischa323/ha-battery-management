@@ -295,7 +295,12 @@ following the meter, no price decision involved.
 The two hues clear a colourblind-separation check on both a light and a dark
 card (CVD ΔE 9.7, contrast ≥ 3:1 on both), but colour never carries the meaning
 on its own — every bar names its role in its tooltip and the legend spells all
-three out. The current hour is marked by an outline rather than another colour.
+three out. The current hour is marked by an outline rather than another colour, and
+**tapping any bar** reads out that hour instead — price, time span and what the
+coordinator intends there. Tap it again to hand the readout back to the clock.
+A tapped bar gets a dashed outline so it is never mistaken for the current one.
+The hover tooltip is still there for a mouse, but a tap is what works on a
+phone, which is where a price chart actually gets read.
 Negative prices hang below the zero line instead of being clipped, because on a
 dynamic tariff they are real.
 
