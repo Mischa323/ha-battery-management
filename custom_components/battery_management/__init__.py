@@ -44,6 +44,21 @@ CARD_URL = f"/{DOMAIN}/{CARD_FILENAME}"
 _CARD_KEY = f"{DOMAIN}_card_registered"
 
 
+async def _card_version(hass: HomeAssistant) -> str:
+    """This release's version, for busting the browser's cache of the card.
+
+    Read from the manifest Home Assistant has already loaded - opening the file
+    again would be blocking I/O in the event loop for a query string.
+    """
+    try:
+        from homeassistant.loader import async_get_integration
+
+        integration = await async_get_integration(hass, DOMAIN)
+        return str(integration.version or "0")
+    except Exception:  # noqa: BLE001 - never block setup over a query string
+        return "0"
+
+
 async def _async_register_card(hass: HomeAssistant) -> None:
     """Serve the Lovelace card and add it as an extra frontend module (once)."""
     if hass.data.get(_CARD_KEY):
@@ -65,7 +80,12 @@ async def _async_register_card(hass: HomeAssistant) -> None:
     try:
         from homeassistant.components.frontend import add_extra_js_url
 
-        add_extra_js_url(hass, CARD_URL)
+        # Stamped with the version, because browsers cache this file hard and
+        # an unversioned URL means an update silently does nothing: the old
+        # script keeps running, so a card added in a new release never appears
+        # in the card list however many times you look for it. Found exactly
+        # that way.
+        add_extra_js_url(hass, f"{CARD_URL}?v={await _card_version(hass)}")
     except Exception:  # noqa: BLE001
         _LOGGER.warning(
             "Could not auto-add the card resource; add %s manually under Dashboards > Resources",

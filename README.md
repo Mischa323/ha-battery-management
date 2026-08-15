@@ -233,7 +233,7 @@ in the diagnostics say which of those is happening.
 The chart lives on the card that ships with the integration, not on the device
 page — a device page lists entities, and a chart is not one.
 
-**Add card → search "Battery Management"** (the *card* tab, not *by entity*).
+**Add card → the *By card* tab → search "Battery Management"** (the *card* tab, not *by entity*).
 It fills itself in: the switches, the packs, the meter and the price chart are
 all found from the entities that are there. No YAML.
 
