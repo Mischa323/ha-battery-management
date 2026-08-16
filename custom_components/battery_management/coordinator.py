@@ -468,6 +468,13 @@ class BatteryCoordinator:
             _LOGGER.warning(
                 "Battery Management started in DRY RUN: deciding, not commanding"
             )
+        # Idempotent, because two timers on one coordinator means two ticks
+        # racing to command the same packs - and the loser's commands are the
+        # ones the packs keep, per gotcha 1. Nothing calls this twice today;
+        # the first real trace showed an unexplained extra tick 3 s out of
+        # cadence, and this is the cheapest of the ways that could happen.
+        if self._unsub is not None:
+            self._unsub()
         self._unsub = async_track_time_interval(
             self.hass, self._async_tick, self._interval_timedelta()
         )
@@ -595,6 +602,18 @@ class BatteryCoordinator:
             self._detect_task.cancel()
             self._detect_task = None
             self._detecting = False
+        # Written out, not left to the debounce. The tick saves with a 30 s
+        # delay so the disk is not driven by a 15 s loop, which means a reload
+        # can throw away everything since the last save - and the setpoint is
+        # the integrator state, so losing it restarts the loop from 0 and
+        # slams the packs shut mid-charge. Seen in the first real trace: a
+        # reload mid-afternoon put the setpoint back to 0 from -430 W.
+        #
+        # Before the revert, so the state recorded is the one that was running.
+        try:
+            await self._store.async_save(self._state_to_save())
+        except Exception as err:  # noqa: BLE001 - never block a safe shutdown
+            _LOGGER.warning("could not save state while stopping: %s", err)
         if revert:
             await self._revert_all_to_self()
         # the last minute of a run is the interesting one when something went

@@ -113,7 +113,7 @@ What each row carries:
 | `grid_age_s`, `grid_changed_s` | how old the meter reading was, and when it last actually moved — equal means nothing arrived, different means it arrived and held steady |
 | `run` | which coordinator run wrote the row; two values interleaved means two loops |
 | `<pack>_readback_w` | what the device holds as its target |
-| `<pack>_ack_s` | seconds between commanding it and the device showing it |
+| `<pack>_ack_s` | seconds until the target entity echoed the command — acceptance, **not** proof the hardware moved; use `<pack>_actual_w` for that |
 | `<pack>_actual_age_s`, `<pack>_soc_age_s` | how stale that pack's readings were |
 | `<pack>_cap_w`, `<pack>_soc`, `<pack>_phase`, `<pack>_recovering` | its ceiling and state |
 | `mode`, `policy`, `status`, `dry_run`, `offline` | context |

@@ -133,3 +133,49 @@ async def test_reverting_still_hands_the_units_back(build_system):
     modes = system.hass.services.options_set()
     assert modes[system.mode(0)] == DEVICE_MODE_SELF
     assert modes[system.mode(1)] == DEVICE_MODE_SELF
+
+
+async def test_stopping_writes_the_setpoint_out_at_once(build_system):
+    """The tick saves on a 30 s debounce so the disk is not driven by a 15 s
+    loop. A reload therefore threw away everything since the last save - and
+    the setpoint *is* the integrator state, so losing it restarts the loop
+    from 0 and slams the packs shut. Seen in the first real trace: a reload
+    put the setpoint back to 0 from -430 W."""
+    system = build_system(grid=2000)
+    coordinator = system.coordinator
+    coordinator.setpoint = -430.0
+    system.coordinator._store.data = None
+
+    await coordinator.async_stop(revert=False)
+
+    assert coordinator._store.data is not None, "nothing was written"
+    assert coordinator._store.data["setpoint"] == -430.0
+
+
+async def test_a_failed_save_does_not_block_the_safe_revert(build_system):
+    """Handing the packs back matters more than the bookkeeping - gotcha 1."""
+    system = build_system(grid=2000)
+    coordinator = system.coordinator
+
+    async def boom(*_args):
+        raise OSError("disk full")
+
+    coordinator._store.async_save = boom
+
+    await coordinator.async_stop(revert=True)
+
+    assert system.hass.services.calls, "it never reverted the packs"
+
+
+async def test_starting_twice_leaves_one_timer(build_system):
+    """Two timers means two ticks racing to command the same packs, and per
+    gotcha 1 the packs keep whichever arrives last."""
+    system = build_system(grid=1000)
+    coordinator = system.coordinator
+
+    await coordinator.async_start()
+    first = coordinator._unsub
+    await coordinator.async_start()
+
+    assert coordinator._unsub is not first
+    assert first is not None
