@@ -172,16 +172,20 @@ DEFAULT_PHASE_PROBE_SECONDS = 20
 
 # Detection: command one pack, watch which leg moves. Deliberately crude,
 # because the alternative is asking the user to read a meter cupboard.
-# Everything at 0 before the baseline is taken. 30 s, not 10, and the primary
-# site's first live run is why: probing unit 052 recorded -3557 W on L1, which
-# was unit 093 still winding down from its own probe ten seconds after being
-# told to stop. Gotcha 2, caught in the act.
+# Everything at 0 before the baseline is taken - but *waiting* is not the same
+# as being at rest, and a fixed count is a guess. At the primary site the
+# baseline was taken while the pack was still drawing its previous 3500 W, so
+# commanding 3500 W produced a delta of 144 W, the probe failed, and it tried
+# again - which is what kept the pack from ever coming down. The SoC graph
+# showed it: 5 % to 48 % in an hour and a half of nothing but probing.
 #
-# It did no harm there - the packs were on different legs and the attribution
-# looks for the largest *rise* - but two packs on one leg would have cancelled
-# each other out (-3557 + 3547) and the probe would have refused forever
-# without ever saying why.
-PHASE_SETTLE_SECONDS = 30
+# So the legs are watched until they stop moving. The minimum still applies
+# (gotcha 2: nothing is trustworthy for the first 10-30 s), and the maximum
+# stops a busy household from postponing the measurement for ever.
+PHASE_SETTLE_SECONDS = 30       # never take a baseline sooner than this
+PHASE_SETTLE_STEP = 10          # how often to look while waiting
+PHASE_SETTLE_MAX = 120          # give up waiting for quiet and read anyway
+PHASE_SETTLE_TOLERANCE = 200    # W per leg; below this the house counts as still
 PHASE_PROBE_MIN_WATTS = 600     # below this the signal drowns in the household
 PHASE_PROBE_MIN_FRACTION = 0.5  # the winning leg must show at least this much
 PHASE_PROBE_MARGIN = 2.0        # ...and this many times the runner-up

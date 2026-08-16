@@ -439,6 +439,21 @@ possible, and they gate section A.
     (−3557 + 3547 ≈ −10) and the probe would have refused forever without ever
     saying why. Settle raised 10 → 30 s.
 
+    **The probe storm, 2026-08-16.** Detection ran continuously for an hour and
+    a half. Unit 093 answered `too_small` every time - 3500 W commanded, 144 W
+    seen - and nothing remembered the failure, so the next tick started again.
+    The owner's SoC graph is what explained it: 5 % to 48 % over exactly that
+    period. The probing *was* charging the pack, and the fixed 30 s settle was
+    not enough for it to come down, so every baseline already contained its own
+    3500 W and every delta was ~0. A loop that fed itself.
+
+    Two fixes, and both were needed. A failed probe now waits half an hour and
+    gives up after three tries - an unplaced pack is held to the tightest leg,
+    which is safe, whereas a coordinator that never coordinates is not. And the
+    settle is no longer a count: the legs are watched until two readings agree,
+    with a floor of 30 s (gotcha 2) and a cap of 120 s so a busy house cannot
+    postpone it for ever.
+
     Still open, and it needs hardware:
     - **`phase_voltage` is nominal.** The meter usually publishes real per-phase
       voltages; using them would make the amps honest. Not worth it until the

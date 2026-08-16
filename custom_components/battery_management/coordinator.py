@@ -166,7 +166,10 @@ from .const import (
     PHASE_MAX_ATTEMPTS,
     PHASE_PROBE_MIN_WATTS,
     PHASE_RETRY_SECONDS,
+    PHASE_SETTLE_MAX,
     PHASE_SETTLE_SECONDS,
+    PHASE_SETTLE_STEP,
+    PHASE_SETTLE_TOLERANCE,
     SAVE_DELAY,
     TICK_LOG_SIZE,
     STORAGE_VERSION,
@@ -1826,6 +1829,40 @@ class BatteryCoordinator:
         """Waiting for real hardware to respond. A seam, so tests need not."""
         await asyncio.sleep(seconds)
 
+    async def _await_rest(self) -> dict[int, float]:
+        """Hold until the legs stop moving, then read them.
+
+        Counting to thirty was a guess, and at the primary site it was wrong:
+        the baseline was taken while the pack was still delivering its previous
+        3500 W, so the probe measured a 144 W difference, failed, and tried
+        again - which is exactly what stopped the pack ever coming to rest.
+
+        The minimum wait still applies, because nothing the packs report is
+        trustworthy for the first 10-30 s (gotcha 2). Past that, two readings
+        that agree mean the house is holding still; if it never does - somebody
+        is cooking - the cap gives up and reads anyway rather than postponing
+        the measurement for ever.
+        """
+        await self._sleep(PHASE_SETTLE_SECONDS)
+        previous = self.phase_power()
+        waited = PHASE_SETTLE_SECONDS
+        while waited < PHASE_SETTLE_MAX:
+            await self._sleep(PHASE_SETTLE_STEP)
+            waited += PHASE_SETTLE_STEP
+            current = self.phase_power()
+            if not current or not previous:
+                return current
+            if all(
+                abs(current[leg] - previous.get(leg, current[leg]))
+                <= PHASE_SETTLE_TOLERANCE
+                for leg in current
+            ):
+                return current
+            _LOGGER.debug("phase probe: legs still moving after %.0f s", waited)
+            previous = current
+        _LOGGER.debug("phase probe: never went quiet; measuring anyway")
+        return self.phase_power()
+
     async def _probe_unit(self, cfg: UnitConfig) -> None:
         state = self._unit_snapshot(cfg)
         if not state.online:
@@ -1853,9 +1890,8 @@ class BatteryCoordinator:
         for other in self._units:
             await self._svc_number(other.target_number, 0)
             self._record(other.name, flow, 0)
-        await self._sleep(PHASE_SETTLE_SECONDS)
 
-        baseline = self.phase_power()
+        baseline = await self._await_rest()
         if not baseline:
             self.phase_probe_detail[cfg.name] = {"reason": "no_phase_readings"}
             return

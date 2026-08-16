@@ -462,3 +462,71 @@ async def test_the_baseline_waits_for_the_previous_pack_to_wind_down(build_syste
     # settle before every baseline, and it must outlast the Modbus lag
     assert waits[0] == PHASE_SETTLE_SECONDS
     assert PHASE_SETTLE_SECONDS >= 30
+
+
+# -- waiting for the packs to actually stop -----------------------------------
+
+
+async def test_the_baseline_waits_until_the_legs_stop_moving(build_system):
+    """Reproduces the primary site's failure: the baseline used to be taken on
+    a fixed count, while the pack was still delivering its previous command, so
+    the probe measured a difference of almost nothing and tried again forever."""
+    from custom_components.battery_management.const import (
+        PHASE_SETTLE_SECONDS,
+        PHASE_SETTLE_STEP,
+    )
+
+    system = build_system(grid=0, units=EVEN, phases=QUIET)
+    # a pack that takes a full minute to wind down from 3500 W
+    winding_down = [3500, 2400, 1200, 300, 0, 0]
+    waited: list[float] = []
+
+    async def slow_pack(seconds):
+        waited.append(seconds)
+        left = winding_down.pop(0) if winding_down else 0
+        commanded = -system.coordinator.unit_status["Batterij 1"].target
+        system.set_phases(400 + left + commanded, 300, 200)
+
+    system.coordinator._sleep = slow_pack
+    baseline = await system.coordinator._await_rest()
+
+    assert waited[0] == PHASE_SETTLE_SECONDS
+    assert all(w == PHASE_SETTLE_STEP for w in waited[1:])
+    assert len(waited) > 1, "took the baseline before the pack had come down"
+    assert baseline[1] < 800, baseline
+
+
+async def test_it_does_not_wait_for_ever_on_a_busy_house(build_system):
+    """Somebody is cooking. Measure anyway rather than postponing for ever."""
+    from custom_components.battery_management.const import PHASE_SETTLE_MAX
+
+    system = build_system(grid=0, units=EVEN, phases=QUIET)
+    total = [0.0]
+    noisy = iter(range(1000))
+
+    async def restless(seconds):
+        total[0] += seconds
+        system.set_phases(400 + next(noisy) * 500, 300, 200)
+
+    system.coordinator._sleep = restless
+    await system.coordinator._await_rest()
+
+    assert total[0] <= PHASE_SETTLE_MAX
+
+
+async def test_a_quiet_house_is_not_kept_waiting(build_system):
+    from custom_components.battery_management.const import (
+        PHASE_SETTLE_SECONDS,
+        PHASE_SETTLE_STEP,
+    )
+
+    system = build_system(grid=0, units=EVEN, phases=QUIET)
+    total = [0.0]
+
+    async def quiet(seconds):
+        total[0] += seconds
+
+    system.coordinator._sleep = quiet
+    await system.coordinator._await_rest()
+
+    assert total[0] == PHASE_SETTLE_SECONDS + PHASE_SETTLE_STEP
