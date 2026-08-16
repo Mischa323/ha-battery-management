@@ -1,0 +1,157 @@
+"""One CSV row per control tick, on disk.
+
+Why a file and not the diagnostics download. The in-memory tick log holds a
+thousand rows - about four hours - and dies with the process. Every question
+worth asking so far has been about a day that had already scrolled off it:
+"why did the pack not charge on Saturday", "why did the probe answer 2 when it
+answered 3 last week". Those are answerable by arithmetic or not at all, and
+arithmetic needs the numbers to still exist.
+
+So: one file per day under the config directory, one row per tick, every input
+and every bound the loop used. Old files are deleted by age, which is a policy
+anyone can check by looking at the folder.
+
+Two rules this module keeps to:
+
+* **Never raise into the control loop.** A full disk must cost the trace, not
+  the batteries. Every entry point swallows and counts instead.
+* **Never block the event loop.** Rows are buffered and flushed from an
+  executor thread, so a slow SD card cannot stall a tick.
+"""
+from __future__ import annotations
+
+import csv
+import io
+import logging
+import os
+import time
+from datetime import datetime, timedelta, timezone
+
+_LOGGER = logging.getLogger(__name__)
+
+#: Flush at most this often, so a 15 s tick does not mean a write every 15 s.
+FLUSH_SECONDS = 60
+#: ...or when this many rows are waiting, whichever comes first.
+FLUSH_ROWS = 20
+
+
+class Trace:
+    """Buffered, append-only, one file per day."""
+
+    def __init__(self, directory: str, keep_days: int = 14) -> None:
+        self._dir = directory
+        self._keep = keep_days
+        self._rows: list[dict] = []
+        self._fields: list[str] = []
+        # started now, not at zero: at zero the very first tick looks
+        # overdue and writes a single-row file, which turns a 15 s loop
+        # into a 15 s disk write for as long as one row keeps arriving
+        self._last_flush = time.monotonic()
+        self._day: str | None = None
+        #: Surfaced in diagnostics: a trace that is silently not being written
+        #: is worse than none, because it is discovered a week later.
+        self.written = 0
+        self.errors = 0
+        self.last_error: str | None = None
+
+    # -- writing --------------------------------------------------------------
+
+    def add(self, row: dict) -> bool:
+        """Buffer a row. Returns True when a flush is due."""
+        # the first row decides the column order; later keys are appended so a
+        # new field mid-run does not shift every earlier column
+        for key in row:
+            if key not in self._fields:
+                self._fields.append(key)
+        self._rows.append(row)
+        due = (
+            len(self._rows) >= FLUSH_ROWS
+            or time.monotonic() - self._last_flush >= FLUSH_SECONDS
+        )
+        return due
+
+    def path_for(self, moment: datetime) -> str:
+        return os.path.join(self._dir, f"{moment:%Y-%m-%d}.csv")
+
+    def flush(self) -> None:
+        """Append the buffer. Runs in an executor; must not raise."""
+        rows, self._rows = self._rows, []
+        self._last_flush = time.monotonic()
+        if not rows:
+            return
+        try:
+            os.makedirs(self._dir, exist_ok=True)
+            now = datetime.now(timezone.utc)
+            path = self.path_for(now)
+            fresh = not os.path.exists(path)
+            # csv wants a text handle; build the text first so a failure part
+            # way through cannot leave half a row in the file
+            buffer = io.StringIO()
+            writer = csv.DictWriter(
+                buffer, fieldnames=self._fields, extrasaction="ignore", lineterminator="\n"
+            )
+            if fresh:
+                writer.writeheader()
+            for row in rows:
+                writer.writerow(row)
+            with open(path, "a", encoding="utf-8", newline="") as handle:
+                handle.write(buffer.getvalue())
+            self.written += len(rows)
+            if fresh:
+                self._prune(now)
+        except Exception as err:  # noqa: BLE001 - a trace must never break a tick
+            self.errors += len(rows)
+            self.last_error = f"{type(err).__name__}: {err}"
+            _LOGGER.warning("could not write the trace: %s", err)
+
+    def _prune(self, now: datetime) -> None:
+        """Delete whole days older than the retention window."""
+        cutoff = (now - timedelta(days=self._keep)).date()
+        try:
+            names = os.listdir(self._dir)
+        except OSError:
+            return
+        for name in names:
+            if not name.endswith(".csv"):
+                continue
+            try:
+                day = datetime.strptime(name[:-4], "%Y-%m-%d").date()
+            except ValueError:
+                continue  # not ours; leave it alone
+            if day < cutoff:
+                try:
+                    os.remove(os.path.join(self._dir, name))
+                except OSError as err:
+                    _LOGGER.debug("could not remove %s: %s", name, err)
+
+    # -- reading back ---------------------------------------------------------
+
+    def files(self) -> list[str]:
+        """Which days are on disk, newest first."""
+        try:
+            names = sorted(
+                (n for n in os.listdir(self._dir) if n.endswith(".csv")), reverse=True
+            )
+        except OSError:
+            return []
+        return names
+
+    def summary(self) -> dict:
+        """What the diagnostics should say about the trace itself."""
+        out: dict = {
+            "directory": self._dir,
+            "keep_days": self._keep,
+            "rows_written": self.written,
+            "rows_lost": self.errors,
+            "buffered": len(self._rows),
+            "last_error": self.last_error,
+        }
+        days = []
+        for name in self.files():
+            path = os.path.join(self._dir, name)
+            try:
+                days.append({"day": name[:-4], "bytes": os.path.getsize(path)})
+            except OSError:
+                continue
+        out["days"] = days
+        return out

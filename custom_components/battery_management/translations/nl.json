@@ -46,7 +46,8 @@
           "soc_sensor": "SoC-sensor (%)",
           "charge_limit_number": "Laadlimiet (%, optioneel)",
           "discharge_limit_number": "Ontlaadlimiet (%, optioneel)",
-          "unit_phase": "Fase (0 = zelf meten)"
+          "unit_phase": "Fase (0 = zelf meten)",
+          "power_sensor": "Vermogenssensor (optioneel)"
         },
         "data_description": {
           "name": "Wordt gebruikt in de sensornamen van deze integratie. Moet uniek zijn: twee packs met dezelfde naam worden als een behandeld.",
@@ -56,7 +57,8 @@
           "soc_sensor": "Bepaalt de verdeling tussen packs en elke SoC-grens. Een pack waarvan de SoC niet leesbaar is wordt volledig overgeslagen.",
           "charge_limit_number": "De eigen bovengrens van de pack, in procenten. Leeglaten betekent 100 %. Wijs hier nooit een watt-entiteit aan.",
           "discharge_limit_number": "De eigen ondergrens van de pack. Leeglaten betekent 5 %. Dit is het hardware-vangnet waar de coordinator boven blijft.",
-          "unit_phase": "Op welke fase deze accu zit: 1, 2 of 3. Laat op 0 staan en het wordt gemeten. Wat je hier invult wint van elke meting - wie de meterkast heeft bekeken weet het beter dan een proefmeting."
+          "unit_phase": "Op welke fase deze accu zit: 1, 2 of 3. Laat op 0 staan en het wordt gemeten. Wat je hier invult wint van elke meting - wie de meterkast heeft bekeken weet het beter dan een proefmeting.",
+          "power_sensor": "De eigen vermogensmeting van de accu. Wordt nooit gebruikt om te sturen - hij loopt 10-30 s achter - maar hiermee laat het logboek zien wat de accu werkelijk deed naast wat hij opgedragen kreeg."
         }
       },
       "unit_modes": {
@@ -106,7 +108,9 @@
           "full_charge_minutes": "Minuten van leeg naar vol op vol vermogen",
           "external_timeout": "Minuten dat een extern setpoint geldig blijft",
           "discharge_recovery": "Eerst zover terugladen voordat hij weer ontlaadt (%)",
-          "kp_return": "Terugregelfactor"
+          "kp_return": "Terugregelfactor",
+          "trace": "Logboekbestand schrijven",
+          "trace_days": "Bewaren"
         },
         "data_description": {
           "bias": "Streef naar zoveel afname in plaats van precies nul, zodat een kleine doorschieter alsnog niets teruglevert.",
@@ -119,7 +123,9 @@
           "full_charge_minutes": "Eenmalig gemeten, per pack. Levert zowel de minuten-tot-vol-schatting als de bruikbare capaciteit die het zon-plafond nodig heeft. 0 verbergt beide in plaats van te gokken.",
           "external_timeout": "In de modus Extern plan: komt er binnen deze tijd geen nieuw plan, dan gaat de sturing terug naar de meter volgen in plaats van te bevriezen op het laatste commando.",
           "discharge_recovery": "Zodra een accu leeg is, wacht hij tot hij dit aantal procentpunten boven zijn ondergrens zit voordat hij weer ontlaadt. Zonder dit wordt een accu die door de zon van 5 % naar 6 % gaat meteen weer naar 5 % ontladen, keer op keer - en onderin de accu is cyclen het duurst. Geteld bóven de ondergrens, dus hij volgt je SoC-reserve en de eigen ontlaadlimiet van elke accu. Opladen wordt nooit geblokkeerd, en een accu die van vol naar beneden komt loopt gewoon door tot zijn limiet. 0 zet het uit.",
-          "kp_return": "Hoe snel de opdracht weer wordt afgebouwd. Bewust hoger dan de factor hierboven: teruggaan kan niet gaan slingeren, en het is precies wat voorkomt dat de accus terugleveren aan een verbruik dat al weg is. Zet hem gelijk aan de factor hierboven voor het oude, symmetrische gedrag."
+          "kp_return": "Hoe snel de opdracht weer wordt afgebouwd. Bewust hoger dan de factor hierboven: teruggaan kan niet gaan slingeren, en het is precies wat voorkomt dat de accus terugleveren aan een verbruik dat al weg is. Zet hem gelijk aan de factor hierboven voor het oude, symmetrische gedrag.",
+          "trace": "Eén CSV-regel per tick in config/battery_management_trace/, zodat een vraag over vorige week nog te beantwoorden is. Kost ongeveer 2 MB per dag.",
+          "trace_days": "Hele dagen ouder dan dit worden verwijderd."
         }
       },
       "units": {
@@ -133,7 +139,8 @@
           "soc_sensor": "SoC-sensor (%)",
           "charge_limit_number": "Laadlimiet (%, optioneel)",
           "discharge_limit_number": "Ontlaadlimiet (%, optioneel)",
-          "unit_phase": "Fase (0 = zelf meten)"
+          "unit_phase": "Fase (0 = zelf meten)",
+          "power_sensor": "Vermogenssensor (optioneel)"
         },
         "data_description": {
           "name": "Wordt gebruikt in de sensornamen van deze integratie. Moet uniek zijn: twee packs met dezelfde naam worden als een behandeld.",
@@ -143,7 +150,8 @@
           "soc_sensor": "Bepaalt de verdeling tussen packs en elke SoC-grens. Een pack waarvan de SoC niet leesbaar is wordt volledig overgeslagen.",
           "charge_limit_number": "De eigen bovengrens van de pack, in procenten. Leeglaten betekent 100 %. Wijs hier nooit een watt-entiteit aan.",
           "discharge_limit_number": "De eigen ondergrens van de pack. Leeglaten betekent 5 %. Dit is het hardware-vangnet waar de coordinator boven blijft.",
-          "unit_phase": "Op welke fase deze accu zit: 1, 2 of 3. Laat op 0 staan en het wordt gemeten. Wat je hier invult wint van elke meting - wie de meterkast heeft bekeken weet het beter dan een proefmeting."
+          "unit_phase": "Op welke fase deze accu zit: 1, 2 of 3. Laat op 0 staan en het wordt gemeten. Wat je hier invult wint van elke meting - wie de meterkast heeft bekeken weet het beter dan een proefmeting.",
+          "power_sensor": "De eigen vermogensmeting van de accu. Wordt nooit gebruikt om te sturen - hij loopt 10-30 s achter - maar hiermee laat het logboek zien wat de accu werkelijk deed naast wat hij opgedragen kreeg."
         }
       },
       "dynamic": {

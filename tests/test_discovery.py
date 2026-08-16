@@ -8,6 +8,7 @@ from custom_components.battery_management.const import (
     CONF_MODE_SELECT,
     CONF_SOC_SENSOR,
     CONF_TARGET_NUMBER,
+    CONF_UNIT_POWER_SENSOR,
 )
 from custom_components.battery_management.discovery import match_unit_entities
 
@@ -38,6 +39,9 @@ def test_resolves_a_real_anker_device():
         CONF_SOC_SENSOR: f"sensor.{PREFIX}_soc",
         CONF_CHARGE_LIMIT: f"number.{PREFIX}_charging_limit",
         CONF_DISCHARGE_LIMIT: f"number.{PREFIX}_discharge_limit",
+        # ac_output beats battery_discharging_power on purpose: gotcha 2
+        # records the latter reading 0 while the pack was plainly working
+        CONF_UNIT_POWER_SENSOR: f"sensor.{PREFIX}_ac_output",
     }
 
 

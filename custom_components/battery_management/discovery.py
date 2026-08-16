@@ -15,6 +15,7 @@ from .const import (
     CONF_FLOW_SELECT,
     CONF_MODE_SELECT,
     CONF_SOC_SENSOR,
+    CONF_UNIT_POWER_SENSOR,
     CONF_TARGET_NUMBER,
 )
 
@@ -47,6 +48,23 @@ def _score_soc(name: str) -> int:
     return 0
 
 
+def _score_power(name: str) -> int:
+    """The pack's own AC power reading, for the trace only.
+
+    `ac_output` is preferred over `battery_discharging_power` on purpose:
+    gotcha 2 records that the latter can read 0 while the pack is plainly
+    delivering, so it is the worse of the two for spotting a pack that is not
+    following orders - which is the whole reason this field exists.
+    """
+    if name.endswith("_ac_output") or name == "ac_output":
+        return 3
+    if name.endswith("_ac_power") or name.endswith("_output_power"):
+        return 2
+    if "discharging_power" in name or "charging_power" in name:
+        return 1
+    return 0
+
+
 def _score_charge_limit(name: str) -> int:
     # "discharge_limit" contains "charge_limit", so rule it out first
     if "discharge" in name:
@@ -66,6 +84,7 @@ _RULES = {
     CONF_FLOW_SELECT: ("select", _score_flow),
     CONF_TARGET_NUMBER: ("number", _score_target),
     CONF_SOC_SENSOR: ("sensor", _score_soc),
+    CONF_UNIT_POWER_SENSOR: ("sensor", _score_power),
     CONF_CHARGE_LIMIT: ("number", _score_charge_limit),
     CONF_DISCHARGE_LIMIT: ("number", _score_discharge_limit),
 }

@@ -7,6 +7,8 @@ instead of breaking a live install.
 """
 from __future__ import annotations
 
+import asyncio
+
 from dataclasses import dataclass, field
 from typing import NamedTuple
 
@@ -22,6 +24,7 @@ from custom_components.battery_management.const import (
     CONF_INTERVAL,
     CONF_KP,
     CONF_KP_RETURN,
+    CONF_TRACE,
     CONF_MIN_OUTPUT,
     CONF_MODE_SELECT,
     CONF_PHASE_SENSORS,
@@ -48,6 +51,9 @@ DEFAULT_TUNABLES = {
     # explicit, so tests that are not about the gain keep the old
     # symmetric loop instead of inheriting Kp x KP_RETURN_FACTOR
     CONF_KP_RETURN: 1.0,
+    # off unless a test asks for it: the trace writes real files, and a
+    # suite that scatters CSVs through the checkout is its own bug
+    CONF_TRACE: False,
     CONF_INTERVAL: 15,
     CONF_MIN_OUTPUT: 150,
     CONF_UNIT_MAX: 3500,
@@ -131,6 +137,21 @@ class FakeHass:
     def async_create_task(self, coro, *args, **kwargs):
         self.tasks.append(coro)
         return coro
+
+    def async_add_executor_job(self, func, *args):
+        """Run it here and now.
+
+        The trace writer is deliberately synchronous and exception-proof, so
+        running it inline keeps the tests deterministic - a flush that happened
+        "somewhere later" is not something a test can assert on.
+        """
+        self.executor_jobs = getattr(self, "executor_jobs", 0) + 1
+        result = func(*args)
+        # Home Assistant hands back an awaitable, and one caller awaits it.
+        # Returning the bare result made that caller fail only in the tests.
+        future: asyncio.Future = asyncio.get_event_loop().create_future()
+        future.set_result(result)
+        return future
 
 
 class FakeStore:

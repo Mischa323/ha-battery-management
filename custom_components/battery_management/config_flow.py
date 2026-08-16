@@ -56,6 +56,9 @@ from .const import (
     CONF_PHASE_VOLTAGE,
     CONF_SOC_SENSOR,
     CONF_TARGET_NUMBER,
+    CONF_TRACE,
+    CONF_TRACE_DAYS,
+    CONF_UNIT_POWER_SENSOR,
     CONF_UNIT_COUNT,
     CONF_UNIT_MAX,
     CONF_UNIT_NAME,
@@ -84,6 +87,8 @@ from .const import (
     DEFAULT_PHASE_PROBE_SECONDS,
     DEFAULT_PHASE_REDETECT,
     DEFAULT_PHASE_VOLTAGE,
+    DEFAULT_TRACE,
+    DEFAULT_TRACE_DAYS,
     DEFAULT_UNIT_MAX,
     DEVICE_MODE_SELF,
     DEVICE_MODE_THIRD_PARTY,
@@ -126,6 +131,7 @@ def _unit_schema() -> vol.Schema:
             vol.Required(CONF_FLOW_SELECT): _SELECT,
             vol.Required(CONF_TARGET_NUMBER): _NUMBER,
             vol.Required(CONF_SOC_SENSOR): _SENSOR,
+            vol.Optional(CONF_UNIT_POWER_SENSOR): _SENSOR,
             vol.Optional(CONF_CHARGE_LIMIT): _NUMBER,
             vol.Optional(CONF_DISCHARGE_LIMIT): _NUMBER,
             # 0 = work it out by probing. Anyone who has read the meter cupboard
@@ -196,6 +202,13 @@ def _options_schema(defaults: dict) -> vol.Schema:
             vol.Optional(CONF_INTERVAL, default=defaults.get(CONF_INTERVAL, DEFAULT_INTERVAL)): int,
             vol.Optional(CONF_MIN_OUTPUT, default=defaults.get(CONF_MIN_OUTPUT, DEFAULT_MIN_OUTPUT)): int,
             vol.Optional(CONF_UNIT_MAX, default=defaults.get(CONF_UNIT_MAX, DEFAULT_UNIT_MAX)): int,
+            vol.Optional(
+                CONF_TRACE, default=defaults.get(CONF_TRACE, DEFAULT_TRACE)
+            ): bool,
+            vol.Optional(
+                CONF_TRACE_DAYS,
+                default=defaults.get(CONF_TRACE_DAYS, DEFAULT_TRACE_DAYS),
+            ): _amount(1, 90, "dagen"),
             vol.Optional(
                 CONF_DISCHARGE_RECOVERY,
                 default=defaults.get(

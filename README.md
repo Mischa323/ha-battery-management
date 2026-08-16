@@ -84,6 +84,41 @@ limit for any loop that only reacts. It is a factor rather than a fixed number
 so that raising Kp cannot silently flatten the asymmetry back out; set it equal
 to Kp for the old symmetric behaviour.
 
+## The trace file
+
+Every tick is written to `config/battery_management_trace/YYYY-MM-DD.csv`, one
+row per tick, kept for 14 days. The diagnostics download only holds the last
+four hours and dies with the process — which is no use at all when the question
+is "why did the packs do that on Saturday".
+
+Get at it with the **File editor**, **Samba share** or **Terminal** add-on, or
+`ha` over SSH. Every column is flat, so `pandas.read_csv` or a spreadsheet can
+plot any of it without unpacking anything.
+
+What each row carries:
+
+| column | meaning |
+| --- | --- |
+| `grid_w` | the meter, as used (reconstructed in a shadow run) |
+| `observed_grid_w` | what the meter actually said |
+| `error_w`, `sp_before_w`, `sp_wanted_w`, `setpoint_w` | the whole integrator step |
+| `sp_reason` | `integrate` · `deadband` · `clamped_upper` · `clamped_lower` · `dynamic_buy` · `external_plan` |
+| `gain` | which of the two gains was applied |
+| `upper_w`, `lower_w` | the bounds in force |
+| `free_discharge_w`, `fuse_discharge_w` | what the packs could give, and what the fuse left of it |
+| `phase1_w`…`phase3_w` | each leg |
+| `<pack>_target_w` | what we told that pack |
+| `<pack>_actual_w` | what the pack says it is doing — **the lag, measured** |
+| `<pack>_cap_w`, `<pack>_soc`, `<pack>_phase`, `<pack>_recovering` | its ceiling and state |
+| `mode`, `policy`, `status`, `dry_run`, `offline` | context |
+
+Rows with `event=phase_probe` record a phase measurement: the deltas per leg,
+the winning leg, the runner-up and the verdict.
+
+`<pack>_actual_w` needs the optional **Power sensor** on each unit (the wizard
+finds `..._ac_output` by itself). Without it the column is empty and the trace
+cannot show whether a pack followed its orders — which is usually the question.
+
 ## Notes / status
 
 The control loop is a port of a field-tested YAML setup, but this integration

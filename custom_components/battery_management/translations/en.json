@@ -46,7 +46,8 @@
           "soc_sensor": "State of charge sensor (%)",
           "charge_limit_number": "Charge limit (%, optional)",
           "discharge_limit_number": "Discharge limit (%, optional)",
-          "unit_phase": "Phase (0 = measure it)"
+          "unit_phase": "Phase (0 = measure it)",
+          "power_sensor": "Power sensor (optional)"
         },
         "data_description": {
           "name": "Used in this integration's own sensor names. Must be unique: two packs sharing a name would be treated as one.",
@@ -56,7 +57,8 @@
           "soc_sensor": "Drives the split between packs and every SoC limit. A pack whose state of charge cannot be read is skipped entirely.",
           "charge_limit_number": "The pack's own upper limit, as a percentage. Leave empty to assume 100 %. Never point this at a watt entity.",
           "discharge_limit_number": "The pack's own lower limit. Leave empty to assume 5 %. This is the hardware backstop the coordinator stays above.",
-          "unit_phase": "Which leg of the supply this pack is on: 1, 2 or 3. Leave it at 0 and it is measured. Anything you type here wins over any measurement - if you have read the meter cupboard, you know better than a probe does."
+          "unit_phase": "Which leg of the supply this pack is on: 1, 2 or 3. Leave it at 0 and it is measured. Anything you type here wins over any measurement - if you have read the meter cupboard, you know better than a probe does.",
+          "power_sensor": "The pack's own power reading. Never used for control - it lags 10-30 s - but it is what lets the trace show what the pack actually did next to what it was told to do."
         }
       },
       "unit_modes": {
@@ -106,7 +108,9 @@
           "full_charge_minutes": "Minutes from empty to full at max power",
           "external_timeout": "Minutes an external setpoint stays valid",
           "discharge_recovery": "Charge back this far before discharging again (%)",
-          "kp_return": "Return gain"
+          "kp_return": "Return gain",
+          "trace": "Write a trace file",
+          "trace_days": "Keep for"
         },
         "data_description": {
           "bias": "Aim for this much import instead of exactly zero, so a brief overshoot still exports nothing.",
@@ -119,7 +123,9 @@
           "full_charge_minutes": "Measured once, per pack. Gives both the minutes-to-full estimate and the usable capacity that the solar-aware charge ceiling needs. 0 hides both rather than guessing.",
           "external_timeout": "In External plan mode: if no new plan arrives within this time, control returns to following the meter instead of freezing on the last instruction.",
           "discharge_recovery": "Once a pack has been emptied it waits until it is this many points above its floor before it discharges again. Without it, the sun lifting a pack from 5 % to 6 % gets discharged straight back to 5 %, over and over - and the bottom of the pack is the worst place to cycle it. Counted above the floor, so it follows your SoC reserve and each pack's own discharge limit. It never blocks charging, and a pack coming down from full still empties all the way to its limit. 0 switches it off.",
-          "kp_return": "How fast the command is wound back down. Higher than the gain above on purpose: coming back cannot oscillate, and it is what stops the packs exporting into a load that has already gone away. Set it equal to the gain above for the old symmetric behaviour."
+          "kp_return": "How fast the command is wound back down. Higher than the gain above on purpose: coming back cannot oscillate, and it is what stops the packs exporting into a load that has already gone away. Set it equal to the gain above for the old symmetric behaviour.",
+          "trace": "One CSV row per tick under config/battery_management_trace/, so a question about last week can still be answered. Costs about 2 MB a day.",
+          "trace_days": "Whole days older than this are deleted."
         }
       },
       "units": {
@@ -133,7 +139,8 @@
           "soc_sensor": "State of charge sensor (%)",
           "charge_limit_number": "Charge limit (%, optional)",
           "discharge_limit_number": "Discharge limit (%, optional)",
-          "unit_phase": "Phase (0 = measure it)"
+          "unit_phase": "Phase (0 = measure it)",
+          "power_sensor": "Power sensor (optional)"
         },
         "data_description": {
           "name": "Used in this integration's own sensor names. Must be unique: two packs sharing a name would be treated as one.",
@@ -143,7 +150,8 @@
           "soc_sensor": "Drives the split between packs and every SoC limit. A pack whose state of charge cannot be read is skipped entirely.",
           "charge_limit_number": "The pack's own upper limit, as a percentage. Leave empty to assume 100 %. Never point this at a watt entity.",
           "discharge_limit_number": "The pack's own lower limit. Leave empty to assume 5 %. This is the hardware backstop the coordinator stays above.",
-          "unit_phase": "Which leg of the supply this pack is on: 1, 2 or 3. Leave it at 0 and it is measured. Anything you type here wins over any measurement - if you have read the meter cupboard, you know better than a probe does."
+          "unit_phase": "Which leg of the supply this pack is on: 1, 2 or 3. Leave it at 0 and it is measured. Anything you type here wins over any measurement - if you have read the meter cupboard, you know better than a probe does.",
+          "power_sensor": "The pack's own power reading. Never used for control - it lags 10-30 s - but it is what lets the trace show what the pack actually did next to what it was told to do."
         }
       },
       "dynamic": {

@@ -16,6 +16,11 @@ CONF_FLOW_SELECT = "grid_flow_select"          # select.* (charge / discharge)
 CONF_TARGET_NUMBER = "target_power_number"     # number.* (0..max W)
 CONF_SOC_SENSOR = "soc_sensor"                 # sensor.* (%)
 CONF_CHARGE_LIMIT = "charge_limit_number"      # number.* (%) - optional
+# The pack's own power reading. Optional, and never used for control -
+# gotcha 2 says it lags 10-30 s and arrives in bursts. It is here so the
+# trace can show what we commanded next to what the pack actually did,
+# which is the only way to see how far behind it runs.
+CONF_UNIT_POWER_SENSOR = "power_sensor"        # sensor.* (W) - optional
 CONF_DISCHARGE_LIMIT = "discharge_limit_number"  # number.* (%) - optional
 
 # Which option on this unit's mode select means what. Not hard-coded, because
@@ -187,6 +192,10 @@ PHASE_SETTLE_SECONDS = 30       # never take a baseline sooner than this
 PHASE_SETTLE_STEP = 10          # how often to look while waiting
 PHASE_SETTLE_MAX = 120          # give up waiting for quiet and read anyway
 PHASE_SETTLE_TOLERANCE = 200    # W per leg; below this the house counts as still
+# How often the legs are read while the probe is running. The baseline
+# waits for quiet; sampling the measurement only once at the end was the
+# missing half of that, and it is how a kettle gets to cast a vote.
+PHASE_PROBE_SAMPLE = 5          # seconds between readings during a probe
 PHASE_PROBE_MIN_WATTS = 600     # below this the signal drowns in the household
 PHASE_PROBE_MIN_FRACTION = 0.5  # the winning leg must show at least this much
 PHASE_PROBE_MARGIN = 2.0        # ...and this many times the runner-up
@@ -355,6 +364,17 @@ DEFAULT_DRY_RUN = True
 # thinking at 14:32" without holding a database in RAM. The month-long trend
 # lives in Home Assistant's long-term statistics instead.
 TICK_LOG_SIZE = 1000
+
+# --- Trace file --------------------------------------------------------------
+# The in-memory log above holds about four hours and dies with the process,
+# which is useless for "what happened on Saturday". The trace is a CSV in the
+# config directory instead: one row per tick, every input and every bound, so a
+# question about last week can be answered by arithmetic instead of memory.
+CONF_TRACE = "trace"                 # write it at all
+CONF_TRACE_DAYS = "trace_days"       # how many days of files to keep
+DEFAULT_TRACE = True
+DEFAULT_TRACE_DAYS = 14
+TRACE_DIR = "battery_management_trace"
 
 # --- Shadow simulation -------------------------------------------------------
 # In dry run something else is regulating the meter, so our integrator sees a

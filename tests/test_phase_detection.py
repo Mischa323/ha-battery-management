@@ -565,3 +565,44 @@ async def test_it_stops_saying_it_is_measuring_once_it_is_done(build_system):
 
     assert system.coordinator.status != "detecting"
     assert system.coordinator.active_policy != POLICY_PHASE_DETECT
+
+
+async def test_a_probe_records_the_whole_measurement(build_system):
+    """Not just its verdict.
+
+    "too_small" and nothing else cannot be told apart from a pack that never
+    obeyed, from a meter that had not caught up, or from an oven switching on
+    halfway through. That ambiguity cost a day of probing at the primary site,
+    so the baseline, every sample taken during the probe and the reading it
+    settled on all travel with the answer.
+    """
+    system = build_system(grid=0, units=EVEN, phases=QUIET)
+
+    await probe(system, {"Batterij 1": 1, "Batterij 2": 2})
+
+    detail = system.coordinator.phase_probe_detail["Batterij 1"]
+    assert detail["baseline"], "no baseline recorded"
+    assert detail["series"], "no samples recorded during the probe"
+    assert detail["settled_on"], "did not say which reading it used"
+    assert detail["at"], "no timestamp, so it cannot be lined up with anything"
+    assert all("t" in sample for sample in detail["series"]), "samples have no time"
+
+
+async def test_it_prefers_the_quietest_pair_of_samples(build_system):
+    """The last sample is the latest, not necessarily the truest.
+
+    The pack ramps and the house wanders, so the reading used is the adjacent
+    pair that agree best - the same standard the baseline is held to.
+    """
+    coordinator = build_system(grid=0).coordinator
+
+    settled = coordinator._steadiest(
+        [
+            {"t": 5, "1": 0, "2": 0, "3": 0},        # still ramping
+            {"t": 10, "1": 3000, "2": 0, "3": 0},
+            {"t": 15, "1": 3500, "2": 0, "3": 0},    # these two agree
+            {"t": 20, "1": 3520, "2": 0, "3": 0},
+        ]
+    )
+
+    assert settled[1] == pytest.approx(3510, abs=1)

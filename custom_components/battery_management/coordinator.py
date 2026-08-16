@@ -33,6 +33,7 @@ from .phases import (
     unit_ceilings,
 )
 from .suppliers import FETCHERS, SOURCE_ENTITY, SOURCE_NONE
+from .trace import Trace
 from .prices import (
     cheapest_slots,
     dearest_slots,
@@ -66,8 +67,11 @@ from .const import (
     CONF_PHASE_SENSORS,
     CONF_PHASE_VOLTAGE,
     CONF_SOC_SENSOR,
+    CONF_UNIT_POWER_SENSOR,
     CONF_UNIT_PHASE,
     CONF_TARGET_NUMBER,
+    CONF_TRACE,
+    CONF_TRACE_DAYS,
     CONF_FAST_CHARGE_HOLD,
     CONF_BATTERY_POWER_SENSOR,
     CONF_CHARGE_BELOW_SOC,
@@ -103,6 +107,9 @@ from .const import (
     DEFAULT_INTERVAL,
     DEFAULT_KP,
     DEFAULT_MIN_OUTPUT,
+    DEFAULT_TRACE,
+    DEFAULT_TRACE_DAYS,
+    TRACE_DIR,
     KP_RETURN_FACTOR,
     DEFAULT_MODE,
     DEFAULT_PHASE_DETECT,
@@ -167,6 +174,7 @@ from .const import (
     PHASE_DETECT_UNKNOWN,
     PHASE_MAX_ATTEMPTS,
     PHASE_PROBE_MIN_WATTS,
+    PHASE_PROBE_SAMPLE,
     PHASE_RETRY_SECONDS,
     PHASE_SETTLE_MAX,
     PHASE_SETTLE_SECONDS,
@@ -192,6 +200,8 @@ class UnitConfig:
     soc_sensor: str
     charge_limit: str | None = None
     discharge_limit: str | None = None
+    #: the pack's own power reading; observation only, never control
+    power_sensor: str | None = None
     mode_control: str = DEVICE_MODE_THIRD_PARTY
     #: False when this entry predates the mode step, so both values below are
     #: defaults rather than choices - which is exactly when they are wrong
@@ -219,6 +229,7 @@ class UnitConfig:
             soc_sensor=raw[CONF_SOC_SENSOR],
             charge_limit=raw.get(CONF_CHARGE_LIMIT),
             discharge_limit=raw.get(CONF_DISCHARGE_LIMIT),
+            power_sensor=raw.get(CONF_UNIT_POWER_SENSOR),
             modes_configured=CONF_MODE_CONTROL in raw,
             mode_control=raw.get(CONF_MODE_CONTROL) or DEVICE_MODE_THIRD_PARTY,
             # An absent hand-back means two opposite things, and getting them
@@ -373,6 +384,14 @@ class BatteryCoordinator:
         self.suppressed_commands: int = 0
         # a flight recorder, so a download can answer "what happened at 14:32"
         self.tick_log: deque = deque(maxlen=TICK_LOG_SIZE)
+        # A file, because every question so far has been about a day that had
+        # already scrolled out of the ring above.
+        self._trace: Trace | None = None
+        if data.get(CONF_TRACE, DEFAULT_TRACE):
+            self._trace = Trace(
+                hass.config.path(TRACE_DIR),
+                int(data.get(CONF_TRACE_DAYS, DEFAULT_TRACE_DAYS)),
+            )
         # the last plan handed in from outside, and when
         self.external_setpoint: float | None = None
         self.external_setpoint_at = None
@@ -568,6 +587,10 @@ class BatteryCoordinator:
             self._detecting = False
         if revert:
             await self._revert_all_to_self()
+        # the last minute of a run is the interesting one when something went
+        # wrong on the way down, and it is exactly what sits unflushed
+        if self._trace is not None:
+            await self.hass.async_add_executor_job(self._trace.flush)
 
     def _interval_timedelta(self):
         from datetime import timedelta
@@ -1488,6 +1511,7 @@ class BatteryCoordinator:
                         "soc_sensor": cfg.soc_sensor,
                         "charge_limit": cfg.charge_limit,
                         "discharge_limit": cfg.discharge_limit,
+                        "power_sensor": cfg.power_sensor,
                     },
                     "modes": {
                         "control": cfg.mode_control,
@@ -1512,42 +1536,114 @@ class BatteryCoordinator:
                 for cfg in self._units
             ],
             "recent_ticks": list(self.tick_log),
+            # a trace nobody notices has stopped is worse than none, so
+            # the counters travel with the download that would be used to
+            # ask for it
+            "trace": self._trace.summary() if self._trace else None,
         }
 
     def _log_tick(
-        self, grid, error, sp, flow, alloc, online, observed_grid=None, other_power=None
+        self,
+        grid,
+        error,
+        sp,
+        flow,
+        alloc,
+        online,
+        observed_grid=None,
+        other_power=None,
+        bounds=None,
     ) -> None:
-        """One row per tick for the diagnostics download.
+        """One row per tick, to the diagnostics ring *and* to the trace file.
 
         Recorded in dry run too - that is the entire point of dry run.
+
+        The rule for what goes in: every number the loop read, every bound it
+        applied, and the reason it settled on the setpoint it did. Anything
+        left out is a question that will need a code change to answer, and the
+        questions have all been about days that already scrolled away.
         """
-        self.tick_log.append(
-            {
-                "at": dt_util.utcnow().isoformat(),
-                "grid_w": round(grid),
-                # what the meter really said, and what the other controller was
-                # doing - both needed to check the reconstruction afterwards
-                "observed_grid_w": (
-                    round(observed_grid) if observed_grid is not None else None
-                ),
-                "other_controller_w": (
-                    round(other_power) if other_power is not None else None
-                ),
-                "error_w": round(error),
-                "setpoint_w": round(sp),
-                "mode": self.mode,
-                "policy": self.active_policy,
-                "flow": flow,
-                "dry_run": self.dry_run,
-                "units": {
-                    name: {
-                        "target_w": alloc.get(name, 0),
-                        "soc": online[name].soc,
-                    }
-                    for name in online
-                },
-            }
-        )
+        bounds = bounds or {}
+        legs = self.phase_power() or {}
+        row = {
+            "at": dt_util.utcnow().isoformat(),
+            "grid_w": round(grid),
+            # what the meter really said, and what the other controller was
+            # doing - both needed to check the reconstruction afterwards
+            "observed_grid_w": (
+                round(observed_grid) if observed_grid is not None else None
+            ),
+            "other_controller_w": (
+                round(other_power) if other_power is not None else None
+            ),
+            "error_w": round(error),
+            "setpoint_w": round(sp),
+            "mode": self.mode,
+            "policy": self.active_policy,
+            "status": self.status,
+            "flow": flow,
+            "dry_run": self.dry_run,
+            "phases_w": {str(leg): round(w) for leg, w in legs.items()},
+            "units": {
+                name: {
+                    "target_w": alloc.get(name, 0),
+                    "soc": online[name].soc,
+                    # what the pack itself says it is doing. Never used for
+                    # control (gotcha 2), but it is the only way to see how far
+                    # behind our command the hardware actually runs.
+                    "actual_w": self._unit_power(name),
+                    "phase": self.unit_phase.get(name),
+                    "recovering": self.recovering.get(name),
+                }
+                for name in online
+            },
+            "offline": [u.name for u in self._units if u.name not in online],
+            **{k: (round(v) if isinstance(v, float) else v)
+               for k, v in bounds.items() if k != "unit_cap_w"},
+        }
+        self.tick_log.append(row)
+        self._trace_tick(row, bounds.get("unit_cap_w") or {})
+
+    def _unit_power(self, name: str) -> float | None:
+        """What this pack reports it is doing, signed like the setpoint.
+
+        Optional and purely observational. The packs publish this 10-30 s late
+        and in bursts, which is precisely why it must never steer anything -
+        and precisely why it belongs in the trace next to what we commanded.
+        """
+        cfg = next((u for u in self._units if u.name == name), None)
+        if cfg is None or not cfg.power_sensor:
+            return None
+        value = self._read_float(cfg.power_sensor)
+        if value is None:
+            return None
+        # the packs publish magnitude; the flow select says which way
+        if value > 0 and self.unit_status[name].flow == FLOW_CHARGE:
+            value = -value
+        return round(value)
+
+    def _trace_tick(self, row: dict, caps: dict) -> None:
+        """Flatten one tick into CSV columns and hand it to the writer.
+
+        Flat on purpose: a spreadsheet or `pandas.read_csv` should be able to
+        plot any column without anyone unpacking JSON first.
+        """
+        if self._trace is None:
+            return
+        flat = {k: v for k, v in row.items() if k not in ("units", "phases_w", "offline")}
+        flat["offline"] = "|".join(row.get("offline") or ())
+        for leg, watts in (row.get("phases_w") or {}).items():
+            flat[f"phase{leg}_w"] = watts
+        for name, unit in (row.get("units") or {}).items():
+            key = name.lower().replace(" ", "_")
+            flat[f"{key}_target_w"] = unit.get("target_w")
+            flat[f"{key}_actual_w"] = unit.get("actual_w")
+            flat[f"{key}_soc"] = unit.get("soc")
+            flat[f"{key}_phase"] = unit.get("phase")
+            flat[f"{key}_cap_w"] = round(caps.get(name)) if name in caps else None
+            flat[f"{key}_recovering"] = unit.get("recovering")
+        if self._trace.add(flat):
+            self.hass.async_add_executor_job(self._trace.flush)
 
     def _refresh_observations(self, snaps: dict | None = None) -> None:
         """Update what we can see, without touching what we last commanded.
@@ -1870,6 +1966,51 @@ class BatteryCoordinator:
         """Waiting for real hardware to respond. A seam, so tests need not."""
         await asyncio.sleep(seconds)
 
+    @staticmethod
+    def _steadiest(series: list[dict]) -> dict[int, float] | None:
+        """The two adjacent samples that agree best, averaged.
+
+        The pack ramps and the house wanders, so the last sample is not
+        necessarily the truest one - it is merely the latest. Picking the
+        quietest neighbouring pair prefers a moment when nothing was moving,
+        which is the same standard the baseline is held to.
+        """
+        readings = [
+            {int(k): float(v) for k, v in s.items() if k != "t"} for s in series
+        ]
+        readings = [r for r in readings if r]
+        if not readings:
+            return None
+        if len(readings) == 1:
+            return readings[0]
+        best, spread = None, None
+        for first, second in zip(readings, readings[1:]):
+            legs = set(first) & set(second)
+            if not legs:
+                continue
+            moved = max(abs(first[leg] - second[leg]) for leg in legs)
+            if spread is None or moved < spread:
+                best, spread = {leg: (first[leg] + second[leg]) / 2 for leg in legs}, moved
+        return best or readings[-1]
+
+    def _trace_probe(self, name: str, detail: dict) -> None:
+        """Put the probe in the trace file too, so it outlives a restart."""
+        if self._trace is None:
+            return
+        row = {
+            "at": detail.get("at"),
+            "event": "phase_probe",
+            "unit": name,
+            "policy": detail.get("reason"),
+            "setpoint_w": detail.get("probe_w"),
+            "sp_reason": f"winner={detail.get('winner')}",
+            "error_w": detail.get("runner_up_w"),
+        }
+        for leg, delta in (detail.get("deltas") or {}).items():
+            row[f"phase{leg}_w"] = delta
+        if self._trace.add(row):
+            self.hass.async_add_executor_job(self._trace.flush)
+
     async def _await_rest(self) -> dict[int, float]:
         """Hold until the legs stop moving, then read them.
 
@@ -1957,15 +2098,37 @@ class BatteryCoordinator:
         await self._svc_select(cfg.flow_select, flow)
         await self._svc_number(cfg.target_number, int(probe_w))
         self._record(cfg.name, flow, int(probe_w))
+        # Watched rather than sampled once. The baseline already waits for the
+        # legs to go quiet; taking a single reading at the end was the other
+        # half of that and it was never done - so a kettle switching on during
+        # those 20 s was indistinguishable from the pack, and the answer could
+        # come out on the wrong leg with nothing in the record to show why.
+        series: list[dict] = []
         try:
-            await self._sleep(self._probe_seconds)
-            during = self.phase_power()
+            waited = 0.0
+            while waited < self._probe_seconds:
+                await self._sleep(min(PHASE_PROBE_SAMPLE, self._probe_seconds - waited))
+                waited += PHASE_PROBE_SAMPLE
+                sample = self.phase_power()
+                if sample:
+                    series.append(
+                        {"t": round(waited), **{str(k): round(v) for k, v in sample.items()}}
+                    )
+            during = self._steadiest(series) or self.phase_power()
         finally:
             await self._svc_number(cfg.target_number, 0)
             self._record(cfg.name, flow, 0)
 
         phase, detail = attribute_phase(baseline, during, probe_w, charging)
+        # the whole measurement, not just its conclusion: a refusal that says
+        # "too_small" and nothing else cannot be told apart from a pack that
+        # never obeyed, and that ambiguity cost a day of probing already
+        detail["baseline"] = {str(k): round(v) for k, v in baseline.items()}
+        detail["series"] = series
+        detail["settled_on"] = {str(k): round(v) for k, v in (during or {}).items()}
+        detail["at"] = dt_util.utcnow().isoformat()
         self.phase_probe_detail[cfg.name] = detail
+        self._trace_probe(cfg.name, detail)
         if phase is None:
             attempts = self.phase_attempts.get(cfg.name, 0)
             _LOGGER.warning(
@@ -2240,16 +2403,23 @@ class BatteryCoordinator:
                 self.mode == MODE_EXTERNAL and external_sp is None
             )
 
+            # everything from here is recorded, so the trace can answer "why
+            # that number" without anyone having to re-derive it afterwards
+            sp_before, gain_used, sp_reason = self.setpoint, None, "integrate"
             if dynamic_charge:
-                sp = -maxchg
+                sp, sp_reason = -maxchg, "dynamic_buy"
             elif external_sp is not None:
                 # the plan proposes; the clamp below still disposes
-                sp = external_sp
+                sp, sp_reason = external_sp, "external_plan"
             elif abs(error) < self._deadband:
-                sp = self.setpoint
+                sp, sp_reason = self.setpoint, "deadband"
             else:
-                sp = self.setpoint + self._gain(error) * error
+                gain_used = self._gain(error)
+                sp = self.setpoint + gain_used * error
+            sp_wanted = sp
             sp = max(min(sp, upper), lower)
+            if sp != sp_wanted:
+                sp_reason = "clamped_upper" if sp_wanted > upper else "clamped_lower"
             self.setpoint = sp
 
             umax = {n: s.unit_max for n, s in online.items()}
@@ -2312,7 +2482,27 @@ class BatteryCoordinator:
 
             self.last_tick = dt_util.utcnow()
             self._log_tick(
-                grid, error, sp, flow, alloc, online, observed_grid, other_power
+                grid,
+                error,
+                sp,
+                flow,
+                alloc,
+                online,
+                observed_grid,
+                other_power,
+                bounds={
+                    "sp_before_w": sp_before,
+                    "sp_wanted_w": sp_wanted,
+                    "sp_reason": sp_reason,
+                    "gain": gain_used,
+                    "upper_w": upper,
+                    "lower_w": lower,
+                    "free_discharge_w": free_dis,
+                    "free_charge_w": free_chg,
+                    "fuse_discharge_w": maxdis,
+                    "fuse_charge_w": maxchg,
+                    "unit_cap_w": dis_cap if sp > 0 else chg_cap,
+                },
             )
             self._save_state()
             self._notify()
