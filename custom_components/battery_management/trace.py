@@ -47,7 +47,10 @@ class Trace:
         # overdue and writes a single-row file, which turns a 15 s loop
         # into a 15 s disk write for as long as one row keeps arriving
         self._last_flush = time.monotonic()
-        self._day: str | None = None
+        # which file the current field set resolved to, so the header is
+        # only read back when the columns actually change
+        self._resolved: tuple | None = None
+        self._path: str = ""
         #: Surfaced in diagnostics: a trace that is silently not being written
         #: is worse than none, because it is discovered a week later.
         self.written = 0
@@ -73,6 +76,41 @@ class Trace:
     def path_for(self, moment: datetime) -> str:
         return os.path.join(self._dir, f"{moment:%Y-%m-%d}.csv")
 
+    def _target(self, now: datetime) -> tuple[str, bool]:
+        """Which file today's rows belong in, and whether to write a header.
+
+        The columns are not fixed for all time: an upgrade adds some, a unit
+        coming online adds its own. Appending rows with a different shape under
+        a header that was written earlier silently shifts every value into the
+        wrong column - which is exactly what happened the first day this ran,
+        when an upgrade took the row from 37 fields to 46 and the file kept the
+        old 37-column header.
+
+        So the existing header is read back and compared. Same shape, append.
+        Different shape, start `<day>.2.csv` and leave the old file intact and
+        readable. Rotating is the only option that neither loses rows nor
+        rewrites a file that something else may be reading.
+        """
+        base = self.path_for(now)
+        if self._resolved == (base, tuple(self._fields)):
+            return self._path, False       # unchanged since the last flush
+        path, part = base, 1
+        while os.path.exists(path):
+            with open(path, encoding="utf-8", newline="") as handle:
+                existing = (handle.readline().rstrip("\r\n") or "").split(",")
+            if existing == self._fields:
+                self._resolved = (base, tuple(self._fields))
+                self._path = path
+                return path, False
+            part += 1
+            path = base[:-4] + f".{part}.csv"
+            _LOGGER.info(
+                "trace columns changed; continuing in %s", os.path.basename(path)
+            )
+        self._resolved = (base, tuple(self._fields))
+        self._path = path
+        return path, True
+
     def flush(self) -> None:
         """Append the buffer. Runs in an executor; must not raise."""
         rows, self._rows = self._rows, []
@@ -82,8 +120,7 @@ class Trace:
         try:
             os.makedirs(self._dir, exist_ok=True)
             now = datetime.now(timezone.utc)
-            path = self.path_for(now)
-            fresh = not os.path.exists(path)
+            path, fresh = self._target(now)
             # csv wants a text handle; build the text first so a failure part
             # way through cannot leave half a row in the file
             buffer = io.StringIO()
@@ -115,7 +152,8 @@ class Trace:
             if not name.endswith(".csv"):
                 continue
             try:
-                day = datetime.strptime(name[:-4], "%Y-%m-%d").date()
+                # "2026-08-16.csv" and "2026-08-16.2.csv" are the same day
+                day = datetime.strptime(name[:10], "%Y-%m-%d").date()
             except ValueError:
                 continue  # not ours; leave it alone
             if day < cutoff:
@@ -150,7 +188,7 @@ class Trace:
         for name in self.files():
             path = os.path.join(self._dir, name)
             try:
-                days.append({"day": name[:-4], "bytes": os.path.getsize(path)})
+                days.append({"file": name, "bytes": os.path.getsize(path)})
             except OSError:
                 continue
         out["days"] = days

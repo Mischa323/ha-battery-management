@@ -1619,8 +1619,18 @@ class BatteryCoordinator:
                 for name in online
             },
             "offline": [u.name for u in self._units if u.name not in online],
-            **{k: (round(v) if isinstance(v, float) else v)
-               for k, v in bounds.items() if k != "unit_cap_w"},
+            # watts round to whole numbers; the gain does not - it is 0.25 or
+            # 0.5, and rounding it as if it were a wattage logged both as "0"
+            # for a whole day, which is worse than not logging it
+            **{
+                k: (
+                    round(v, 3)
+                    if k == "gain" and isinstance(v, float)
+                    else round(v) if isinstance(v, float) else v
+                )
+                for k, v in bounds.items()
+                if k != "unit_cap_w"
+            },
         }
         self.tick_log.append(row)
         self._trace_tick(row, bounds.get("unit_cap_w") or {})

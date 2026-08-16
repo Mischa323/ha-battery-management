@@ -132,17 +132,71 @@ async def test_old_days_are_deleted_and_recent_ones_kept(tmp_path):
     assert stranger.exists(), "it deleted a file that was not its own"
 
 
-async def test_the_header_survives_a_new_column(tmp_path):
-    """A field appearing mid-run must not shift every earlier column."""
+def misaligned(directory) -> list[str]:
+    """Files where some row does not match its own header. Should be none."""
+    bad = []
+    for name in sorted(os.listdir(directory)):
+        lines = (
+            open(os.path.join(directory, name), encoding="utf-8").read().splitlines()
+        )
+        width = len(lines[0].split(","))
+        if any(len(line.split(",")) != width for line in lines[1:]):
+            bad.append(name)
+    return bad
+
+
+async def test_new_columns_start_a_new_file_instead_of_corrupting_the_old_one(tmp_path):
+    """The bug this exists to prevent, seen on the first day it ran.
+
+    An upgrade took the row from 37 fields to 46. The file for that day already
+    existed, so no new header was written, and 619 of 643 rows were appended
+    under a header nine columns too short - every value in them shifted. The
+    file looked complete and read back as mostly-empty columns.
+    """
     trace = Trace(str(tmp_path))
     trace.add({"at": "1", "grid_w": 10})
     trace.flush()
-    trace.add({"at": "2", "grid_w": 20, "new_thing": 5})
-    trace.flush()
 
-    written = rows(tmp_path)
-    assert written[0]["grid_w"] == "10"
-    assert written[1]["grid_w"] == "20"
+    # a new release adds a column, mid-day, to a file that already exists
+    later = Trace(str(tmp_path))
+    later.add({"at": "2", "grid_w": 20, "ack_s": 5})
+    later.flush()
+
+    assert not misaligned(tmp_path), "a row does not match its own header"
+    written = {r["at"]: r for r in rows(tmp_path)}
+    assert written["1"]["grid_w"] == "10"
+    assert written["2"]["grid_w"] == "20"
+    assert written["2"]["ack_s"] == "5"
+    assert len(os.listdir(tmp_path)) == 2, "should have rotated to a second file"
+
+
+async def test_the_same_columns_keep_appending_to_one_file(tmp_path):
+    """Rotating on every restart would litter the folder for no reason."""
+    first = Trace(str(tmp_path))
+    first.add({"at": "1", "grid_w": 10})
+    first.flush()
+
+    second = Trace(str(tmp_path))          # a restart, same schema
+    second.add({"at": "2", "grid_w": 20})
+    second.flush()
+
+    assert len(os.listdir(tmp_path)) == 1
+    assert len(rows(tmp_path)) == 2
+
+
+async def test_a_unit_coming_online_mid_run_does_not_shift_the_columns(traced):
+    """The same failure without an upgrade: a pack appears and brings its own
+    columns with it."""
+    system = traced(grid=1500, units=(("093", 80.0), ("052", None)))
+
+    for _ in range(25):
+        await system.coordinator._async_tick(None)
+    system.hass.states.set(system.soc(1), 45)      # 052 comes back
+    for _ in range(25):
+        await system.coordinator._async_tick(None)
+    await system.coordinator.async_stop(revert=False)
+
+    assert not misaligned(system.trace_dir)
 
 
 async def test_stopping_writes_out_what_was_buffered(traced):
@@ -211,3 +265,38 @@ async def test_a_pack_that_never_answers_leaves_the_time_empty(traced):
     assert all(not r.get("batterij_1_ack_s") for r in written)
     # but what the device *does* hold is recorded, so the two can be compared
     assert any(r.get("batterij_1_readback_w") is not None for r in written)
+
+
+async def test_the_gain_is_not_rounded_away(traced):
+    """It logged as "0" for a whole day.
+
+    The bounds are watts and round to whole numbers; the gain is 0.25 or 0.5
+    and went through the same rounding, so the one column that says which of
+    the two directions was in play recorded nothing at all.
+    """
+    system = traced(grid=3000, **{CONF_KP: 0.25})
+
+    for _ in range(25):
+        await system.coordinator._async_tick(None)
+
+    gains = {r["gain"] for r in rows(system.trace_dir) if r["gain"]}
+    assert gains, "no gain recorded at all"
+    assert gains == {"0.25"}, gains
+
+
+async def test_it_records_which_of_the_two_gains_was_used(traced):
+    """The whole reason the column exists."""
+    from tests.conftest import GRID_SENSOR
+
+    system = traced(grid=3000, **{CONF_KP: 0.25, "kp_return": 0.5})
+    coordinator = system.coordinator
+
+    for _ in range(12):
+        await coordinator._async_tick(None)
+    system.hass.states.set(GRID_SENSOR, -3000)      # now swing the other way
+    for _ in range(13):
+        await coordinator._async_tick(None)
+    await coordinator.async_stop(revert=False)
+
+    gains = {r["gain"] for r in rows(system.trace_dir) if r["gain"]}
+    assert gains == {"0.25", "0.5"}, gains
