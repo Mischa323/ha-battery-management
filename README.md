@@ -237,10 +237,15 @@ anything did. `"error": "file_missing"` means HACS did not copy the script;
 no error means the file is fine and the browser is holding an old copy, so
 hard-refresh. The same appears in the log at startup.
 
-Until `0.11.2` the frontend was a *soft* dependency, so on a cold boot this
-integration could register the card before the frontend existed and the
-registration was lost — which looks exactly like the card never having been
-built. If cards worked after a reload but not after a reboot, that was why.
+Before `0.11.4` the card was registered during setup, which on a cold boot can
+run *before* the frontend exists — and a card offered to a frontend that has
+not initialised is simply lost. If cards worked after reloading the integration
+but not after a reboot, that was why. It now waits for the frontend instead.
+
+Deliberately **not** by making the frontend a hard dependency: that was tried
+in `0.11.2` and is the worse trade, because the batteries then stop being
+coordinated at all if the frontend fails to start. A battery controller has no
+business depending on a web interface.
 
 From `0.8.3` the script URL carries the version, so an update busts the cache on
 its own and none of this should be needed again.

@@ -59,6 +59,32 @@ async def _card_version(hass: HomeAssistant) -> str:
         return "0"
 
 
+async def _async_schedule_card(hass: HomeAssistant) -> None:
+    """Register the card once the frontend exists - whenever that is.
+
+    The ordering problem is real: on a cold boot this integration can be set
+    up before the frontend, and a card offered to a frontend that has not
+    initialised is simply lost. But making `frontend` a *hard* dependency,
+    which was the first fix, is a worse trade - the batteries then stop being
+    coordinated at all if the frontend fails to start, and a battery
+    controller has no business depending on a web interface.
+
+    `async_when_setup` is the middle: it fires immediately if the frontend is
+    already up, and waits for it if it is not. If the frontend never comes,
+    the card never registers and everything else carries on.
+    """
+    try:
+        from homeassistant.setup import async_when_setup
+    except ImportError:      # pragma: no cover - very old cores
+        await _async_register_card(hass)
+        return
+
+    async def _ready(hass: HomeAssistant, _component: str) -> None:
+        await _async_register_card(hass)
+
+    async_when_setup(hass, "frontend", _ready)
+
+
 async def _async_register_card(hass: HomeAssistant) -> None:
     """Serve the Lovelace card and add it as an extra frontend module (once).
 
@@ -186,7 +212,7 @@ def _async_register_services(hass: HomeAssistant) -> None:
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Battery Management from a config entry."""
-    await _async_register_card(hass)
+    await _async_schedule_card(hass)
     _async_register_services(hass)
 
     coordinator = BatteryCoordinator(hass, entry)

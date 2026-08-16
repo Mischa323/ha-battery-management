@@ -139,10 +139,14 @@ async def test_it_registers_once(offered):
     assert len(hass.http.registered) == 1
 
 
-async def test_the_frontend_and_http_are_hard_dependencies():
-    """Soft ones only order the setup *if* the other is being set up anyway,
-    so on a cold boot the card could be offered to a frontend that then reset
-    the list - which looks exactly like the card never existing."""
+async def test_the_frontend_is_not_a_hard_dependency():
+    """It was, briefly, and that was the wrong fix.
+
+    A hard dependency does guarantee the ordering, but it also means the
+    batteries stop being coordinated at all if the frontend fails to start -
+    and a battery controller has no business depending on a web interface.
+    The ordering is handled by waiting for the frontend instead.
+    """
     import json
     import pathlib
 
@@ -153,5 +157,50 @@ async def test_the_frontend_and_http_are_hard_dependencies():
         ).read_text(encoding="utf-8")
     )
 
-    assert manifest.get("dependencies") == ["http", "frontend"]
-    assert "after_dependencies" not in manifest
+    assert "dependencies" not in manifest
+    assert manifest.get("after_dependencies") == ["http", "frontend"]
+
+
+async def test_it_waits_for_the_frontend_before_registering(monkeypatch, offered):
+    """A card offered to a frontend that has not initialised is simply lost,
+    which is indistinguishable from the card never having been built."""
+    import sys
+    import types
+
+    waited: list[str] = []
+    setup_mod = types.ModuleType("homeassistant.setup")
+
+    def async_when_setup(hass, component, callback):
+        waited.append(component)
+
+    setup_mod.async_when_setup = async_when_setup
+    monkeypatch.setitem(sys.modules, "homeassistant.setup", setup_mod)
+
+    from custom_components.battery_management import _async_schedule_card
+
+    hass = CardHass()
+    await _async_schedule_card(hass)
+
+    assert waited == ["frontend"]
+    assert not offered, "registered before the frontend was ready"
+
+
+async def test_once_the_frontend_is_up_it_registers(monkeypatch, offered):
+    import sys
+    import types
+
+    setup_mod = types.ModuleType("homeassistant.setup")
+
+    def async_when_setup(hass, component, callback):
+        setup_mod.pending = callback
+
+    setup_mod.async_when_setup = async_when_setup
+    monkeypatch.setitem(sys.modules, "homeassistant.setup", setup_mod)
+
+    from custom_components.battery_management import _async_schedule_card
+
+    hass = CardHass()
+    await _async_schedule_card(hass)
+    await setup_mod.pending(hass, "frontend")
+
+    assert offered, "the frontend came up and the card still was not offered"
