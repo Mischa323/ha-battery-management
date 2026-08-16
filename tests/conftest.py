@@ -63,12 +63,17 @@ DEFAULT_TUNABLES = {
 
 
 class FakeState:
-    def __init__(self, state, attributes: dict | None = None, last_updated=None) -> None:
+    def __init__(
+        self, state, attributes: dict | None = None, last_updated=None,
+        last_changed=None,
+    ) -> None:
         self.state = str(state)
         self.attributes = attributes or {}
-        # Home Assistant stamps every state; the trace records how old the
-        # reading was, so the double has to carry one too
+        # Home Assistant stamps every state twice - when it was written and
+        # when the value last actually moved - and the trace records both,
+        # because a large age otherwise cannot be told from a steady value
         self.last_updated = last_updated or dt_util.utcnow()
+        self.last_changed = last_changed or self.last_updated
 
 
 class FakeStates:

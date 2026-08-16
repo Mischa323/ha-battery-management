@@ -394,6 +394,8 @@ class BatteryCoordinator:
         # when each command went out, and how long the pack took to show it
         self._command_sent: dict[str, tuple[int, object]] = {}
         self._command_ack: dict[str, float] = {}
+        # short and stable for the lifetime of this coordinator
+        self._run_id: str = f"{int(time.time()) % 100000:05d}"
         self._trace: Trace | None = None
         if data.get(CONF_TRACE, DEFAULT_TRACE):
             self._trace = Trace(
@@ -1582,6 +1584,12 @@ class BatteryCoordinator:
             "grid_w": round(grid),
             # how old the number we just regulated on actually was
             "grid_age_s": self._state_age(self._grid_sensor),
+            "grid_changed_s": self._state_age(self._grid_sensor, "last_changed"),
+            # which run wrote this row. Two coordinators commanding the
+            # same packs would otherwise be invisible in the file, and a
+            # reload that leaves the old one running is exactly the sort
+            # of thing that shows up as an unexplained extra tick.
+            "run": self._run_id,
             # what the meter really said, and what the other controller was
             # doing - both needed to check the reconstruction afterwards
             "observed_grid_w": (
@@ -1655,16 +1663,24 @@ class BatteryCoordinator:
         self.tick_log.append(row)
         self._trace_tick(row, bounds.get("unit_cap_w") or {})
 
-    def _state_age(self, entity_id: str | None) -> float | None:
-        """Seconds since this entity last published anything.
+    def _state_age(self, entity_id: str | None, attr: str = "last_updated"):
+        """Seconds since this entity last published, or last actually moved.
 
         How stale the inputs are is half of "what is going wrong" and it was
         not recorded at all. The P1 meter should be a second or two old; the
         packs publish in bursts 10-30 s apart (gotcha 2). A tick that regulated
         on a 40 s old meter reading explains itself once this is in the row.
+
+        Both stamps, because one alone cannot be read. Home Assistant does not
+        always rewrite a state that has not changed, so a large `last_updated`
+        age means either "nothing arrived" or "the value held steady" - and
+        those are opposite conclusions about the meter. The first real day of
+        this showed a state of charge apparently 46 minutes stale, which was
+        simply a pack sitting on 38 %. When the two ages differ, the reading is
+        fresh and merely unchanged; when they match, nothing has arrived.
         """
         state = self.hass.states.get(entity_id) if entity_id else None
-        stamp = getattr(state, "last_updated", None) if state else None
+        stamp = getattr(state, attr, None) if state else None
         if stamp is None:
             return None
         try:

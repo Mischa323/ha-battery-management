@@ -110,7 +110,8 @@ What each row carries:
 | `<pack>_target_w` | what we told that pack — **signed: + discharging, − charging** |
 | `schema` | the row format; `2` signed the column above, `1` did not |
 | `<pack>_actual_w` | what the pack says it is doing — **the lag, measured** |
-| `grid_age_s` | how old the meter reading was when we regulated on it |
+| `grid_age_s`, `grid_changed_s` | how old the meter reading was, and when it last actually moved — equal means nothing arrived, different means it arrived and held steady |
+| `run` | which coordinator run wrote the row; two values interleaved means two loops |
 | `<pack>_readback_w` | what the device holds as its target |
 | `<pack>_ack_s` | seconds between commanding it and the device showing it |
 | `<pack>_actual_age_s`, `<pack>_soc_age_s` | how stale that pack's readings were |

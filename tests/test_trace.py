@@ -347,3 +347,30 @@ async def test_a_meaning_change_rotates_the_file(tmp_path):
 
     assert not misaligned(tmp_path)
     assert len(os.listdir(tmp_path)) == 2
+
+
+async def test_it_records_which_run_wrote_the_row(traced):
+    """Two coordinators commanding the same packs would otherwise be
+    invisible. The first real trace had an unexplained extra tick three
+    seconds out of cadence, and nothing in the file could say whether that
+    was one loop hiccupping or two loops running."""
+    system = traced(grid=1000)
+
+    for _ in range(25):
+        await system.coordinator._async_tick(None)
+
+    runs = {r["run"] for r in rows(system.trace_dir)}
+    assert len(runs) == 1 and runs != {""}
+
+
+async def test_stale_and_unchanged_are_told_apart(traced):
+    """A large age means "nothing arrived" or "the value held steady", and
+    those are opposite conclusions. Recording both stamps separates them."""
+    system = traced(grid=1000)
+
+    for _ in range(25):
+        await system.coordinator._async_tick(None)
+
+    row = rows(system.trace_dir)[-1]
+    assert row["grid_age_s"] != ""
+    assert row["grid_changed_s"] != ""
