@@ -293,7 +293,8 @@
           "inconclusive": "Kon het niet vaststellen",
           "unknown": "Nog niet gemeten",
           "blocked": "Niet tijdens proefdraaien",
-          "off": "Niet in gebruik"
+          "off": "Niet in gebruik",
+          "gave_up": "Kon het niet meten; vul het handmatig in"
         }
       }
     },

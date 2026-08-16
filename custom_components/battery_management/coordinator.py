@@ -155,6 +155,7 @@ from .const import (
     POLICY_PHASE_LIMIT,
     POLICY_SOC_RESERVE,
     PHASE_DETECT_BLOCKED,
+    PHASE_DETECT_GAVE_UP,
     PHASE_DETECT_DONE,
     PHASE_DETECT_INCONCLUSIVE,
     PHASE_DETECT_MANUAL,
@@ -162,7 +163,9 @@ from .const import (
     PHASE_DETECT_PARTIAL,
     PHASE_DETECT_RUNNING,
     PHASE_DETECT_UNKNOWN,
+    PHASE_MAX_ATTEMPTS,
     PHASE_PROBE_MIN_WATTS,
+    PHASE_RETRY_SECONDS,
     PHASE_SETTLE_SECONDS,
     SAVE_DELAY,
     TICK_LOG_SIZE,
@@ -388,6 +391,10 @@ class BatteryCoordinator:
         self.phase_detection: str = PHASE_DETECT_UNKNOWN
         self.phase_detected_at: float | None = None
         self.phase_probe_detail: dict[str, dict] = {}
+        # how often each unit has been asked, and when last - without this a
+        # pack that never answers is re-probed every tick, forever
+        self.phase_attempts: dict[str, int] = {u.name: 0 for u in self._units}
+        self._phase_last_try: dict[str, float] = {}
         self._detecting: bool = False
         self._detect_task = None
         # a unit that dropped out may have come back on different wiring, so its
@@ -1609,6 +1616,8 @@ class BatteryCoordinator:
             "unit_phase": dict(self.unit_phase),
             "detected_at": self.phase_detected_at,
             "probes": self.phase_probe_detail,
+            "attempts": dict(self.phase_attempts),
+            "gave_up": self._phase_gave_up(),
         }
 
     def fuse_headroom_amps(self) -> float | None:
@@ -1656,13 +1665,42 @@ class BatteryCoordinator:
             return "manual"
         return "measured" if self.unit_phase.get(name) is not None else "unknown"
 
-    def _phase_needing_detection(self) -> list[UnitConfig]:
-        """Units whose leg we do not know and are allowed to go and find out."""
+    def _phase_unplaced(self) -> list[UnitConfig]:
+        """Units whose leg is neither known nor typed in."""
         return [
             u
             for u in self._units
             if self.unit_phase.get(u.name) is None
             and self._phase_manual.get(u.name) is None
+        ]
+
+    def _phase_needing_detection(self) -> list[UnitConfig]:
+        """Unplaced units it is worth asking again, right now.
+
+        A probe that came back unreadable used to be retried on the very next
+        tick. At the primary site one pack answered `too_small` every time, so
+        the packs spent the whole day being measured and the control loop never
+        got a turn. Now a failure costs a wait, and after a few tries it stops
+        asking: an unplaced pack is held to the tightest leg, which is safe,
+        whereas a coordinator that never coordinates is not.
+        """
+        now = time.time()
+        ready = []
+        for unit in self._phase_unplaced():
+            if self.phase_attempts.get(unit.name, 0) >= PHASE_MAX_ATTEMPTS:
+                continue
+            last = self._phase_last_try.get(unit.name)
+            if last is not None and now - last < PHASE_RETRY_SECONDS:
+                continue
+            ready.append(unit)
+        return ready
+
+    def _phase_gave_up(self) -> list[str]:
+        """Units it has stopped asking about until told otherwise."""
+        return [
+            u.name
+            for u in self._phase_unplaced()
+            if self.phase_attempts.get(u.name, 0) >= PHASE_MAX_ATTEMPTS
         ]
 
     def _apply_manual_phases(self) -> None:
@@ -1694,6 +1732,8 @@ class BatteryCoordinator:
         elif self.dry_run:
             # a shadow run writes nothing, and this needs to write to see
             self.phase_detection = PHASE_DETECT_BLOCKED
+        elif self._phase_gave_up():
+            self.phase_detection = PHASE_DETECT_GAVE_UP
         elif placed:
             self.phase_detection = PHASE_DETECT_PARTIAL
         elif self.phase_detection not in (
@@ -1726,6 +1766,10 @@ class BatteryCoordinator:
         for name in self.unit_phase:
             if self._phase_manual.get(name) is None:
                 self.unit_phase[name] = None
+        # clearing the counters is what makes this a retry rather than a no-op
+        # once it has given up
+        self.phase_attempts = {name: 0 for name in self.phase_attempts}
+        self._phase_last_try = {}
         self.phase_detection = PHASE_DETECT_UNKNOWN
         self.phase_probe_detail = {}
         self._notify()
@@ -1786,6 +1830,10 @@ class BatteryCoordinator:
         state = self._unit_snapshot(cfg)
         if not state.online:
             return
+        # counted here, not on success: it is the asking that costs the packs
+        # their minute, and an unanswerable question asked forever is the bug
+        self.phase_attempts[cfg.name] = self.phase_attempts.get(cfg.name, 0) + 1
+        self._phase_last_try[cfg.name] = time.time()
 
         # charge if there is room to take power in, otherwise push it out; a
         # charge is preferred because it is a load like any other and cannot
@@ -1842,16 +1890,27 @@ class BatteryCoordinator:
         phase, detail = attribute_phase(baseline, during, probe_w, charging)
         self.phase_probe_detail[cfg.name] = detail
         if phase is None:
+            attempts = self.phase_attempts.get(cfg.name, 0)
             _LOGGER.warning(
-                "%s: could not tell which phase it is on (%s); %s",
+                "%s: could not tell which phase it is on (%s, attempt %d of %d); %s",
                 cfg.name,
                 detail.get("reason"),
+                attempts,
+                PHASE_MAX_ATTEMPTS,
                 detail.get("deltas"),
             )
+            if attempts >= PHASE_MAX_ATTEMPTS:
+                _LOGGER.warning(
+                    "%s: giving up on measuring its phase. Type it in on the "
+                    "unit's page, or press Detect phases to try again. Until "
+                    "then it is held to whichever leg has least room.",
+                    cfg.name,
+                )
             self.phase_detection = PHASE_DETECT_INCONCLUSIVE
             return
         _LOGGER.info("%s is on phase L%d (%s)", cfg.name, phase, detail.get("deltas"))
         self.unit_phase[cfg.name] = phase
+        self.phase_attempts[cfg.name] = 0
 
     async def _take_control(self) -> None:
         """Put every unit into whatever option means 'driven from outside'."""

@@ -186,6 +186,17 @@ PHASE_PROBE_MIN_WATTS = 600     # below this the signal drowns in the household
 PHASE_PROBE_MIN_FRACTION = 0.5  # the winning leg must show at least this much
 PHASE_PROBE_MARGIN = 2.0        # ...and this many times the runner-up
 
+# A probe that cannot answer must not simply be retried on the next tick. That
+# is what happened at the primary site: 093 reported `too_small` every time -
+# the pack was not responding to the command at all - and the packs spent every
+# minute of the day being measured instead of regulating.
+#
+# So a failed unit waits, and after a few tries it stops asking until somebody
+# presses the button, restarts, or types the leg in by hand. Giving up is a
+# better outcome than a coordinator that never coordinates.
+PHASE_RETRY_SECONDS = 1800      # half an hour between attempts
+PHASE_MAX_ATTEMPTS = 3
+
 PHASE_DETECT_UNKNOWN = "unknown"          # never looked
 PHASE_DETECT_RUNNING = "running"          # probing right now
 PHASE_DETECT_DONE = "done"                # every unit placed
@@ -194,6 +205,7 @@ PHASE_DETECT_INCONCLUSIVE = "inconclusive"  # looked, could not tell
 PHASE_DETECT_MANUAL = "manual"            # the user typed it in
 PHASE_DETECT_OFF = "off"                  # probing not allowed
 PHASE_DETECT_BLOCKED = "blocked"          # dry run, or no room to probe in
+PHASE_DETECT_GAVE_UP = "gave_up"          # asked enough times; type it in
 
 PHASE_DETECT_STATES = [
     PHASE_DETECT_DONE,
@@ -203,6 +215,7 @@ PHASE_DETECT_STATES = [
     PHASE_DETECT_INCONCLUSIVE,
     PHASE_DETECT_UNKNOWN,
     PHASE_DETECT_BLOCKED,
+    PHASE_DETECT_GAVE_UP,
     PHASE_DETECT_OFF,
 ]
 

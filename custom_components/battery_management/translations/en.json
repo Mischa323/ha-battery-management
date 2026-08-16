@@ -293,7 +293,8 @@
           "inconclusive": "Could not tell",
           "unknown": "Not yet measured",
           "blocked": "Not while in dry run",
-          "off": "Not in use"
+          "off": "Not in use",
+          "gave_up": "Could not measure it; type it in"
         }
       }
     },

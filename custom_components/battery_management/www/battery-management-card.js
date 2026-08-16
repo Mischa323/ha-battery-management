@@ -446,10 +446,23 @@ ${PRICE_LEGEND}
   }
 }
 
-customElements.define("battery-management-card", BatteryManagementCard);
+/**
+ * Defining an element twice throws, and the throw kills the rest of the file.
+ *
+ * That is not hypothetical: if this script is loaded once by the integration
+ * and once again as a hand-added Lovelace resource, the second copy dies here -
+ * before it reaches the prices card - so the card list shows a stale entry and
+ * the second card is simply missing. Registering is made idempotent instead.
+ */
+function defineCard(tag, cls, entry) {
+  if (!customElements.get(tag)) customElements.define(tag, cls);
+  window.customCards = window.customCards || [];
+  const already = window.customCards.findIndex((c) => c.type === tag);
+  if (already >= 0) window.customCards.splice(already, 1);
+  window.customCards.push(entry);
+}
 
-window.customCards = window.customCards || [];
-window.customCards.push({
+defineCard("battery-management-card", BatteryManagementCard, {
   type: "battery-management-card",
   name: "Battery Management Card",
   description:
@@ -567,12 +580,7 @@ ${PRICE_LEGEND}
   }
 }
 
-customElements.define(
-  "battery-management-prices-card",
-  BatteryManagementPricesCard
-);
-
-window.customCards.push({
+defineCard("battery-management-prices-card", BatteryManagementPricesCard, {
   type: "battery-management-prices-card",
   name: "Battery Management Prices",
   description:

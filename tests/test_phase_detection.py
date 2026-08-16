@@ -143,14 +143,85 @@ async def test_a_pack_that_ignores_the_command_is_not_placed(build_system):
     assert system.coordinator.phase_probe_detail["Batterij 1"]["reason"] == "too_small"
 
 
-async def test_an_inconclusive_probe_is_retried_on_the_next_tick(build_system):
+async def test_a_failed_probe_is_not_retried_on_the_very_next_tick(build_system):
+    """This used to be pinned the other way round, and it was the bug. At the
+    primary site one pack answered "too small" every time, so a probe started
+    on every tick and the packs spent the whole day being measured instead of
+    regulating."""
     system = build_system(grid=0, units=EVEN, phases=QUIET)
     await probe(system, {"Batterij 1": 1, "Batterij 2": 2}, obeys=False)
     assert system.coordinator.unit_phase["Batterij 1"] is None
 
+    system.wire_house({"Batterij 1": 1, "Batterij 2": 2})
+    await system.coordinator._async_tick(None)
+
+    assert system.hass.tasks == [], "started another probe immediately"
+
+
+async def test_it_tries_again_once_the_wait_is_over(build_system):
+    from custom_components.battery_management.const import PHASE_RETRY_SECONDS
+
+    system = build_system(grid=0, units=EVEN, phases=QUIET)
+    await probe(system, {"Batterij 1": 1, "Batterij 2": 2}, obeys=False)
+
+    for name in system.coordinator._phase_last_try:
+        system.coordinator._phase_last_try[name] -= PHASE_RETRY_SECONDS + 1
     await probe(system, {"Batterij 1": 1, "Batterij 2": 2})
 
     assert system.coordinator.unit_phase["Batterij 1"] == 1
+
+
+async def test_it_stops_asking_after_a_few_goes(build_system):
+    """An unplaced pack is held to the tightest leg, which is safe. A
+    coordinator that never coordinates is not."""
+    from custom_components.battery_management.const import (
+        PHASE_DETECT_GAVE_UP,
+        PHASE_MAX_ATTEMPTS,
+        PHASE_RETRY_SECONDS,
+    )
+
+    system = build_system(grid=0, units=EVEN, phases=QUIET)
+    for _ in range(PHASE_MAX_ATTEMPTS):
+        await probe(system, {"Batterij 1": 1, "Batterij 2": 2}, obeys=False)
+        for name in system.coordinator._phase_last_try:
+            system.coordinator._phase_last_try[name] -= PHASE_RETRY_SECONDS + 1
+
+    await system.coordinator._async_tick(None)
+
+    assert system.hass.tasks == []
+    assert system.coordinator.phase_detection == PHASE_DETECT_GAVE_UP
+    assert "Batterij 1" in system.coordinator._phase_gave_up()
+
+
+async def test_the_button_makes_it_ask_again(build_system):
+    from custom_components.battery_management.const import (
+        PHASE_MAX_ATTEMPTS,
+        PHASE_RETRY_SECONDS,
+    )
+
+    system = build_system(grid=0, units=EVEN, phases=QUIET)
+    for _ in range(PHASE_MAX_ATTEMPTS):
+        await probe(system, {"Batterij 1": 1, "Batterij 2": 2}, obeys=False)
+        for name in system.coordinator._phase_last_try:
+            system.coordinator._phase_last_try[name] -= PHASE_RETRY_SECONDS + 1
+    assert system.coordinator._phase_gave_up()
+
+    system.coordinator.async_request_phase_detection()
+    await probe(system, {"Batterij 1": 1, "Batterij 2": 2})
+
+    assert system.coordinator.unit_phase["Batterij 1"] == 1
+
+
+async def test_the_loop_regulates_while_it_waits(build_system):
+    """The whole point: a pack it cannot place must not cost the house its
+    control loop."""
+    system = build_system(grid=800, units=EVEN, phases=QUIET)
+    await probe(system, {"Batterij 1": 1, "Batterij 2": 2}, obeys=False)
+
+    system.hass.services.clear()
+    await system.coordinator._async_tick(None)
+
+    assert sum(system.allocation().values()) > 0
 
 
 # -- when it runs -------------------------------------------------------------

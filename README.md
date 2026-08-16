@@ -160,6 +160,12 @@ added in a later release is simply not in it.
    *Settings → Dashboards → Resources*.
 3. **Restart Home Assistant**, not just reload the integration. The card is
    registered during setup.
+4. **Check for a hand-added copy** under *Settings → Dashboards → Resources*.
+   The integration registers the script itself, so a manual entry pointing at
+   the same file loads it a second time. That used to be fatal - the second
+   copy died on a duplicate element definition before it reached the second
+   card, so the card list showed a stale entry and the prices card was simply
+   missing. Harmless from `0.9.1`, but the manual entry is still redundant.
 
 From `0.8.3` the script URL carries the version, so an update busts the cache on
 its own and none of this should be needed again.
