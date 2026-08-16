@@ -530,3 +530,38 @@ async def test_a_quiet_house_is_not_kept_waiting(build_system):
     await system.coordinator._await_rest()
 
     assert total[0] == PHASE_SETTLE_SECONDS + PHASE_SETTLE_STEP
+
+
+async def test_giving_up_survives_a_restart(build_system):
+    """Otherwise every restart re-arms three more probes - and with
+    re-measure-on-restart on, that is guaranteed to happen."""
+    from custom_components.battery_management.const import (
+        PHASE_MAX_ATTEMPTS,
+        PHASE_RETRY_SECONDS,
+    )
+
+    system = build_system(grid=0, units=EVEN, phases=QUIET)
+    for _ in range(PHASE_MAX_ATTEMPTS):
+        await probe(system, {"Batterij 1": 1, "Batterij 2": 2}, obeys=False)
+        for name in system.coordinator._phase_last_try:
+            system.coordinator._phase_last_try[name] -= PHASE_RETRY_SECONDS + 1
+    stored = system.coordinator._store.data
+
+    revived = build_system(grid=0, units=EVEN, phases=QUIET)
+    revived.coordinator._store.data = stored
+    await revived.coordinator._async_restore()
+    await revived.coordinator._async_tick(None)
+
+    assert revived.hass.tasks == [], "started probing again after a restart"
+    assert revived.coordinator.phase_attempts["Batterij 1"] >= PHASE_MAX_ATTEMPTS
+
+
+async def test_it_stops_saying_it_is_measuring_once_it_is_done(build_system):
+    """A dashboard describing an activity that has finished is worse than a
+    blank one, and the next tick may be a whole interval away."""
+    system = build_system(grid=0, units=EVEN, phases=QUIET)
+
+    await probe(system, {"Batterij 1": 1, "Batterij 2": 2}, obeys=False)
+
+    assert system.coordinator.status != "detecting"
+    assert system.coordinator.active_policy != POLICY_PHASE_DETECT

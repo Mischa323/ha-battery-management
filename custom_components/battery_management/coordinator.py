@@ -455,6 +455,9 @@ class BatteryCoordinator:
             "dry_run": self.dry_run,
             "mode": self.mode,
             "recovering": dict(self.recovering),
+            # without this every restart re-arms three more probes, and
+            # with re-measure-on-restart that is guaranteed to happen
+            "phase_attempts": dict(self.phase_attempts),
             "unit_phase": dict(self.unit_phase),
             "phase_detected_at": self.phase_detected_at,
             "saved_at": time.time(),
@@ -488,6 +491,9 @@ class BatteryCoordinator:
         for key in ("buy_ceiling_min", "buy_ceiling_max"):
             if stored and stored.get(key) is not None:
                 setattr(self, key, float(stored[key]))
+        for name, count in (stored or {}).get("phase_attempts", {}).items():
+            if name in self.phase_attempts:
+                self.phase_attempts[name] = int(count)
         for name, value in (stored or {}).get("recovering", {}).items():
             # a restart at 6 % would otherwise resume dumping immediately,
             # which is the whole thing this exists to prevent
@@ -1773,6 +1779,7 @@ class BatteryCoordinator:
         # once it has given up
         self.phase_attempts = {name: 0 for name in self.phase_attempts}
         self._phase_last_try = {}
+        self._save_state()
         self.phase_detection = PHASE_DETECT_UNKNOWN
         self.phase_probe_detail = {}
         self._notify()
@@ -1820,6 +1827,13 @@ class BatteryCoordinator:
                 self._record(cfg.name, FLOW_CHARGE, 0)
             self._detecting = False
             self._refresh_phase_detection_state()
+            # the loop is about to take over again; leaving "detecting" on the
+            # Status sensor describes an activity that has finished, and the
+            # next tick may be a whole interval away
+            if self.status == "detecting":
+                self.status = "idle"
+            if self.active_policy == POLICY_PHASE_DETECT:
+                self.active_policy = POLICY_GRID_ZERO
             if self.phase_detection in (PHASE_DETECT_DONE, PHASE_DETECT_MANUAL):
                 self.phase_detected_at = time.time()
             self._save_state()
