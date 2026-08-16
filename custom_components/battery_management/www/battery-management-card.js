@@ -29,8 +29,12 @@ const PRICE_COLOUR = {
   // claiming a decision. The ranking looks forward, so they never had one.
   past: "var(--disabled-text-color, #8a8a8a)",
 };
+// Deliberately "mag" and not "wordt". Being a cheap hour is one of three
+// conditions - the pack also has to be empty enough, and there must not be
+// more sun coming - so promising that charging happens here is a claim the
+// card cannot back up. A dashboard must not overstate what it knows.
 const PRICE_SAYS = {
-  cheap: "goedkoop, hier wordt geladen",
+  cheap: "goedkoop genoeg om te kopen",
   dear: "duur, hiervoor wordt bewaard",
   normal: "gewoon de meter volgen",
   past: "geweest",
@@ -62,7 +66,7 @@ const PRICE_CSS = `
 
 const PRICE_LEGEND = `
             <div class="legend">
-              <span><i style="background:${PRICE_COLOUR.cheap}"></i>Goedkoop — hier wordt geladen</span>
+              <span><i style="background:${PRICE_COLOUR.cheap}"></i>Goedkoop genoeg om te kopen</span>
               <span><i style="background:${PRICE_COLOUR.dear}"></i>Duur — hiervoor wordt bewaard</span>
               <span><i style="background:${PRICE_COLOUR.normal}"></i>Verder de meter volgen</span>
               <span><i style="background:${PRICE_COLOUR.past};opacity:.35"></i>Geweest</span>

@@ -9,6 +9,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 
 from custom_components.battery_management.prices import (
+    Slot,
     cheapest_slots,
     is_cheap_now,
     parse_forecast,
@@ -190,3 +191,83 @@ def test_zero_cheap_hours_disables_it():
 
     assert cheapest_slots(slots, NOON, cheap_hours=0) == []
     assert is_cheap_now(slots, NOON, cheap_hours=0) is False
+
+
+# -- the missing reference point ---------------------------------------------
+
+
+def _day(prices: list[float]) -> list[Slot]:
+    start = datetime(2026, 8, 16, tzinfo=timezone.utc)
+    return [
+        Slot(start + timedelta(hours=h), start + timedelta(hours=h + 1), p)
+        for h, p in enumerate(prices)
+    ]
+
+
+# the primary site's own day, read off the card: cheap midday, dear evening
+REAL_DAY = [
+    0.28, 0.26, 0.25, 0.24, 0.24, 0.25, 0.27, 0.28, 0.27, 0.24, 0.21, 0.19,
+    0.17, 0.162, 0.17, 0.20, 0.24, 0.305, 0.32, 0.34, 0.36, 0.37, 0.379, 0.33,
+]
+
+
+def test_the_dearest_hour_of_the_day_is_never_called_cheap():
+    """The fault, reported from the primary site.
+
+    "The cheapest three of what is left" always finds three, however dear they
+    are. By 22:00, with only today published, the only hours left were the two
+    most expensive of the day - and the dashboard offered to charge on them.
+    """
+    slots = _day(REAL_DAY)
+    at_ten_pm = slots[22].start + timedelta(minutes=1)
+
+    without = cheapest_slots(slots, at_ten_pm, 3.0)
+    with_margin = cheapest_slots(slots, at_ten_pm, 3.0, 24.0, 0.05)
+
+    assert any(s.price == 0.379 for s in without), "the old fault has moved"
+    assert with_margin == [], with_margin
+
+
+def test_a_genuine_bargain_still_qualifies():
+    """The margin must not simply switch buying off."""
+    slots = _day(REAL_DAY)
+    at_one = slots[13].start + timedelta(minutes=1)
+
+    chosen = cheapest_slots(slots, at_one, 3.0, 24.0, 0.05)
+
+    assert [round(s.price, 3) for s in chosen] == [0.162, 0.17, 0.20]
+
+
+def test_a_flat_day_is_worth_nothing_whichever_hour_you_pick():
+    """No spread, no saving - and the round trip still costs."""
+    slots = _day([0.25] * 24)
+    now = slots[0].start + timedelta(minutes=1)
+
+    assert cheapest_slots(slots, now, 3.0) != []          # a rank always answers
+    assert cheapest_slots(slots, now, 3.0, 24.0, 0.05) == []
+
+
+def test_the_margin_is_measured_against_what_the_charge_replaces():
+    """Not against the peak, and not against the average.
+
+    The reference is the *cheapest of the dear hours* - the weakest hour the
+    stored energy would actually displace - so qualifying means the trade pays
+    even in its worst case. Here one 0.90 spike would justify almost anything
+    if the peak were the yardstick; against the 0.30 that three hours of charge
+    would really be replacing, only the genuine bargain survives.
+    """
+    slots = _day([0.24, 0.26] + [0.30] * 21 + [0.90])
+    now = slots[0].start + timedelta(minutes=1)
+
+    chosen = cheapest_slots(slots, now, 3.0, 24.0, 0.05)
+
+    assert [round(s.price, 2) for s in chosen] == [0.24]
+
+
+def test_zero_margin_restores_the_plain_ranking():
+    slots = _day(REAL_DAY)
+    now = slots[22].start + timedelta(minutes=1)
+
+    assert cheapest_slots(slots, now, 3.0, 24.0, 0.0) == cheapest_slots(
+        slots, now, 3.0
+    )

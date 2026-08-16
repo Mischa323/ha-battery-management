@@ -76,6 +76,7 @@ from .const import (
     CONF_BATTERY_POWER_SENSOR,
     CONF_CHARGE_BELOW_SOC,
     CONF_CHEAP_HOURS,
+    CONF_PRICE_MARGIN,
     CONF_DISCHARGE_ANYWAY_SOC,
     CONF_EXPENSIVE_HOURS,
     CONF_EXTERNAL_TIMEOUT,
@@ -98,6 +99,7 @@ from .const import (
     DEFAULT_FAST_CHARGE_HOLD,
     DEFAULT_CHARGE_BELOW_SOC,
     DEFAULT_CHEAP_HOURS,
+    DEFAULT_PRICE_MARGIN,
     DEFAULT_BUY_CEILING_MAX,
     DEFAULT_BUY_CEILING_MIN,
     DEFAULT_DISCHARGE_ANYWAY_SOC,
@@ -312,6 +314,9 @@ class BatteryCoordinator:
         # and no source, which is exactly what SOURCE_ENTITY means
         self._price_source: str = data.get(CONF_PRICE_SOURCE) or (
             SOURCE_ENTITY if self._price_sensor else SOURCE_NONE
+        )
+        self._price_margin: float = float(
+            data.get(CONF_PRICE_MARGIN, DEFAULT_PRICE_MARGIN)
         )
         self._cheap_hours: float = float(
             data.get(CONF_CHEAP_HOURS, DEFAULT_CHEAP_HOURS)
@@ -986,7 +991,8 @@ class BatteryCoordinator:
         """Which decision this slot belongs to - the same one the chart draws."""
         forecast = self._price_forecast() or []
         if slot in cheapest_slots(
-            forecast, now, self._cheap_hours, PRICE_WINDOW_HOURS
+            forecast, now, self._cheap_hours, PRICE_WINDOW_HOURS,
+            self._price_margin,
         ):
             return "cheap"
         if slot in dearest_slots(
@@ -1017,7 +1023,7 @@ class BatteryCoordinator:
             ]
 
         cheapest = cheapest_slots(
-            slots, now, self._cheap_hours, PRICE_WINDOW_HOURS
+            slots, now, self._cheap_hours, PRICE_WINDOW_HOURS, self._price_margin
         ) if slots else []
         dearest = dearest_slots(
             slots, now, self._expensive_hours, PRICE_WINDOW_HOURS
@@ -1143,7 +1149,8 @@ class BatteryCoordinator:
         if slots is None:
             return False, POLICY_DYNAMIC_NO_PRICES
         if not is_cheap_now(
-            slots, dt_util.utcnow(), self._cheap_hours, PRICE_WINDOW_HOURS
+            slots, dt_util.utcnow(), self._cheap_hours, PRICE_WINDOW_HOURS,
+            self._price_margin,
         ):
             return False, None
         # How full is it worth buying to? Prefer the solar-aware ceiling: it
@@ -1451,6 +1458,7 @@ class BatteryCoordinator:
                 "price_sensor": self._price_sensor,
                 "price_resolution": self._price_resolution,
                 "cheap_hours": self._cheap_hours,
+                "price_margin": self._price_margin,
                 "charge_below_soc": self._charge_below_soc,
                 "solar_forecast_sensors": self._solar_forecast_sensors,
                 "solar_produced_sensor": self._solar_produced_sensor,

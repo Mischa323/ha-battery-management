@@ -166,7 +166,8 @@
           "discharge_anyway_soc": "Discharge anyway above (%)",
           "solar_forecast_sensors": "Solar forecast sensors",
           "solar_produced_sensor": "Produced so far today",
-          "price_resolution": "How to read the prices"
+          "price_resolution": "How to read the prices",
+          "price_margin": "Minimum saving"
         },
         "data_description": {
           "price_source": "Fetching them ourselves saves installing a second custom integration, which matters at a house you do not live in. Frank Energie publishes its market prices openly, so no login is needed - and the price used is the all-in one, including tax and markup, not the bare exchange price. Pick the sensor option for any other supplier: Nord Pool, ENTSO-e, EnergyZero, Tibber and the rest are all read by shape.",
@@ -177,7 +178,8 @@
           "discharge_anyway_soc": "A pack this full discharges even during a cheap hour. Refusing would leave nowhere for the sun still coming, and spilling free energy to save a few cents is a bad trade.",
           "solar_forecast_sensors": "Pick every roof plane; they are summed. Prefer the 'remaining today' variants - a whole-day total is right at 02:00 and wrong at 17:00.",
           "solar_produced_sensor": "Only needed if the sensors above give a day total: this is subtracted, leaving what is still to come.",
-          "price_resolution": "The market settles in 15-minute blocks and suppliers are starting to publish that way. Taking the feed as published is the more precise choice - the coordinator will happily buy on a single cheap quarter. By the hour is easier to read: 24 bars on a chart instead of 96, at the cost of averaging away the peaks inside each hour. Whichever you pick applies to the decisions and the chart alike, so they can never disagree."
+          "price_resolution": "The market settles in 15-minute blocks and suppliers are starting to publish that way. Taking the feed as published is the more precise choice - the coordinator will happily buy on a single cheap quarter. By the hour is easier to read: 24 bars on a chart instead of 96, at the cost of averaging away the peaks inside each hour. Whichever you pick applies to the decisions and the chart alike, so they can never disagree.",
+          "price_margin": "Only buy from the grid when the hour is at least this much per kWh cheaper than the dear hours it is saving for. Covers the round-trip loss (~12%) plus wear, and stops \"cheapest three hours left\" from calling the most expensive hour of the day cheap. 0 = pure ranking."
         }
       },
       "shadow": {

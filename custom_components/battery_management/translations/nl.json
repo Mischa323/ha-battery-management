@@ -166,7 +166,8 @@
           "discharge_anyway_soc": "Toch ontladen boven (%)",
           "solar_forecast_sensors": "Zonverwachting-sensoren",
           "solar_produced_sensor": "Vandaag al geproduceerd",
-          "price_resolution": "Hoe de prijzen gelezen worden"
+          "price_resolution": "Hoe de prijzen gelezen worden",
+          "price_margin": "Minimale besparing"
         },
         "data_description": {
           "price_source": "Zelf ophalen scheelt het installeren van een tweede custom integratie, en dat telt bij een huis waar je niet woont. Frank Energie publiceert zijn marktprijzen openbaar, dus inloggen is niet nodig - en de prijs die gebruikt wordt is de all-in prijs, inclusief belasting en opslag, niet de kale beursprijs. Kies de sensor-optie voor elke andere leverancier: Nord Pool, ENTSO-e, EnergyZero, Tibber en de rest worden op vorm herkend.",
@@ -177,7 +178,8 @@
           "discharge_anyway_soc": "Een pack die zo vol is ontlaadt ook in een goedkoop uur. Weigeren zou geen ruimte laten voor de zon die nog komt, en gratis energie weggooien om een paar cent te sparen is een slechte ruil.",
           "solar_forecast_sensors": "Kies elk dakvlak; ze worden opgeteld. Liefst de 'resterend vandaag'-varianten - een dagtotaal klopt om 02:00 en niet om 17:00.",
           "solar_produced_sensor": "Alleen nodig als hierboven een dagtotaal staat: dit wordt eraf getrokken, zodat overblijft wat er nog komt.",
-          "price_resolution": "De markt rekent af per kwartier en leveranciers gaan zo publiceren. Nemen zoals gepubliceerd is het nauwkeurigst - de coördinator koopt dan gerust op één goedkoop kwartier. Per uur leest makkelijker: 24 staafjes in plaats van 96, maar de uitschieters binnen een uur middelen weg. Wat je kiest geldt voor de beslissingen én de grafiek, zodat die het nooit oneens kunnen zijn."
+          "price_resolution": "De markt rekent af per kwartier en leveranciers gaan zo publiceren. Nemen zoals gepubliceerd is het nauwkeurigst - de coördinator koopt dan gerust op één goedkoop kwartier. Per uur leest makkelijker: 24 staafjes in plaats van 96, maar de uitschieters binnen een uur middelen weg. Wat je kiest geldt voor de beslissingen én de grafiek, zodat die het nooit oneens kunnen zijn.",
+          "price_margin": "Koop alleen van het net als het uur minstens dit bedrag per kWh goedkoper is dan de dure uren waarvoor bewaard wordt. Dekt het rendementsverlies (~12%) plus slijtage, en voorkomt dat \"de 3 goedkoopste resterende uren\" het duurste uur van de dag goedkoop noemt. 0 = alleen rangschikken."
         }
       },
       "shadow": {

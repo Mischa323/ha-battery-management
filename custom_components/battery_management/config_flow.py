@@ -25,6 +25,7 @@ from .const import (
     CONF_BATTERY_POWER_SENSOR,
     CONF_CHARGE_BELOW_SOC,
     CONF_CHEAP_HOURS,
+    CONF_PRICE_MARGIN,
     CONF_EXTERNAL_TIMEOUT,
     CONF_FULL_CHARGE_MINUTES,
     CONF_PRICE_SENSOR,
@@ -70,6 +71,7 @@ from .const import (
     DEFAULT_FAST_CHARGE_HOLD,
     DEFAULT_CHARGE_BELOW_SOC,
     DEFAULT_CHEAP_HOURS,
+    DEFAULT_PRICE_MARGIN,
     DEFAULT_EXTERNAL_TIMEOUT,
     DEFAULT_FULL_CHARGE_MINUTES,
     DEFAULT_SHADOW_SIMULATE,
@@ -270,6 +272,10 @@ def _dynamic_schema(defaults: dict) -> vol.Schema:
                 CONF_CHARGE_BELOW_SOC,
                 default=defaults.get(CONF_CHARGE_BELOW_SOC, DEFAULT_CHARGE_BELOW_SOC),
             ): int,
+            vol.Optional(
+                CONF_PRICE_MARGIN,
+                default=defaults.get(CONF_PRICE_MARGIN, DEFAULT_PRICE_MARGIN),
+            ): vol.Coerce(float),
             vol.Optional(
                 CONF_EXPENSIVE_HOURS,
                 default=defaults.get(CONF_EXPENSIVE_HOURS, DEFAULT_EXPENSIVE_HOURS),

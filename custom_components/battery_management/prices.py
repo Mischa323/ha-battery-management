@@ -196,13 +196,30 @@ def slots_in_window(
 
 
 def cheapest_slots(
-    slots: list[Slot], now: datetime, cheap_hours: float, window_hours: float = 24.0
+    slots: list[Slot],
+    now: datetime,
+    cheap_hours: float,
+    window_hours: float = 24.0,
+    min_margin: float = 0.0,
 ) -> list[Slot]:
-    """The cheapest `cheap_hours` worth of slots in the window ahead.
+    """Slots worth *buying* on in the window ahead.
 
     Ranked over a rolling window rather than over everything the sensor knows:
     with today and tomorrow both published, ranking across 48 hours could decide
     that nothing today is worth charging on and leave the packs flat all evening.
+
+    But a rank alone has no reference point, and that was a real fault. "The
+    cheapest three of what is left" always finds three, however dear they are:
+    at 22:00 with only today published it returned the single most expensive
+    hour of the day and the dashboard called it cheap. Reported from the
+    primary site, where the card offered to charge at 0.305 on a day whose
+    cheapest hour had been 0.162.
+
+    So `min_margin` adds the missing reference, and it is the economic one.
+    Buying early only pays if it beats the dear hours it saves for by enough to
+    cover the round trip - roughly 12 % of these packs, plus something for the
+    wear. Below that margin nothing qualifies, which is the correct answer for
+    a flat day and for the tail end of an expensive one.
     """
     if cheap_hours <= 0:
         return []
@@ -215,7 +232,17 @@ def cheapest_slots(
     )
     wanted = max(1, round(cheap_hours * 60 / span_minutes))
     ranked = sorted(upcoming, key=lambda slot: (slot.price, slot.start))
-    return sorted(ranked[:wanted], key=lambda slot: slot.start)
+    picked = ranked[:wanted]
+
+    if min_margin > 0:
+        # what charging now would displace: the dearest hours still ahead. The
+        # *cheapest* of those is the reference, because that is the weakest
+        # hour the stored energy would actually be replacing.
+        dearest = sorted(upcoming, key=lambda slot: -slot.price)[: max(1, wanted)]
+        reference = min(slot.price for slot in dearest)
+        picked = [slot for slot in picked if slot.price + min_margin <= reference]
+
+    return sorted(picked, key=lambda slot: slot.start)
 
 
 def dearest_slots(
@@ -246,10 +273,16 @@ def is_dear_now(
 
 
 def is_cheap_now(
-    slots: list[Slot], now: datetime, cheap_hours: float, window_hours: float = 24.0
+    slots: list[Slot],
+    now: datetime,
+    cheap_hours: float,
+    window_hours: float = 24.0,
+    min_margin: float = 0.0,
 ) -> bool:
-    """Is the slot we are in one of the cheapest ahead?"""
+    """Is the slot we are in one worth buying on?"""
     current = slot_at(slots, now)
     if current is None:
         return False
-    return current in cheapest_slots(slots, now, cheap_hours, window_hours)
+    return current in cheapest_slots(
+        slots, now, cheap_hours, window_hours, min_margin
+    )

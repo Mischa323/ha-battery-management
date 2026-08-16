@@ -153,11 +153,16 @@ def test_the_plan_names_the_hours_it_picked(planned):
     plan = system.coordinator.plan()
 
     assert plan["has_prices"] is True
-    assert len(plan["cheap_hours"]) == 2
     assert len(plan["dear_hours"]) == 3
-    # the 0.02 hour is in the cheap set, the 0.60 hour in the dear set
-    assert any(h["price"] == 0.02 for h in plan["cheap_hours"])
     assert any(h["price"] == 0.60 for h in plan["dear_hours"])
+
+    # Two hours were asked for and only one is offered, which is the point.
+    # This day is flat at 0.20 apart from one bargain, so the second-cheapest
+    # hour costs exactly what the dear hours cost - buying on it saves nothing
+    # and loses the round trip. It used to be named anyway, because the rank
+    # took the cheapest two whatever they cost.
+    assert len(plan["cheap_hours"]) == 1
+    assert plan["cheap_hours"][0]["price"] == 0.02
 
 
 def test_the_plan_carries_what_the_ceiling_was_computed_from(planned):

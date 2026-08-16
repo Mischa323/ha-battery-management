@@ -79,6 +79,14 @@ PRICE_TIMEOUT = 20
 MAX_PRICE_AGE = 36 * 3600
 CONF_CHEAP_HOURS = "cheap_hours"                # hours per day to grid-charge on
 CONF_CHARGE_BELOW_SOC = "charge_below_soc"      # only top up when emptier than this
+# The reference a rank does not have. "The cheapest three hours of what is
+# left" always finds three, however dear they are - at 22:00 with only today
+# published it returned the most expensive hour of the day and the dashboard
+# called it cheap. Buying early only pays if it beats the dear hours it saves
+# for by enough to cover the round trip (~12 % on these packs) plus the wear,
+# so that is the test. 0 restores the pure ranking.
+CONF_PRICE_MARGIN = "price_margin"              # currency/kWh the buy must beat by
+DEFAULT_PRICE_MARGIN = 0.05
 # Several sensors, summed: Forecast.Solar publishes one per roof plane, and the
 # primary site has three (west, south, north).
 #
