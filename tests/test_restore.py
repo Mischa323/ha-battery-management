@@ -167,15 +167,30 @@ async def test_a_failed_save_does_not_block_the_safe_revert(build_system):
     assert system.hass.services.calls, "it never reverted the packs"
 
 
-async def test_starting_twice_leaves_one_timer(build_system):
+async def test_starting_twice_cancels_the_first_timer(build_system, monkeypatch):
     """Two timers means two ticks racing to command the same packs, and per
-    gotcha 1 the packs keep whichever arrives last."""
-    system = build_system(grid=1000)
-    coordinator = system.coordinator
+    gotcha 1 the packs keep whichever arrives last.
+
+    The scheduler itself is stubbed: this is about our bookkeeping, and
+    driving Home Assistant's real timer needs an event loop the test double
+    does not have - which is how the first version of this test passed here
+    and failed against a real Home Assistant.
+    """
+    from custom_components.battery_management import coordinator as module
+
+    cancelled: list[int] = []
+    created: list[int] = []
+
+    def fake_interval(hass, action, interval):
+        handle = len(created)
+        created.append(handle)
+        return lambda: cancelled.append(handle)
+
+    monkeypatch.setattr(module, "async_track_time_interval", fake_interval)
+    coordinator = build_system(grid=1000).coordinator
 
     await coordinator.async_start()
-    first = coordinator._unsub
     await coordinator.async_start()
 
-    assert coordinator._unsub is not first
-    assert first is not None
+    assert created == [0, 1], "did not schedule a fresh timer"
+    assert cancelled == [0], "left the first timer running"
