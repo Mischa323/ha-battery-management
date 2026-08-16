@@ -28,6 +28,25 @@ jobs:
           # no home-assistant/brands entry yet - see the TODO in CLAUDE.md
           ignore: brands
 
+  card:
+    name: card (node)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      # These existed for a while and ran only on the maintainer's machine,
+      # which meant a commit could ship with them red - and one did. The card
+      # is the part users actually look at; it belongs in CI like everything
+      # else. No dependencies: each file stands up its own stub browser.
+      - name: Card checks
+        run: |
+          for f in tests/card/*.mjs; do
+            echo "--- $f"
+            node "$f" || exit 1
+          done
+
   tests:
     name: pytest (${{ matrix.name }})
     runs-on: ubuntu-latest
