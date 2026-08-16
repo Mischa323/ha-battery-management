@@ -26,4 +26,12 @@ async def async_get_config_entry_diagnostics(
     hass: HomeAssistant, entry: ConfigEntry
 ) -> dict[str, Any]:
     coordinator: BatteryCoordinator = hass.data[DOMAIN][entry.entry_id]
-    return coordinator.diagnostics()
+    data = coordinator.diagnostics()
+    # "Custom element doesn't exist" is reported by the browser and has a dozen
+    # possible causes on the server. This says which of them applies: whether
+    # the file was found, how it is being served, which version was offered to
+    # the frontend, and what went wrong if anything did.
+    data["card"] = hass.data.get(f"{DOMAIN}_card_registered") or {
+        "error": "never_attempted"
+    }
+    return data

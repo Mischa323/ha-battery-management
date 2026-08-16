@@ -60,21 +60,59 @@ async def _card_version(hass: HomeAssistant) -> str:
 
 
 async def _async_register_card(hass: HomeAssistant) -> None:
-    """Serve the Lovelace card and add it as an extra frontend module (once)."""
+    """Serve the Lovelace card and add it as an extra frontend module (once).
+
+    Every step says what it did. "Custom element doesn't exist" is reported
+    from the browser, and until now nothing on the server side said whether
+    the file had been served, which version, or whether it had been offered to
+    the frontend at all - so the only way to investigate was to guess.
+
+    The outcome is stashed in `hass.data` and travels with the diagnostics, so
+    the question "is the card registered" has an answer that does not depend on
+    anyone having had debug logging switched on at the right moment.
+    """
     if hass.data.get(_CARD_KEY):
         return
-    card_path = str(Path(__file__).parent / "www" / CARD_FILENAME)
+    card_file = Path(__file__).parent / "www" / CARD_FILENAME
+    card_path = str(card_file)
+    version = await _card_version(hass)
+    report: dict = {"path": card_path, "url": CARD_URL, "version": version}
+    hass.data[_CARD_KEY] = report
+
+    # A missing file registers perfectly happily and then 404s, which reaches
+    # the user as "custom element doesn't exist" - the same message as a dozen
+    # unrelated causes. Check it here, where the path is known.
+    if not await hass.async_add_executor_job(card_file.is_file):
+        report["error"] = "file_missing"
+        _LOGGER.error(
+            "The Battery Management card is missing from %s, so no card can load. "
+            "Reinstall the integration through HACS.",
+            card_path,
+        )
+        return
+    report["bytes"] = await hass.async_add_executor_job(
+        lambda: card_file.stat().st_size
+    )
+
     try:
         from homeassistant.components.http import StaticPathConfig
 
         await hass.http.async_register_static_paths(
             [StaticPathConfig(CARD_URL, card_path, False)]
         )
-    except Exception:  # noqa: BLE001  -- fall back to the legacy sync API
+        report["served"] = "async"
+    except Exception as err:  # noqa: BLE001  -- fall back to the legacy sync API
         try:
             hass.http.register_static_path(CARD_URL, card_path, False)
-        except Exception:  # noqa: BLE001
-            _LOGGER.warning("Could not register the Battery Management card static path")
+            report["served"] = "legacy"
+        except Exception as err2:  # noqa: BLE001
+            report["error"] = f"static_path: {err2}"
+            _LOGGER.warning(
+                "Could not serve the Battery Management card (%s; legacy path also "
+                "failed: %s). No card will load.",
+                err,
+                err2,
+            )
             return
 
     try:
@@ -85,14 +123,25 @@ async def _async_register_card(hass: HomeAssistant) -> None:
         # script keeps running, so a card added in a new release never appears
         # in the card list however many times you look for it. Found exactly
         # that way.
-        add_extra_js_url(hass, f"{CARD_URL}?v={await _card_version(hass)}")
-    except Exception:  # noqa: BLE001
+        url = f"{CARD_URL}?v={version}"
+        add_extra_js_url(hass, url)
+        report["offered_to_frontend"] = url
+        _LOGGER.info(
+            "Battery Management card registered: %s (%s bytes, served %s). "
+            "If a card still reports 'custom element doesn't exist', the browser "
+            "is holding an old copy - hard-refresh with Ctrl+Shift+R.",
+            url,
+            report.get("bytes"),
+            report.get("served"),
+        )
+    except Exception as err:  # noqa: BLE001
+        report["error"] = f"add_extra_js_url: {err}"
         _LOGGER.warning(
-            "Could not auto-add the card resource; add %s manually under Dashboards > Resources",
+            "Could not auto-add the card resource (%s); add %s manually under "
+            "Settings > Dashboards > Resources",
+            err,
             CARD_URL,
         )
-
-    hass.data[_CARD_KEY] = True
 
 
 def _targets(hass: HomeAssistant, call: ServiceCall) -> list[BatteryCoordinator]:

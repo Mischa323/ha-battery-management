@@ -229,6 +229,19 @@ added in a later release is simply not in it.
    card, so the card list showed a stale entry and the prices card was simply
    missing. Harmless from `0.9.1`, but the manual entry is still redundant.
 
+**From `0.11.2` the server answers this itself.** Download the diagnostics and
+read the `card` block: it says where the file was looked for, how many bytes
+were served, which URL was offered to the frontend, and what failed if
+anything did. `"error": "file_missing"` means HACS did not copy the script;
+`"error": "static_path: …"` means it is not being served; a complete block with
+no error means the file is fine and the browser is holding an old copy, so
+hard-refresh. The same appears in the log at startup.
+
+Until `0.11.2` the frontend was a *soft* dependency, so on a cold boot this
+integration could register the card before the frontend existed and the
+registration was lost — which looks exactly like the card never having been
+built. If cards worked after a reload but not after a reboot, that was why.
+
 From `0.8.3` the script URL carries the version, so an update busts the cache on
 its own and none of this should be needed again.
 
