@@ -57,9 +57,32 @@ Manual install: copy `custom_components/battery_management` into your HA
 | Import bias | 30 W | aim for a tiny import so you never export |
 | Deadband | 100 W | ignore errors smaller than this |
 | Gain (Kp) | 0.25 | lower = gentler/slower, less overshoot |
+| Return gain | 2 × Kp | how fast the command is wound back *down* (see below) |
 | Interval | 15 s | control tick period |
 | Min output | 150 W | below this a unit is idled (avoids micro-cycling) |
 | Max per unit | 3500 W | hard ceiling per unit |
+
+### Why the two gains differ
+
+Going out on a command and coming back from one are not the same risk. Every
+step *up* is a bet on packs that answer 10–30 s later, which is what makes a
+high gain oscillate. Coming back down cannot run away — the far end of "less"
+is a pack sitting at 0 W.
+
+It is also where the exports come from: a pack still discharging into a load
+that has already gone away. Measured by replaying one site's own hour through
+the real loop:
+
+| | exported | ticks below −300 W | mean deviation |
+| --- | --- | --- | --- |
+| symmetric (both 0.25) | 323 Wh | 58 | 833 W |
+| return gain 0.5 | **244 Wh** | **44** | 861 W |
+| best possible without seeing the future | 210 Wh | 51 | 718 W |
+
+A quarter less export for 3 % on the mean, and within reach of the arithmetic
+limit for any loop that only reacts. It is a factor rather than a fixed number
+so that raising Kp cannot silently flatten the asymmetry back out; set it equal
+to Kp for the old symmetric behaviour.
 
 ## Notes / status
 

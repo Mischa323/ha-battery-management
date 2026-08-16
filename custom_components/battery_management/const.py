@@ -30,6 +30,7 @@ CONF_MODE_SAFE = "mode_safe"         # the option that gives it back; may be emp
 CONF_BIAS = "bias"                 # W, aim for a small import so we never export
 CONF_DEADBAND = "deadband"         # W, ignore errors smaller than this
 CONF_KP = "kp"                     # proportional gain for the integrator
+CONF_KP_RETURN = "kp_return"       # gain used when winding the command back down
 CONF_INTERVAL = "interval"         # seconds between control ticks
 CONF_MIN_OUTPUT = "min_output"     # W, below this a unit is idled (avoid micro-cycling)
 CONF_UNIT_MAX = "unit_max"         # W, hard ceiling per unit (Max AC ~3500)
@@ -275,6 +276,19 @@ POLICIES = [
 DEFAULT_BIAS = 30
 DEFAULT_DEADBAND = 100
 DEFAULT_KP = 0.25
+# Going out and coming back are not symmetric problems. Building the command up
+# too fast is what winds up and oscillates (gotcha 3); winding it back down
+# cannot, because the far end of "back" is a pack sitting at 0 W. Export is
+# caused by exactly one thing - the pack still discharging into a load that has
+# already gone away - so coming back quickly is aimed straight at it.
+# Measured on the primary site's own hour, one pack: 296 -> 227 Wh exported, at
+# a cost of 3 % on the mean deviation.
+#
+# Left unset it is derived from Kp rather than being a number of its own, so
+# raising Kp cannot silently flatten the asymmetry back out - which a fixed
+# 0.5 would have done the moment anyone tuned Kp up to 0.5. An explicit value
+# always wins; setting it equal to Kp restores the old symmetric loop.
+KP_RETURN_FACTOR = 2.0
 DEFAULT_INTERVAL = 15
 DEFAULT_MIN_OUTPUT = 150
 DEFAULT_UNIT_MAX = 3500

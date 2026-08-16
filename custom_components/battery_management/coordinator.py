@@ -53,6 +53,7 @@ from .const import (
     CONF_GRID_POWER,
     CONF_INTERVAL,
     CONF_KP,
+    CONF_KP_RETURN,
     CONF_MIN_OUTPUT,
     CONF_MODE_CONTROL,
     CONF_MODE_SAFE,
@@ -102,6 +103,7 @@ from .const import (
     DEFAULT_INTERVAL,
     DEFAULT_KP,
     DEFAULT_MIN_OUTPUT,
+    KP_RETURN_FACTOR,
     DEFAULT_MODE,
     DEFAULT_PHASE_DETECT,
     DEFAULT_PHASE_LIMIT_AMPS,
@@ -276,6 +278,12 @@ class BatteryCoordinator:
         self._bias: float = float(data.get(CONF_BIAS, DEFAULT_BIAS))
         self._deadband: float = float(data.get(CONF_DEADBAND, DEFAULT_DEADBAND))
         self._kp: float = float(data.get(CONF_KP, DEFAULT_KP))
+        configured_return = data.get(CONF_KP_RETURN)
+        self._kp_return: float = (
+            float(configured_return)
+            if configured_return is not None
+            else self._kp * KP_RETURN_FACTOR
+        )
         self._interval: int = int(data.get(CONF_INTERVAL, DEFAULT_INTERVAL))
         self._min_output: float = float(data.get(CONF_MIN_OUTPUT, DEFAULT_MIN_OUTPUT))
         self._unit_ceiling: float = float(data.get(CONF_UNIT_MAX, DEFAULT_UNIT_MAX))
@@ -712,6 +720,24 @@ class BatteryCoordinator:
     def _may_discharge(self, name: str, unit: UnitState) -> bool:
         """Is this pack allowed out, given its floor and its recovery?"""
         return unit.soc > self._discharge_floor(unit) and not self.recovering[name]
+
+    def _gain(self, error: float) -> float:
+        """How hard to act on this error - which depends on which way it points.
+
+        Going further out and coming back are not the same risk. Winding the
+        command up too eagerly is what oscillates (gotcha 3), because every
+        step is a bet on a pack that answers 10-30 s later. Winding it *down*
+        cannot run away: the far end of "less" is a pack sitting at 0 W.
+
+        And it is worth doing quickly, because export has exactly one cause -
+        a pack still discharging into a load that has already gone away. On the
+        primary site's own hour, one pack, coming back at 0.5 instead of 0.25
+        cut export from 296 to 227 Wh; the theoretical floor for any loop that
+        cannot see the future is 210 Wh.
+        """
+        if (self.setpoint > 0 and error < 0) or (self.setpoint < 0 and error > 0):
+            return self._kp_return
+        return self._kp
 
     def _classify(
         self, error: float, sp: float, online: dict, maxdis: float, maxchg: float
@@ -1389,6 +1415,7 @@ class BatteryCoordinator:
                 "bias_w": self._bias,
                 "deadband_w": self._deadband,
                 "kp": self._kp,
+                "kp_return": self._kp_return,
                 "interval_s": self._interval,
                 "min_output_w": self._min_output,
                 "unit_max_w": self._unit_ceiling,
@@ -2221,7 +2248,7 @@ class BatteryCoordinator:
             elif abs(error) < self._deadband:
                 sp = self.setpoint
             else:
-                sp = self.setpoint + self._kp * error
+                sp = self.setpoint + self._gain(error) * error
             sp = max(min(sp, upper), lower)
             self.setpoint = sp
 

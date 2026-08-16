@@ -21,6 +21,7 @@ from custom_components.battery_management.const import (
     CONF_GRID_POWER,
     CONF_INTERVAL,
     CONF_KP,
+    CONF_KP_RETURN,
     CONF_MIN_OUTPUT,
     CONF_MODE_SELECT,
     CONF_PHASE_SENSORS,
@@ -44,6 +45,9 @@ DEFAULT_TUNABLES = {
     CONF_BIAS: 0,
     CONF_DEADBAND: 0,
     CONF_KP: 1.0,
+    # explicit, so tests that are not about the gain keep the old
+    # symmetric loop instead of inheriting Kp x KP_RETURN_FACTOR
+    CONF_KP_RETURN: 1.0,
     CONF_INTERVAL: 15,
     CONF_MIN_OUTPUT: 150,
     CONF_UNIT_MAX: 3500,

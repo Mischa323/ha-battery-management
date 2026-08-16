@@ -105,7 +105,8 @@
           "fast_charge_hold": "Accu's vol houden na snelladen",
           "full_charge_minutes": "Minuten van leeg naar vol op vol vermogen",
           "external_timeout": "Minuten dat een extern setpoint geldig blijft",
-          "discharge_recovery": "Eerst zover terugladen voordat hij weer ontlaadt (%)"
+          "discharge_recovery": "Eerst zover terugladen voordat hij weer ontlaadt (%)",
+          "kp_return": "Terugregelfactor"
         },
         "data_description": {
           "bias": "Streef naar zoveel afname in plaats van precies nul, zodat een kleine doorschieter alsnog niets teruglevert.",
@@ -117,7 +118,8 @@
           "fast_charge_hold": "Aan: de schakelaar blijft aan bij vol en houdt ze daar tot jij hem uitzet. Uit: hij schakelt zichzelf uit en je modus ontlaadt ze weer.",
           "full_charge_minutes": "Eenmalig gemeten, per pack. Levert zowel de minuten-tot-vol-schatting als de bruikbare capaciteit die het zon-plafond nodig heeft. 0 verbergt beide in plaats van te gokken.",
           "external_timeout": "In de modus Extern plan: komt er binnen deze tijd geen nieuw plan, dan gaat de sturing terug naar de meter volgen in plaats van te bevriezen op het laatste commando.",
-          "discharge_recovery": "Zodra een accu leeg is, wacht hij tot hij dit aantal procentpunten boven zijn ondergrens zit voordat hij weer ontlaadt. Zonder dit wordt een accu die door de zon van 5 % naar 6 % gaat meteen weer naar 5 % ontladen, keer op keer - en onderin de accu is cyclen het duurst. Geteld bóven de ondergrens, dus hij volgt je SoC-reserve en de eigen ontlaadlimiet van elke accu. Opladen wordt nooit geblokkeerd, en een accu die van vol naar beneden komt loopt gewoon door tot zijn limiet. 0 zet het uit."
+          "discharge_recovery": "Zodra een accu leeg is, wacht hij tot hij dit aantal procentpunten boven zijn ondergrens zit voordat hij weer ontlaadt. Zonder dit wordt een accu die door de zon van 5 % naar 6 % gaat meteen weer naar 5 % ontladen, keer op keer - en onderin de accu is cyclen het duurst. Geteld bóven de ondergrens, dus hij volgt je SoC-reserve en de eigen ontlaadlimiet van elke accu. Opladen wordt nooit geblokkeerd, en een accu die van vol naar beneden komt loopt gewoon door tot zijn limiet. 0 zet het uit.",
+          "kp_return": "Hoe snel de opdracht weer wordt afgebouwd. Bewust hoger dan de factor hierboven: teruggaan kan niet gaan slingeren, en het is precies wat voorkomt dat de accus terugleveren aan een verbruik dat al weg is. Zet hem gelijk aan de factor hierboven voor het oude, symmetrische gedrag."
         }
       },
       "units": {
