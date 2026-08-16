@@ -92,7 +92,14 @@ splits proportionally; low load consolidates onto one unit; offline unit (weight
    pack will charge at 3500 W on a leg already pulling 20 A while the other two
    idle and the total looks fine. The per-leg placement is *measured*, because
    nothing reports it - see 18.
-6. **Solar is limited by a 16 A breaker (~3.68 kW)** at the primary site — not
+6. **The packs hold 7 kWh each, 14 kWh together** (confirmed by the owner,
+   2026-08-16). That makes `full_charge_minutes = 120` exact rather than a
+   guess - 3500 W x 2 h - so the solar-aware charge ceiling has real capacity
+   to work from at the primary site. Do not try to derive this from a short
+   trace: an afternoon of quiet regulation moves the state of charge by two or
+   three points, and at 1 % resolution that gives answers between 4.8 and
+   13.5 kWh. It needs a full charge, or asking.
+7. **Solar is limited by a 16 A breaker (~3.68 kW)** at the primary site — not
    relevant to the coordinator (it's grid-driven) but relevant if you ever model
    PV.
 
