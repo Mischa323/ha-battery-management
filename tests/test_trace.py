@@ -300,3 +300,50 @@ async def test_it_records_which_of_the_two_gains_was_used(traced):
 
     gains = {r["gain"] for r in rows(system.trace_dir) if r["gain"]}
     assert gains == {"0.25", "0.5"}, gains
+
+
+async def test_the_commanded_power_is_signed(traced):
+    """It was not, and the direction lived in a separate `flow` column.
+
+    Summing it then said the packs had never charged, all day - which is how
+    an attempt to derive their capacity from a day of trace came out as a
+    discharge. Signed here means signed everywhere: the same convention as the
+    Setpoint sensor and the per-unit target sensors.
+    """
+    from tests.conftest import GRID_SENSOR
+
+    system = traced(grid=2500)
+    coordinator = system.coordinator
+
+    for _ in range(12):
+        await coordinator._async_tick(None)
+    system.hass.states.set(GRID_SENSOR, -2500)      # push it into charging
+    for _ in range(13):
+        await coordinator._async_tick(None)
+    await coordinator.async_stop(revert=False)
+
+    written = rows(system.trace_dir)
+    values = [float(r["batterij_1_target_w"]) for r in written if r["batterij_1_target_w"]]
+    assert any(v > 0 for v in values), "never recorded a discharge"
+    assert any(v < 0 for v in values), "charging was not recorded as negative"
+    # and the unsigned figure is still there for anyone who wants it
+    assert all(
+        float(r["batterij_1_target_magnitude_w"]) >= 0
+        for r in written
+        if r["batterij_1_target_magnitude_w"]
+    )
+
+
+async def test_a_meaning_change_rotates_the_file(tmp_path):
+    """Renaming nothing but changing what a column means is the trap the
+    schema marker exists for: same header, different semantics, no rotation."""
+    first = Trace(str(tmp_path))
+    first.add({"at": "1", "schema": 1, "target_w": 500})
+    first.flush()
+
+    second = Trace(str(tmp_path))
+    second.add({"at": "2", "schema": 2, "target_w": -500, "target_magnitude_w": 500})
+    second.flush()
+
+    assert not misaligned(tmp_path)
+    assert len(os.listdir(tmp_path)) == 2

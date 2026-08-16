@@ -107,7 +107,8 @@ What each row carries:
 | `upper_w`, `lower_w` | the bounds in force |
 | `free_discharge_w`, `fuse_discharge_w` | what the packs could give, and what the fuse left of it |
 | `phase1_w`…`phase3_w` | each leg |
-| `<pack>_target_w` | what we told that pack |
+| `<pack>_target_w` | what we told that pack — **signed: + discharging, − charging** |
+| `schema` | the row format; `2` signed the column above, `1` did not |
 | `<pack>_actual_w` | what the pack says it is doing — **the lag, measured** |
 | `grid_age_s` | how old the meter reading was when we regulated on it |
 | `<pack>_readback_w` | what the device holds as its target |

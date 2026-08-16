@@ -1598,9 +1598,21 @@ class BatteryCoordinator:
             "flow": flow,
             "dry_run": self.dry_run,
             "phases_w": {str(leg): round(w) for leg, w in legs.items()},
+            # The schema, because a column can change *meaning* without
+            # changing its name, and then nothing rotates and nobody notices.
+            # v1 wrote target_w unsigned with the direction in `flow`, which
+            # read as "these packs never charged" to anyone summing it.
+            "schema": 2,
             "units": {
                 name: {
-                    "target_w": alloc.get(name, 0),
+                    # signed like every other power figure here and like the
+                    # Setpoint sensor: + discharging, - charging
+                    "target_w": (
+                        alloc.get(name, 0)
+                        if flow != FLOW_CHARGE
+                        else -alloc.get(name, 0)
+                    ),
+                    "target_magnitude_w": alloc.get(name, 0),
                     "soc": online[name].soc,
                     # what the pack itself says it is doing. Never used for
                     # control (gotcha 2), but it is the only way to see how far
@@ -1723,6 +1735,7 @@ class BatteryCoordinator:
         for name, unit in (row.get("units") or {}).items():
             key = name.lower().replace(" ", "_")
             flat[f"{key}_target_w"] = unit.get("target_w")
+            flat[f"{key}_target_magnitude_w"] = unit.get("target_magnitude_w")
             flat[f"{key}_actual_w"] = unit.get("actual_w")
             flat[f"{key}_readback_w"] = unit.get("readback_w")
             flat[f"{key}_ack_s"] = unit.get("ack_s")
