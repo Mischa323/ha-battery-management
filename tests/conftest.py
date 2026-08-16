@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import asyncio
 
+from homeassistant.util import dt as dt_util
+
 from dataclasses import dataclass, field
 from typing import NamedTuple
 
@@ -61,9 +63,12 @@ DEFAULT_TUNABLES = {
 
 
 class FakeState:
-    def __init__(self, state, attributes: dict | None = None) -> None:
+    def __init__(self, state, attributes: dict | None = None, last_updated=None) -> None:
         self.state = str(state)
         self.attributes = attributes or {}
+        # Home Assistant stamps every state; the trace records how old the
+        # reading was, so the double has to carry one too
+        self.last_updated = last_updated or dt_util.utcnow()
 
 
 class FakeStates:

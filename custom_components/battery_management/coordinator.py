@@ -386,6 +386,9 @@ class BatteryCoordinator:
         self.tick_log: deque = deque(maxlen=TICK_LOG_SIZE)
         # A file, because every question so far has been about a day that had
         # already scrolled out of the ring above.
+        # when each command went out, and how long the pack took to show it
+        self._command_sent: dict[str, tuple[int, object]] = {}
+        self._command_ack: dict[str, float] = {}
         self._trace: Trace | None = None
         if data.get(CONF_TRACE, DEFAULT_TRACE):
             self._trace = Trace(
@@ -1565,9 +1568,12 @@ class BatteryCoordinator:
         """
         bounds = bounds or {}
         legs = self.phase_power() or {}
+        cfg_by_name_all = {u.name: u for u in self._units}
         row = {
             "at": dt_util.utcnow().isoformat(),
             "grid_w": round(grid),
+            # how old the number we just regulated on actually was
+            "grid_age_s": self._state_age(self._grid_sensor),
             # what the meter really said, and what the other controller was
             # doing - both needed to check the reconstruction afterwards
             "observed_grid_w": (
@@ -1592,6 +1598,21 @@ class BatteryCoordinator:
                     # control (gotcha 2), but it is the only way to see how far
                     # behind our command the hardware actually runs.
                     "actual_w": self._unit_power(name),
+                    "actual_age_s": self._state_age(
+                        getattr(cfg_by_name_all.get(name), "power_sensor", None)
+                    ),
+                    "soc_age_s": self._state_age(
+                        getattr(cfg_by_name_all.get(name), "soc_sensor", None)
+                    ),
+                    # what the device holds, and how long it took to hold it
+                    "readback_w": self._read_float(
+                        getattr(cfg_by_name_all.get(name), "target_number", None)
+                    ),
+                    "ack_s": (
+                        self._check_ack(cfg_by_name_all[name])
+                        if name in cfg_by_name_all
+                        else None
+                    ),
                     "phase": self.unit_phase.get(name),
                     "recovering": self.recovering.get(name),
                 }
@@ -1603,6 +1624,53 @@ class BatteryCoordinator:
         }
         self.tick_log.append(row)
         self._trace_tick(row, bounds.get("unit_cap_w") or {})
+
+    def _state_age(self, entity_id: str | None) -> float | None:
+        """Seconds since this entity last published anything.
+
+        How stale the inputs are is half of "what is going wrong" and it was
+        not recorded at all. The P1 meter should be a second or two old; the
+        packs publish in bursts 10-30 s apart (gotcha 2). A tick that regulated
+        on a 40 s old meter reading explains itself once this is in the row.
+        """
+        state = self.hass.states.get(entity_id) if entity_id else None
+        stamp = getattr(state, "last_updated", None) if state else None
+        if stamp is None:
+            return None
+        try:
+            return round((dt_util.utcnow() - stamp).total_seconds(), 1)
+        except TypeError:
+            return None
+
+    def _note_command(self, name: str, value: int) -> None:
+        """Remember when a new command went out, so the ack can be timed."""
+        pending = self._command_sent.get(name)
+        if pending is not None and pending[0] == value:
+            return                      # same value; the clock keeps running
+        self._command_sent[name] = (value, dt_util.utcnow())
+        self._command_ack.pop(name, None)
+
+    def _check_ack(self, cfg: UnitConfig) -> float | None:
+        """How long the pack took to show the value we last sent it.
+
+        The target entity reflects what the *device* holds, so the gap between
+        our service call and that number changing is the command round-trip -
+        the other half of the lag, and the half nobody had measured. A pack
+        that never acknowledges leaves this empty, which is itself the finding.
+        """
+        pending = self._command_sent.get(cfg.name)
+        if pending is None:
+            return self._command_ack.get(cfg.name)
+        wanted, sent_at = pending
+        readback = self._read_float(cfg.target_number)
+        if readback is None:
+            return self._command_ack.get(cfg.name)
+        if abs(abs(readback) - abs(wanted)) <= 1:
+            took = round((dt_util.utcnow() - sent_at).total_seconds(), 1)
+            self._command_ack[cfg.name] = took
+            self._command_sent.pop(cfg.name, None)
+            return took
+        return None                     # still outstanding
 
     def _unit_power(self, name: str) -> float | None:
         """What this pack reports it is doing, signed like the setpoint.
@@ -1638,6 +1706,10 @@ class BatteryCoordinator:
             key = name.lower().replace(" ", "_")
             flat[f"{key}_target_w"] = unit.get("target_w")
             flat[f"{key}_actual_w"] = unit.get("actual_w")
+            flat[f"{key}_readback_w"] = unit.get("readback_w")
+            flat[f"{key}_ack_s"] = unit.get("ack_s")
+            flat[f"{key}_actual_age_s"] = unit.get("actual_age_s")
+            flat[f"{key}_soc_age_s"] = unit.get("soc_age_s")
             flat[f"{key}_soc"] = unit.get("soc")
             flat[f"{key}_phase"] = unit.get("phase")
             flat[f"{key}_cap_w"] = round(caps.get(name)) if name in caps else None
@@ -2468,6 +2540,9 @@ class BatteryCoordinator:
                 await self._svc_select(cfg.flow_select, flow)
                 await self._svc_number(cfg.target_number, alloc.get(name, 0))
                 self._record(name, flow, alloc.get(name, 0))
+                # started before the readback is looked at, so the round-trip
+                # is timed from the command rather than from noticing it
+                self._note_command(name, alloc.get(name, 0))
 
             _LOGGER.debug(
                 "grid=%.0f W bias=%.0f -> error=%.0f W | setpoint=%.0f W (%s) | %s | %s",

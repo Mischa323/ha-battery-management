@@ -109,6 +109,10 @@ What each row carries:
 | `phase1_w`…`phase3_w` | each leg |
 | `<pack>_target_w` | what we told that pack |
 | `<pack>_actual_w` | what the pack says it is doing — **the lag, measured** |
+| `grid_age_s` | how old the meter reading was when we regulated on it |
+| `<pack>_readback_w` | what the device holds as its target |
+| `<pack>_ack_s` | seconds between commanding it and the device showing it |
+| `<pack>_actual_age_s`, `<pack>_soc_age_s` | how stale that pack's readings were |
 | `<pack>_cap_w`, `<pack>_soc`, `<pack>_phase`, `<pack>_recovering` | its ceiling and state |
 | `mode`, `policy`, `status`, `dry_run`, `offline` | context |
 

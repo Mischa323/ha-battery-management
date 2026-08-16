@@ -161,3 +161,53 @@ async def test_it_can_be_switched_off(build_system):
     assert system.coordinator._trace is None
 
     await system.coordinator._async_tick(None)          # must not raise
+
+
+async def test_it_records_how_old_the_meter_reading_was(traced):
+    """Regulating on a stale number explains a lot, once it is written down."""
+    from datetime import timedelta
+
+    from homeassistant.util import dt as dt_util
+
+    from tests.conftest import GRID_SENSOR, FakeState
+
+    system = traced(grid=800)
+    system.hass.states.set(GRID_SENSOR, 800)
+    stale = dt_util.utcnow() - timedelta(seconds=45)
+    system.hass.states._states[GRID_SENSOR] = FakeState(800, last_updated=stale)
+
+    for _ in range(25):
+        await system.coordinator._async_tick(None)
+
+    ages = [float(r["grid_age_s"]) for r in rows(system.trace_dir) if r["grid_age_s"]]
+    assert ages and max(ages) >= 44, ages
+
+
+async def test_it_times_how_long_a_pack_takes_to_accept_a_command(traced):
+    """The other half of the lag, and the half nobody had measured."""
+    system = traced(grid=2000)
+    coordinator = system.coordinator
+
+    await coordinator._async_tick(None)
+    commanded = system.allocation()["Batterij 1"]
+    assert commanded, "nothing was commanded, so there is nothing to time"
+    # the pack has not echoed it back yet
+    assert coordinator._check_ack(coordinator._units[0]) is None
+
+    # ...and now it has
+    system.hass.states.set(system.target(0), abs(commanded))
+    assert coordinator._check_ack(coordinator._units[0]) is not None
+
+
+async def test_a_pack_that_never_answers_leaves_the_time_empty(traced):
+    """An empty column is the finding, not a gap in the data."""
+    system = traced(grid=2000)
+    coordinator = system.coordinator
+
+    for _ in range(25):
+        await coordinator._async_tick(None)          # readback never moves
+
+    written = rows(system.trace_dir)
+    assert all(not r.get("batterij_1_ack_s") for r in written)
+    # but what the device *does* hold is recorded, so the two can be compared
+    assert any(r.get("batterij_1_readback_w") is not None for r in written)
