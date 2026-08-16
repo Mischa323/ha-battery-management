@@ -63,5 +63,17 @@ check("prices card finds the plan", pc.prices === P + "plan", pc);
 const bare = Prices.getStubConfig({ states: {} }, ["sensor.other"]);
 check("prices card without a plan", !bare.prices, bare);
 
-console.log(fails ? `\n${fails} FAILED` : "\nstub config checks pass");
+
+// Home Assistant passes the entities *not already used* on the dashboard. Once
+// one card uses the plan sensor, a second card must still be able to find it.
+const states = Object.fromEntries(entities.map((id) => [id, {}]));
+const elsewhere = Manage.getStubConfig({ states }, ["sensor.some_thermostat"]);
+check("setpoint found outside the suggestions", elsewhere.setpoint === `${P}setpoint`, elsewhere);
+const pcElsewhere = Prices.getStubConfig({ states }, ["sensor.some_thermostat"]);
+check("plan found outside the suggestions", pcElsewhere.prices === `${P}plan`, pcElsewhere);
+const none = Prices.getStubConfig({ states: {} }, []);
+check("nothing anywhere -> bare config", !none.prices, none);
+
+
+console.log(fails ? fails + " FAILED" : "stub config checks pass");
 process.exit(fails ? 1 : 0);

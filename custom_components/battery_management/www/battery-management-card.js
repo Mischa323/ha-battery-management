@@ -75,6 +75,21 @@ const PRICE_LEGEND = `
  * publishes in UTC, so midnight arrived on the chart labelled 22:00 and the
  * evening peak looked like an afternoon one. Parse it, then format it.
  */
+/**
+ * Every entity we could refer to.
+ *
+ * Home Assistant hands `getStubConfig` the entities *not already used* on the
+ * dashboard, which is not the same thing at all: once the Plan sensor is on a
+ * card, it disappears from that list and a second card can no longer find it.
+ * The suggestion is a fine starting point, so it goes first, with everything
+ * Home Assistant knows about behind it.
+ */
+function knownEntities(hass, entities) {
+  const suggested = Array.isArray(entities) ? entities : [];
+  const everything = Object.keys((hass && hass.states) || {});
+  return [...suggested, ...everything.filter((id) => !suggested.includes(id))];
+}
+
 const hhmm = (iso) => {
   const at = new Date(iso);
   if (isNaN(at.getTime())) return String(iso).slice(11, 16);
@@ -230,9 +245,7 @@ class BatteryManagementCard extends HTMLElement {
    * entity actually exists.
    */
   static getStubConfig(hass, entities) {
-    const all =
-      (Array.isArray(entities) && entities.length ? entities : null) ||
-      Object.keys((hass && hass.states) || {});
+    const all = knownEntities(hass, entities);
     const config = { type: "custom:battery-management-card" };
 
     const setpoint = all.find(
@@ -497,9 +510,7 @@ class BatteryManagementPricesCard extends HTMLElement {
   }
 
   static getStubConfig(hass, entities) {
-    const all =
-      (Array.isArray(entities) && entities.length ? entities : null) ||
-      Object.keys((hass && hass.states) || {});
+    const all = knownEntities(hass, entities);
     const plan = all.find((id) => id.startsWith("sensor.") && id.endsWith("_plan"));
     const config = { type: "custom:battery-management-prices-card" };
     if (plan) config.prices = plan;
