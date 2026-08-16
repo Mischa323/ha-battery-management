@@ -514,6 +514,23 @@ possible, and they gate section A.
 
 ### H. Done
 
+- **Asymmetric gain, and the ceiling on tuning.** Asked for by the owner: one
+  pack has to work on its own. Measuring that first established what is even
+  available, on the site's own hour with a single pack — and it is not much.
+  A loop that could see the next tick exports **nothing**; one that can only
+  react exports **210 Wh** however it is tuned, because the packs answer
+  10-30 s later. We were at 266. **Do not go looking for the other 210 Wh — it
+  is arithmetic, not tuning.** A lag-compensating loop (subtract the
+  in-flight correction, then raise Kp) was tried and came out level or worse;
+  the dominant error is disturbance, not sluggishness.
+  What did work: the two directions are not the same risk. Going out bets on
+  packs that have not answered yet, which is what oscillates (gotcha 3);
+  coming back cannot run away, since the far end of "less" is a pack at 0 W —
+  and it is where export comes from, a pack still discharging into a load that
+  has already gone. `kp_return` defaults to **2 × Kp**, a factor rather than a
+  number so that raising Kp cannot silently flatten the asymmetry out again.
+  Through the real coordinator: one pack 266 → 211 Wh, two packs 323 → 244 Wh,
+  fewer heavy export ticks and a lower worst case, for 2-3 % on the mean.
 - **Per-unit observability.** `coordinator.unit_status` feeds a per-unit
   `binary_sensor` (connectivity) and a per-unit target `sensor` (signed,
   + discharge / − charge; `grid_flow` + `soc` as attributes). The target
