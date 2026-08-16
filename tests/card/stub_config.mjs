@@ -6,7 +6,12 @@ const src = readFileSync(
 );
 // stand up just enough browser for the module to evaluate
 globalThis.window = globalThis;
-globalThis.customElements = { define() {} };
+// a registry with get(), because the card checks before defining
+const _defined = new Map();
+globalThis.customElements = {
+  define: (tag, cls) => _defined.set(tag, cls),
+  get: (tag) => _defined.get(tag),
+};
 globalThis.HTMLElement = class {};
 globalThis.console.info = () => {};
 

@@ -6,7 +6,12 @@ const src = readFileSync(
   "utf8"
 );
 globalThis.window = globalThis;
-globalThis.customElements = { define() {} };
+// a registry with get(), because the card checks before defining
+const _defined = new Map();
+globalThis.customElements = {
+  define: (tag, cls) => _defined.set(tag, cls),
+  get: (tag) => _defined.get(tag),
+};
 globalThis.HTMLElement = class {};
 globalThis.console.info = () => {};
 const [hhmm, priceBars, priceSummary] = new Function(
