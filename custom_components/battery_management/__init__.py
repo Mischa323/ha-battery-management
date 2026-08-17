@@ -1,6 +1,7 @@
 """The Battery Management integration."""
 from __future__ import annotations
 
+import hashlib
 import logging
 from pathlib import Path
 
@@ -116,8 +117,14 @@ async def _async_register_card(hass: HomeAssistant) -> None:
             card_path,
         )
         return
-    report["bytes"] = await hass.async_add_executor_job(
-        lambda: card_file.stat().st_size
+
+    def _fingerprint() -> tuple[int, str]:
+        """Size and a short content hash, in one trip to the disk."""
+        data = card_file.read_bytes()
+        return len(data), hashlib.sha256(data).hexdigest()[:12]
+
+    report["bytes"], report["fingerprint"] = await hass.async_add_executor_job(
+        _fingerprint
     )
 
     try:
@@ -144,18 +151,27 @@ async def _async_register_card(hass: HomeAssistant) -> None:
     try:
         from homeassistant.components.frontend import add_extra_js_url
 
-        # Stamped with the version, because browsers cache this file hard and
-        # an unversioned URL means an update silently does nothing: the old
-        # script keeps running, so a card added in a new release never appears
-        # in the card list however many times you look for it. Found exactly
-        # that way.
-        url = f"{CARD_URL}?v={version}"
+        # Stamped, because browsers cache this file hard and an unversioned URL
+        # means an update silently does nothing: the old script keeps running,
+        # so a card added in a new release never appears in the card list
+        # however many times you look for it. Found exactly that way.
+        #
+        # The version alone was not enough, and that gap was reported from the
+        # primary site: the cards errored on an ordinary reload and rendered
+        # fine after Ctrl+Shift+R, on desktop and phone alike. The card file
+        # changes far more often than the manifest version does - every fix
+        # between releases, and every checkout during development - so the URL
+        # stayed identical while the contents moved underneath it, and every
+        # browser that had ever loaded the page kept serving its stale copy.
+        # The content hash closes that: same bytes, same URL, cache still
+        # works; different bytes, different URL, no stale copy can survive.
+        url = f"{CARD_URL}?v={version}-{report['fingerprint']}"
         add_extra_js_url(hass, url)
         report["offered_to_frontend"] = url
         _LOGGER.info(
             "Battery Management card registered: %s (%s bytes, served %s). "
-            "If a card still reports 'custom element doesn't exist', the browser "
-            "is holding an old copy - hard-refresh with Ctrl+Shift+R.",
+            "The query string carries a hash of the file, so a stale copy "
+            "cannot survive a reload.",
             url,
             report.get("bytes"),
             report.get("served"),

@@ -51,7 +51,7 @@ const PRICE_CSS = `
           .pbar.up { border-radius:4px 4px 0 0; }
           .pbar.down { border-radius:0 0 4px 4px; }
   .pbar.past { opacity:.35; }
-          .slot { cursor:pointer; }
+          .slot { cursor:pointer; touch-action:manipulation; }
   .slot.now .pbar { outline:2px solid var(--primary-text-color); outline-offset:1px; }
   /* dashed, so a tapped bar never gets mistaken for the current one */
   .slot.picked .pbar { outline:2px dashed var(--primary-text-color); outline-offset:1px; }
@@ -164,6 +164,31 @@ function drawPrices(plot, axis, hours, picked) {
   axis.innerHTML = hours
     .map((h, i) => `<span>${i % every === 0 ? hhmm(h.start) : ""}</span>`)
     .join("");
+}
+
+/**
+ * Make the bars answer to a tap, not only to a hover.
+ *
+ * The `title` attribute is a desktop-only affordance: a phone has no hover, so
+ * on a phone the chart could be looked at but not read - and a phone is where
+ * it is mostly looked at. Tapping a bar moves the readout above the chart to
+ * that slot, tapping it again goes back to now.
+ *
+ * Shared by both cards deliberately. The prices card had the CSS for a picked
+ * bar, the `cursor: pointer`, and even printed "tik nogmaals voor nu" to the
+ * reader - with nothing listening for the tap. Wiring it in one place is what
+ * stops the two drifting apart again.
+ */
+function wirePlot(card) {
+  const plot = card.querySelector("#plot");
+  if (!plot) return;
+  plot.addEventListener("click", (event) => {
+    const slot = event.target.closest(".slot");
+    if (!slot) return;
+    const index = Number(slot.dataset.i);
+    card._picked = card._picked === index ? null : index;
+    card._update();
+  });
 }
 
 /**
@@ -361,13 +386,7 @@ ${PRICE_LEGEND}
       if (!c.enable) return;
       this._svc("switch", "toggle", { entity_id: c.enable });
     });
-    this.querySelector("#plot").addEventListener("click", (event) => {
-      const slot = event.target.closest(".slot");
-      if (!slot) return;
-      const index = Number(slot.dataset.i);
-      this._picked = this._picked === index ? null : index;
-      this._update();
-    });
+    wirePlot(this);
     this.querySelector("#fast").addEventListener("click", () => {
       if (!c.fast_charge) return;
       const on = this._s(c.fast_charge) === "on";
@@ -546,6 +565,7 @@ ${PRICE_CSS}
 ${PRICE_LEGEND}
         </div>
       </ha-card>`;
+    wirePlot(this);
     this._built = true;
   }
 

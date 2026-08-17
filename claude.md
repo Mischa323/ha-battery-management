@@ -539,6 +539,27 @@ possible, and they gate section A.
 
 ### H. Done
 
+- **Two card faults from the primary site, 2026-08-17.**
+  - *Cards errored on an ordinary reload and were fine after Ctrl+Shift+R*, on
+    desktop and phone alike. The cache buster was the **manifest version**, and
+    the card file changes far more often than that: every fix between releases
+    and every checkout during development. So the URL stayed identical while
+    the bytes moved underneath it, and every browser that had ever loaded the
+    page kept serving its stale copy. Now `?v={version}-{sha256[:12]}` of the
+    file itself — same bytes, same URL, caching still works; different bytes,
+    different URL, no stale copy can survive. The hash is in the diagnostics as
+    `card.fingerprint`.
+  - *The prices card's chart could not be read on a phone.* It had the
+    picked-bar CSS, the `cursor: pointer`, and printed "tik nogmaals voor nu"
+    to the reader — with **no click listener attached at all**. On a desktop
+    the `title` tooltip covered for it; a phone has no hover, so the chart was
+    decorative. The management card had the handler; the prices card had been
+    given everything except the wiring. Both now share `wirePlot`.
+    **`tap.mjs` did not catch this and could not have**: it tests `pickedSlot`,
+    which was right all along. The fault was one level out, in whether anything
+    ever called it. `tap_wiring.mjs` asserts the listener exists per card and
+    that a tap moves the readout — verified by reintroducing the bug.
+
 - **Five things the first real traces found, 2026-08-17.** All from 5917 ticks
   of live data plus two diagnostics downloads, none of them visible from the
   code alone.
