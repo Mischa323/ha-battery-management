@@ -108,3 +108,22 @@ async def test_diagnostics_say_whether_the_modes_were_chosen(build_system):
 
     assert report["units"][0]["modes"]["explicitly_set"] is False
     assert report["units"][0]["modes"]["select_offers"] == BOTH
+
+
+async def test_an_issue_from_an_earlier_run_is_cleared(build_system, issues):
+    """A fix that outlives its warning teaches people to ignore warnings.
+
+    The primary site carried a dismissed hand-back warning for more than a
+    week after the configuration had been corrected. The reconciliation
+    compared "not broken" against a default of "not broken" on the very first
+    pass and took the shortcut, so `async_delete_issue` was never reached and
+    an issue raised by a previous run outlived the fix forever.
+    """
+    system = build_system(grid=500)
+    for index in (0, 1):
+        offer(system, index, BOTH)
+    issues[issue_for(system, "Batterij 2")] = {"left": "by an earlier run"}
+
+    await system.coordinator._async_tick(None)
+
+    assert issues == {}

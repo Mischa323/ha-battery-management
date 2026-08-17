@@ -15,6 +15,7 @@ import pytest
 from custom_components.battery_management import coordinator as coordinator_module
 from custom_components.battery_management.const import (
     CONF_EXTERNAL_TIMEOUT,
+    CONF_GRID_MAX_AGE,
     FLOW_CHARGE,
     FLOW_DISCHARGE,
     MODE_EXTERNAL,
@@ -95,7 +96,11 @@ async def test_a_stale_plan_hands_control_back(planned, monkeypatch):
     500 W of import while discharging 1200, so the house is drawing 1700 — and
     that is exactly where the integrator goes.
     """
-    system = await planned(1200, **{CONF_EXTERNAL_TIMEOUT: 15})
+    # grid_max_age off: this test yanks the clock forward 20 minutes, which
+    # would also make the meter look stale. The plan is the subject here.
+    system = await planned(
+        1200, **{CONF_EXTERNAL_TIMEOUT: 15, CONF_GRID_MAX_AGE: 0}
+    )
     real_now = coordinator_module.dt_util.utcnow()
     monkeypatch.setattr(
         coordinator_module.dt_util,

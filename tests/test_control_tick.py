@@ -16,6 +16,7 @@ from custom_components.battery_management.const import (
     FLOW_CHARGE,
     FLOW_DISCHARGE,
     DEVICE_MODE_SELF,
+    POLICY_NO_UNITS,
 )
 
 
@@ -224,3 +225,19 @@ async def test_a_failing_service_call_degrades_instead_of_raising(build_system):
     await system.coordinator._async_tick(None)  # must not raise
 
     assert system.coordinator.status == "degraded"
+
+
+async def test_nothing_reachable_is_not_the_same_as_packs_full(build_system):
+    """`packs_full` while both units were offline, straight from the trace.
+
+    With nothing online both capacities are zero, so every capacity test
+    answers "full" or "empty" - a statement about the packs, when the truth is
+    a statement about the connection. The active-policy sensor exists to make
+    a flat graph legible, so it has to be honest in exactly the case somebody
+    is most likely to be staring at it.
+    """
+    system = build_system(grid=-2000, units=(("093", None), ("052", None)))
+
+    await system.coordinator._async_tick(None)
+
+    assert system.coordinator.active_policy == POLICY_NO_UNITS

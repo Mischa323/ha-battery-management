@@ -110,7 +110,8 @@
           "discharge_recovery": "Charge back this far before discharging again (%)",
           "kp_return": "Return gain",
           "trace": "Write a trace file",
-          "trace_days": "Keep for"
+          "trace_days": "Keep for",
+          "grid_max_age": "Ignore the meter after (seconds)"
         },
         "data_description": {
           "bias": "Aim for this much import instead of exactly zero, so a brief overshoot still exports nothing.",
@@ -125,7 +126,8 @@
           "discharge_recovery": "Once a pack has been emptied it waits until it is this many points above its floor before it discharges again. Without it, the sun lifting a pack from 5 % to 6 % gets discharged straight back to 5 %, over and over - and the bottom of the pack is the worst place to cycle it. Counted above the floor, so it follows your SoC reserve and each pack's own discharge limit. It never blocks charging, and a pack coming down from full still empties all the way to its limit. 0 switches it off.",
           "kp_return": "How fast the command is wound back down. Higher than the gain above on purpose: coming back cannot oscillate, and it is what stops the packs exporting into a load that has already gone away. Set it equal to the gain above for the old symmetric behaviour.",
           "trace": "One CSV row per tick under config/battery_management_trace/, so a question about last week can still be answered. Costs about 2 MB a day.",
-          "trace_days": "Whole days older than this are deleted."
+          "trace_days": "Whole days older than this are deleted.",
+          "grid_max_age": "Stop regulating once the meter has not reported for this long, instead of integrating a number that stopped moving. A frozen reading stays perfectly readable, so nothing else notices it: the setpoint walks to full discharge and holds there. 0 trusts the reading whatever its age."
         }
       },
       "units": {
@@ -274,7 +276,9 @@
           "solar_headroom": "Not buying, the sun still fits",
           "phase_limit": "Held back by the main fuse",
           "phase_detect": "Measuring which pack is on which phase",
-          "recovering": "Charging back up before it discharges again"
+          "recovering": "Charging back up before it discharges again",
+          "grid_stale": "Grid meter has stopped reporting",
+          "no_units": "No packs reachable"
         }
       },
       "solar_remaining": {
@@ -345,6 +349,10 @@
     "hand_back_impossible": {
       "title": "{unit} cannot be handed back to {mode}",
       "description": "**{unit}** is set to return to `{mode}` when the coordinator is switched off or Home Assistant unloads. That pack does not offer that option — it only offers: {options}.\n\nThe command would simply be refused, and these packs have no watchdog: one would keep running its last instruction indefinitely, which is exactly what the safe revert exists to prevent. Dry run never reveals this, because nothing is written.\n\nA pack without its own P1 meter has no self-consumption mode at all. For that one, **leave the hand-back empty**: it is then commanded 0 W and its mode is left alone, which is a safe resting state.\n\nFix it under **Configure → Battery unit entities**, walking through to the screen that asks what this unit's modes mean."
+    },
+    "write_not_acknowledged": {
+      "title": "{units} is not acknowledging commands",
+      "description": "The coordinator has been writing to **{units}** for over {seconds} seconds without the pack ever showing the value back.\n\nCommands are sent without waiting for a reply, so a refused write raises where nobody is listening. These packs also have no watchdog: one that stops accepting orders keeps running whatever it accepted last, indefinitely.\n\nCheck that the Anker integration is still connected and that the target entity is not disabled or read-only. This clears itself as soon as a command is acknowledged."
     }
   },
   "selector": {

@@ -53,6 +53,7 @@ from .const import (
     CONF_FLOW_SELECT,
     CONF_GRID_POWER,
     CONF_INTERVAL,
+    CONF_GRID_MAX_AGE,
     CONF_KP,
     CONF_KP_RETURN,
     CONF_MIN_OUTPUT,
@@ -107,6 +108,8 @@ from .const import (
     DEFAULT_EXPENSIVE_HOURS,
     DEFAULT_FULL_CHARGE_MINUTES,
     DEFAULT_INTERVAL,
+    DEFAULT_GRID_MAX_AGE,
+    UNACKED_TICKS,
     DEFAULT_KP,
     DEFAULT_MIN_OUTPUT,
     DEFAULT_TRACE,
@@ -159,6 +162,8 @@ from .const import (
     POLICY_MODE_DISCHARGE_ONLY,
     POLICY_MODE_PAUSE,
     POLICY_NO_GRID_DATA,
+    POLICY_GRID_STALE,
+    POLICY_NO_UNITS,
     POLICY_PACKS_EMPTY,
     POLICY_PACKS_FULL,
     POLICY_RECOVERING,
@@ -354,6 +359,9 @@ class BatteryCoordinator:
         self._external_timeout: float = float(
             data.get(CONF_EXTERNAL_TIMEOUT, DEFAULT_EXTERNAL_TIMEOUT)
         )
+        self._grid_max_age: float = float(
+            data.get(CONF_GRID_MAX_AGE, DEFAULT_GRID_MAX_AGE)
+        )
 
         # --- per-phase fuse protection (entirely opt-in) ---------------------
         self._phase_sensors: list[str] = list(data.get(CONF_PHASE_SENSORS) or [])
@@ -407,6 +415,16 @@ class BatteryCoordinator:
         self.external_setpoint_at = None
         self._external_issue_active = False
         self._hand_back_issues: dict[str, bool] = {}
+        # Units whose last command the device never showed back, and for how
+        # long. Purely derived from the readback we already take, because the
+        # writes are fire-and-forget: `blocking=False` means a service call
+        # that fails raises where nobody is listening.
+        self.write_stalled: dict[str, float] = {}
+        self._write_issue_active = False
+        # when each pack last showed back something we sent it, and the
+        # recent magnitudes that count as "something we sent"
+        self._last_ack_at: dict[str, object] = {}
+        self._command_recent: dict[str, deque] = {}
         self.fast_charge_holding: bool = False   # charged, now being kept full
         self.setpoint: float = 0.0          # + = total discharge, - = total charge (W)
         self.status: str = "idle"           # idle | charging | discharging | fast_charge | off | degraded
@@ -795,6 +813,14 @@ class BatteryCoordinator:
         self, error: float, sp: float, online: dict, maxdis: float, maxchg: float
     ) -> str:
         """Which rule is limiting us this tick, for the active-policy sensor."""
+        # With nothing reachable both capacities are 0, so every test below
+        # answers "full" or "empty" - which reads as a statement about the
+        # packs when it is really one about the connection. The trace caught
+        # this saying `packs_full` while both units were offline. This sensor
+        # exists to make a flat graph legible, so it has to be honest in
+        # precisely the case you most want to look at.
+        if not online:
+            return POLICY_NO_UNITS
         wants_discharge = error >= self._deadband
         wants_charge = error <= -self._deadband
 
@@ -1387,7 +1413,15 @@ class BatteryCoordinator:
             issue_id = f"{self.entry.entry_id}_hand_back_{cfg.name}"
             options = self._mode_options(cfg.mode_select)
             broken = bool(cfg.mode_safe and options and cfg.mode_safe not in options)
-            if broken == self._hand_back_issues.get(cfg.name, False):
+            # `.get(name)` and not `.get(name, False)`: with the default, a
+            # freshly started coordinator compares False to False on the first
+            # pass and takes the shortcut, so `async_delete_issue` is never
+            # reached. An issue raised in an earlier run then outlives the fix
+            # forever - the primary site carried a dismissed warning for a week
+            # after its hand-back had been corrected. None means "not looked at
+            # yet in this run", which is never equal to either outcome, so the
+            # first pass always reconciles.
+            if broken == self._hand_back_issues.get(cfg.name):
                 continue
             self._hand_back_issues[cfg.name] = broken
             if broken:
@@ -1406,6 +1440,80 @@ class BatteryCoordinator:
                 )
             else:
                 ir.async_delete_issue(self.hass, DOMAIN, issue_id)
+
+    def _check_writes(self, online: dict) -> None:
+        """Notice a pack that has stopped taking orders.
+
+        The writes are fire-and-forget: `_svc_select` and `_svc_number` call
+        with `blocking=False`, so a service call that fails raises inside a
+        task nobody awaits and the tick never hears about it. Combine that
+        with gotcha 1 - the packs have no watchdog - and a silently refused
+        command leaves the device running its previous instruction for as long
+        as it takes somebody to notice, while the setpoint, the status and the
+        per-unit sensor all look perfectly healthy.
+
+        The readback is the only witness there is, and it was already being
+        measured for the trace without anyone acting on it.
+
+        Measured as "how long since this pack last showed us anything we sent",
+        deliberately, and not as the age of the currently outstanding command.
+        The obvious version times the pending write - and misses the failure
+        completely, because the setpoint moves every tick, so each new value
+        restarts the clock. A pack ignoring every single order would have
+        looked healthy forever.
+        """
+        issue_id = f"{self.entry.entry_id}_writes_not_acknowledged"
+        # Dry run writes nothing, so nothing can ever be acknowledged and every
+        # unit would look stuck. Suppressed commands are counted elsewhere;
+        # that is the shadow run's own proof of life.
+        if self.dry_run:
+            self.write_stalled = {}
+        else:
+            now = dt_util.utcnow()
+            for cfg in self._units:
+                if cfg.name not in online:
+                    continue
+                readback = self._read_float(cfg.target_number)
+                if readback is None:
+                    continue
+                recent = self._command_recent.get(cfg.name) or ()
+                if any(abs(abs(readback) - value) <= 1 for value in recent):
+                    self._last_ack_at[cfg.name] = now
+            limit = self._interval * UNACKED_TICKS
+            self.write_stalled = {
+                name: round(waited, 1)
+                for name in online
+                if (seen := self._last_ack_at.get(name)) is not None
+                and (waited := (now - seen).total_seconds()) > limit
+            }
+        if self.write_stalled:
+            # not an exception: the loop keeps regulating the packs that do
+            # answer, which is better than stopping because one of them sulks
+            self.status = "degraded"
+        if bool(self.write_stalled) == self._write_issue_active:
+            return
+        self._write_issue_active = bool(self.write_stalled)
+        if self.write_stalled:
+            _LOGGER.warning(
+                "no acknowledgement from %s after %.0f s; the pack is still "
+                "running whatever it last accepted",
+                ", ".join(sorted(self.write_stalled)),
+                min(self.write_stalled.values()),
+            )
+            ir.async_create_issue(
+                self.hass,
+                DOMAIN,
+                issue_id,
+                is_fixable=False,
+                severity=ir.IssueSeverity.WARNING,
+                translation_key="write_not_acknowledged",
+                translation_placeholders={
+                    "units": ", ".join(sorted(self.write_stalled)),
+                    "seconds": str(int(min(self.write_stalled.values()))),
+                },
+            )
+        else:
+            ir.async_delete_issue(self.hass, DOMAIN, issue_id)
 
     @callback
     def _sync_external_issue(self, waiting: bool) -> None:
@@ -1528,6 +1636,13 @@ class BatteryCoordinator:
                 "price_slots": len((self._price_attributes() or {}).get("prices", [])),
                 "current_price": self.current_price(),
                 "last_tick": self.last_tick.isoformat() if self.last_tick else None,
+                # how fresh the number the loop actually regulates on was, and
+                # the limit it is held to; both here so a support download can
+                # answer "was the meter alive" without the trace
+                "grid_age_s": self._grid_age(),
+                "grid_max_age_s": self._grid_max_age,
+                # units whose last command the device never showed back
+                "write_stalled": self.write_stalled,
                 # the fuse protection, including the evidence behind each
                 # placement - a probe that guessed wrong is only findable here
                 "phase_protection": self.phase_report() if self.phase_protection else None,
@@ -1604,6 +1719,11 @@ class BatteryCoordinator:
             # how old the number we just regulated on actually was
             "grid_age_s": self._state_age(self._grid_sensor),
             "grid_changed_s": self._state_age(self._grid_sensor, "last_changed"),
+            # the one that separates "the meter died holding 100 W" from "the
+            # house really is drawing a steady 100 W" - the other two were
+            # identical in all 5917 rows of the first real trace, so neither
+            # of them can tell you that
+            "grid_reported_s": self._state_age(self._grid_sensor, "last_reported"),
             # which run wrote this row. Two coordinators commanding the
             # same packs would otherwise be invisible in the file, and a
             # reload that leaves the old one running is exactly the sort
@@ -1695,8 +1815,16 @@ class BatteryCoordinator:
         age means either "nothing arrived" or "the value held steady" - and
         those are opposite conclusions about the meter. The first real day of
         this showed a state of charge apparently 46 minutes stale, which was
-        simply a pack sitting on 38 %. When the two ages differ, the reading is
-        fresh and merely unchanged; when they match, nothing has arrived.
+        simply a pack sitting on 38 %.
+
+        That idea did not survive contact with the data. Across 5917 real ticks
+        `last_updated` and `last_changed` were identical in *every single row*,
+        because this meter only ever publishes when the value moves - so the
+        two-stamp comparison answers nothing and anyone trusting it is reading
+        noise. `last_reported` is the stamp that does answer it: Home Assistant
+        bumps it on every write, changed or not. That is what the staleness
+        guard measures against, and it is recorded here too so the distinction
+        is finally visible in the trace rather than assumed.
         """
         state = self.hass.states.get(entity_id) if entity_id else None
         stamp = getattr(state, attr, None) if state else None
@@ -1707,8 +1835,35 @@ class BatteryCoordinator:
         except TypeError:
             return None
 
+    def _grid_age(self) -> float | None:
+        """How long since the meter last reported anything at all.
+
+        `last_reported` first, because that is the one that separates a dead
+        integration from a steady house. Older cores do not have it, and there
+        the fallback is `last_updated` - which on a meter that publishes only
+        on change can read old while the meter is perfectly alive. That is why
+        an unknown age never trips the guard: failing open costs a little
+        regulation quality, failing closed would stop the packs on a quiet
+        night for no reason at all.
+        """
+        age = self._state_age(self._grid_sensor, "last_reported")
+        if age is None:
+            age = self._state_age(self._grid_sensor)
+        return age
+
     def _note_command(self, name: str, value: int) -> None:
         """Remember when a new command went out, so the ack can be timed."""
+        # First time we ever command this pack, start its health clock. Without
+        # it a unit that has never once answered has nothing to measure from
+        # and would look fine forever.
+        self._last_ack_at.setdefault(name, dt_util.utcnow())
+        # A short history, because the device is always a step behind: the
+        # readback shows the *previous* tick's value while this tick's is
+        # already outstanding. Matching only the newest would call a
+        # perfectly obedient pack deaf on every tick the setpoint moved.
+        self._command_recent.setdefault(
+            name, deque(maxlen=UNACKED_TICKS + 1)
+        ).append(abs(int(value)))
         pending = self._command_sent.get(name)
         if pending is not None and pending[0] == value:
             return                      # same value; the clock keeps running
@@ -2479,6 +2634,35 @@ class BatteryCoordinator:
                 self._notify()
                 return
 
+            # A meter that stopped reporting is not the same failure as one
+            # that cannot be read, and it is the more dangerous of the two: the
+            # value stays perfectly readable, so nothing looked wrong while the
+            # integrator kept adding kp*error to a number that had stopped
+            # moving. Treated exactly like an unreadable meter - hold the
+            # setpoint, write nothing, say why. Holding rather than zeroing is
+            # deliberate: the packs are already doing something sensible for
+            # the last good reading, and slamming them shut on every hiccup
+            # would be its own disturbance.
+            grid_age = self._grid_age()
+            if (
+                self._grid_max_age
+                and grid_age is not None
+                and grid_age > self._grid_max_age
+            ):
+                _LOGGER.warning(
+                    "grid sensor %s last reported %.0f s ago (limit %.0f s); "
+                    "holding setpoint at %.0f W",
+                    self._grid_sensor,
+                    grid_age,
+                    self._grid_max_age,
+                    self.setpoint,
+                )
+                self.status = "degraded"
+                self.active_policy = POLICY_GRID_STALE
+                self.last_grid_observed = grid
+                self._notify()
+                return
+
             # in dry run the meter reflects whoever *is* in charge, so close
             # the loop on reconstructed data instead of pretending it is ours
             observed_grid, other_power = grid, None
@@ -2645,6 +2829,9 @@ class BatteryCoordinator:
                     "unit_cap_w": dis_cap if sp > 0 else chg_cap,
                 },
             )
+            # after _log_tick, because that is what runs _check_ack and clears
+            # the commands the packs did take
+            self._check_writes(online)
             self._save_state()
             self._notify()
         except Exception:  # noqa: BLE001  -- never let the loop die silently

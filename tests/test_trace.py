@@ -374,3 +374,52 @@ async def test_stale_and_unchanged_are_told_apart(traced):
     row = rows(system.trace_dir)[-1]
     assert row["grid_age_s"] != ""
     assert row["grid_changed_s"] != ""
+
+
+async def test_rows_are_filed_by_their_own_day(tmp_path):
+    """A buffer that straddles midnight has to split, not pick a side.
+
+    Rows are held for up to a minute before being written, so a tick at
+    23:59:52 gets flushed after midnight. Keying the filename off the clock at
+    flush time put four rows of 2026-08-16 into `2026-08-17.csv` on the first
+    real day this ran. Harmless to read, but it silently breaks anyone slicing
+    the trace by day - and retention deletes by the date in the filename.
+    """
+    trace = Trace(str(tmp_path), keep_days=14)
+    trace.add({"at": "2026-08-16T23:59:52.000000+00:00", "grid_w": 1})
+    trace.add({"at": "2026-08-17T00:00:07.000000+00:00", "grid_w": 2})
+    trace.flush()
+
+    assert sorted(os.listdir(tmp_path)) == ["2026-08-16.csv", "2026-08-17.csv"]
+    yesterday = list(csv.DictReader(open(tmp_path / "2026-08-16.csv", encoding="utf-8")))
+    today = list(csv.DictReader(open(tmp_path / "2026-08-17.csv", encoding="utf-8")))
+    assert [r["grid_w"] for r in yesterday] == ["1"]
+    assert [r["grid_w"] for r in today] == ["2"]
+    assert trace.written == 2
+
+
+async def test_every_day_gets_its_own_header(tmp_path):
+    """A split that forgot the header would produce an unreadable second file."""
+    trace = Trace(str(tmp_path), keep_days=14)
+    trace.add({"at": "2026-08-16T23:59:52.000000+00:00", "grid_w": 1})
+    trace.add({"at": "2026-08-17T00:00:07.000000+00:00", "grid_w": 2})
+    trace.flush()
+
+    for name in os.listdir(tmp_path):
+        with open(tmp_path / name, encoding="utf-8") as handle:
+            assert handle.readline().strip() == "at,grid_w"
+
+
+async def test_an_unreadable_stamp_still_gets_written(tmp_path):
+    """Filing is a convenience; losing the row would not be.
+
+    A trace must never lose data over its own bookkeeping, so a row whose
+    timestamp cannot be parsed falls back to the wall clock rather than being
+    dropped or raising.
+    """
+    trace = Trace(str(tmp_path), keep_days=14)
+    trace.add({"at": "not a timestamp", "grid_w": 3})
+    trace.flush()
+
+    assert trace.errors == 0
+    assert [r["grid_w"] for r in rows(tmp_path)] == ["3"]

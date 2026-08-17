@@ -42,6 +42,7 @@ from .const import (
     CONF_FLOW_SELECT,
     CONF_GRID_POWER,
     CONF_INTERVAL,
+    CONF_GRID_MAX_AGE,
     CONF_KP,
     CONF_KP_RETURN,
     CONF_MIN_OUTPUT,
@@ -79,6 +80,7 @@ from .const import (
     DEFAULT_EXPENSIVE_HOURS,
     DEFAULT_SOLAR_FORECAST_MAX,
     DEFAULT_INTERVAL,
+    DEFAULT_GRID_MAX_AGE,
     DEFAULT_KP,
     DEFAULT_MIN_OUTPUT,
     KP_RETURN_FACTOR,
@@ -202,6 +204,10 @@ def _options_schema(defaults: dict) -> vol.Schema:
                 ),
             ): vol.Coerce(float),
             vol.Optional(CONF_INTERVAL, default=defaults.get(CONF_INTERVAL, DEFAULT_INTERVAL)): int,
+            vol.Optional(
+                CONF_GRID_MAX_AGE,
+                default=defaults.get(CONF_GRID_MAX_AGE, DEFAULT_GRID_MAX_AGE),
+            ): int,
             vol.Optional(CONF_MIN_OUTPUT, default=defaults.get(CONF_MIN_OUTPUT, DEFAULT_MIN_OUTPUT)): int,
             vol.Optional(CONF_UNIT_MAX, default=defaults.get(CONF_UNIT_MAX, DEFAULT_UNIT_MAX)): int,
             vol.Optional(

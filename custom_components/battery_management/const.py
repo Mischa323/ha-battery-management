@@ -37,6 +37,14 @@ CONF_DEADBAND = "deadband"         # W, ignore errors smaller than this
 CONF_KP = "kp"                     # proportional gain for the integrator
 CONF_KP_RETURN = "kp_return"       # gain used when winding the command back down
 CONF_INTERVAL = "interval"         # seconds between control ticks
+# How old the meter reading may be before we stop regulating on it. The loop
+# used to trust whatever the sensor held, however stale, and only noticed a
+# meter that was outright unreadable. Those are not the same failure: an
+# integration that hangs while keeping its last state looks perfectly healthy,
+# and the integrator happily keeps adding kp*error to a number that stopped
+# moving - a frozen +2000 W walks the setpoint to full discharge in about two
+# minutes and holds it there until the packs are empty, with status "ok".
+CONF_GRID_MAX_AGE = "grid_max_age"  # s, 0 = trust the reading whatever its age
 CONF_MIN_OUTPUT = "min_output"     # W, below this a unit is idled (avoid micro-cycling)
 CONF_UNIT_MAX = "unit_max"         # W, hard ceiling per unit (Max AC ~3500)
 CONF_FAST_CHARGE_HOLD = "fast_charge_hold"   # keep the packs full once charged
@@ -246,6 +254,8 @@ PHASE_DETECT_STATES = [
 # matters most at the sites the owner does not live at.
 POLICY_DISABLED = "disabled"            # kill-switch off
 POLICY_NO_GRID_DATA = "no_grid_data"    # grid sensor unreadable
+POLICY_GRID_STALE = "grid_stale"        # grid sensor readable but no longer reporting
+POLICY_NO_UNITS = "no_units"            # nothing reachable to command at all
 POLICY_FAST_CHARGE = "fast_charge"      # emergency override running
 POLICY_FAST_CHARGE_HOLD = "fast_charge_hold"  # charged, now kept full on purpose
 POLICY_SOC_RESERVE = "soc_reserve"      # would discharge, but the reserve says no
@@ -287,6 +297,8 @@ POLICIES = [
     POLICY_FAST_CHARGE,
     POLICY_FAST_CHARGE_HOLD,
     POLICY_NO_GRID_DATA,
+    POLICY_GRID_STALE,
+    POLICY_NO_UNITS,
     POLICY_DISABLED,
 ]
 
@@ -307,6 +319,18 @@ DEFAULT_KP = 0.25
 # always wins; setting it equal to Kp restores the old symmetric loop.
 KP_RETURN_FACTOR = 2.0
 DEFAULT_INTERVAL = 15
+# Four ticks. The primary site's P1 publishes every 5-6 s and the worst gap
+# measured across 5917 ticks was 46 s, so this does not fire on ordinary
+# jitter - it fires when the meter has genuinely stopped. Measured against
+# `last_reported`, which Home Assistant bumps on every write even when the
+# value is unchanged, so "the house is drawing a steady 100 W" cannot be
+# mistaken for "the integration died holding 100 W".
+DEFAULT_GRID_MAX_AGE = 60
+# How long a command may go unacknowledged before we say so. The pack answers
+# in 10-30 s (gotcha 2) and the readback normally matches within one tick, so
+# three ticks is well clear of the lag: past this the device is not taking
+# orders, and per gotcha 1 it is still executing whatever it took last.
+UNACKED_TICKS = 3
 DEFAULT_MIN_OUTPUT = 150
 DEFAULT_UNIT_MAX = 3500
 

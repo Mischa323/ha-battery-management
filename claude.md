@@ -99,6 +99,24 @@ splits proportionally; low load consolidates onto one unit; offline unit (weight
    trace: an afternoon of quiet regulation moves the state of charge by two or
    three points, and at 1 % resolution that gives answers between 4.8 and
    13.5 kWh. It needs a full charge, or asking.
+8. **`last_updated` and `last_changed` cannot tell you a sensor is alive.**
+   The trace records both on the theory that a large `last_updated` age with a
+   fresh `last_changed` means "steady, not dead". It does not work: across
+   5917 real ticks the two were **identical in every single row**, because
+   this meter only publishes when the value moves. `last_reported` is the
+   stamp that answers it — Home Assistant bumps it on every write, changed or
+   not. Anything asking "is this input still alive" must use that one; the
+   other two answer a different question and answer it identically.
+
+9. **A frozen meter is more dangerous than an unreadable one.** Unreadable
+   announces itself and the loop already stops. A hung integration keeps its
+   last state, so the reading stays perfectly readable, the error never
+   changes sign, and `sp += kp*error` walks the setpoint to full discharge in
+   about two minutes and pins it there until the packs are flat — with
+   `status: ok` throughout. Guarded by `grid_max_age` (default 60 s, measured
+   against `last_reported`; the worst real gap was 46 s, so it does not fire
+   on jitter).
+
 7. **Solar is limited by a 16 A breaker (~3.68 kW)** at the primary site — not
    relevant to the coordinator (it's grid-driven) but relevant if you ever model
    PV.
@@ -520,6 +538,48 @@ possible, and they gate section A.
     will say so.
 
 ### H. Done
+
+- **Five things the first real traces found, 2026-08-17.** All from 5917 ticks
+  of live data plus two diagnostics downloads, none of them visible from the
+  code alone.
+  - *The meter was trusted at any age.* Only an unreadable sensor stopped the
+    loop. Now `grid_max_age` (gotcha 9), measured against `last_reported`
+    (gotcha 8). Stale holds the setpoint and writes nothing, exactly like
+    unreadable — the packs are already doing something sensible for the last
+    good reading, and slamming them shut on every hiccup is its own
+    disturbance. Measured impact of the *jitter* it does not fire on: 2.1 % of
+    ticks used a reading older than the tick itself, of which only 7 moved the
+    integrator at all, median 32 W.
+  - *Writes were never verified.* `blocking=False` means a failed service call
+    raises where nobody listens, and gotcha 1 means the pack then runs its last
+    instruction forever — while setpoint, status and the per-unit sensor all
+    look healthy. The readback was already measured for the trace and simply
+    never read. **The obvious implementation is wrong**: timing the outstanding
+    command restarts the clock every time the setpoint moves, so a pack
+    ignoring *every* order looks perfectly fine. It measures "how long since
+    this pack showed back anything we sent", against a short history of recent
+    magnitudes — short because the device is always one tick behind, so
+    matching only the newest value calls an obedient pack deaf on every tick
+    the setpoint moved. Off in dry run, where nothing is written and so nothing
+    can be acknowledged.
+  - *A repair issue could outlive its fix.* `_check_hand_back` compared
+    "not broken" to a default of "not broken" on the first pass and took the
+    shortcut, so `async_delete_issue` was never reached and an issue raised by
+    an earlier run survived forever. The primary site carried a dismissed
+    warning for a week after its config was corrected. `.get(name)` without the
+    default: None is never equal to either outcome, so the first pass always
+    reconciles.
+  - *`packs_full` with nothing online.* `_classify` had no "nothing reachable"
+    branch, so both capacities being zero read as a fact about the packs
+    instead of about the connection. Caught in the trace at 2026-08-16 17:07.
+    Now `POLICY_NO_UNITS` — the active-policy sensor is what makes a flat graph
+    legible, so it has to be honest in the case you are most likely staring at.
+  - *Trace rows filed by the wrong day.* The filename came from the clock at
+    flush time, not from the row, so a tick at 23:59:52 flushed after midnight
+    landed in tomorrow — four rows did on the first real day. Rows are now
+    grouped by their own timestamp, so a buffer straddling midnight splits
+    instead of picking a side. Matters because retention deletes by the date in
+    the filename.
 
 - **Asymmetric gain, and the ceiling on tuning.** Asked for by the owner: one
   pack has to work on its own. Measuring that first established what is even

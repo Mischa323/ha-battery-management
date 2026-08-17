@@ -111,8 +111,30 @@ class Trace:
         self._path = path
         return path, True
 
+    @staticmethod
+    def _moment_of(row: dict, fallback: datetime) -> datetime:
+        """When this row happened, according to the row itself."""
+        stamp = row.get("at")
+        if isinstance(stamp, str):
+            try:
+                return datetime.fromisoformat(stamp)
+            except ValueError:
+                pass
+        return fallback
+
     def flush(self) -> None:
-        """Append the buffer. Runs in an executor; must not raise."""
+        """Append the buffer. Runs in an executor; must not raise.
+
+        Rows are filed by their own timestamp, not by the clock at flush time.
+        Buffering up to a minute means a tick at 23:59:52 is written after
+        midnight, and keying the filename off `now` put it in tomorrow - four
+        rows of 2026-08-16 turned up in `2026-08-17.csv` on the first real day
+        of this. Harmless to read, but it quietly breaks anyone slicing the
+        trace by day, and `_prune` deletes by the name in the filename.
+
+        Grouping also means a buffer that straddles midnight splits correctly
+        instead of all landing on whichever side won.
+        """
         rows, self._rows = self._rows, []
         self._last_flush = time.monotonic()
         if not rows:
@@ -120,22 +142,33 @@ class Trace:
         try:
             os.makedirs(self._dir, exist_ok=True)
             now = datetime.now(timezone.utc)
-            path, fresh = self._target(now)
-            # csv wants a text handle; build the text first so a failure part
-            # way through cannot leave half a row in the file
-            buffer = io.StringIO()
-            writer = csv.DictWriter(
-                buffer, fieldnames=self._fields, extrasaction="ignore", lineterminator="\n"
-            )
-            if fresh:
-                writer.writeheader()
+            # dicts keep insertion order, so days are written oldest first
+            days: dict[str, tuple[datetime, list[dict]]] = {}
             for row in rows:
-                writer.writerow(row)
-            with open(path, "a", encoding="utf-8", newline="") as handle:
-                handle.write(buffer.getvalue())
-            self.written += len(rows)
-            if fresh:
-                self._prune(now)
+                moment = self._moment_of(row, now)
+                days.setdefault(f"{moment:%Y-%m-%d}", (moment, []))[1].append(row)
+            for moment, group in days.values():
+                path, fresh = self._target(moment)
+                # csv wants a text handle; build the text first so a failure
+                # part way through cannot leave half a row in the file
+                buffer = io.StringIO()
+                writer = csv.DictWriter(
+                    buffer,
+                    fieldnames=self._fields,
+                    extrasaction="ignore",
+                    lineterminator="\n",
+                )
+                if fresh:
+                    writer.writeheader()
+                for row in group:
+                    writer.writerow(row)
+                with open(path, "a", encoding="utf-8", newline="") as handle:
+                    handle.write(buffer.getvalue())
+                self.written += len(group)
+                if fresh:
+                    # by the real clock: retention is about age, not about
+                    # which day the rows we happen to be writing belong to
+                    self._prune(now)
         except Exception as err:  # noqa: BLE001 - a trace must never break a tick
             self.errors += len(rows)
             self.last_error = f"{type(err).__name__}: {err}"

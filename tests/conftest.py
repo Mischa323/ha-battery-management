@@ -65,7 +65,7 @@ DEFAULT_TUNABLES = {
 class FakeState:
     def __init__(
         self, state, attributes: dict | None = None, last_updated=None,
-        last_changed=None,
+        last_changed=None, last_reported=None,
     ) -> None:
         self.state = str(state)
         self.attributes = attributes or {}
@@ -74,6 +74,11 @@ class FakeState:
         # because a large age otherwise cannot be told from a steady value
         self.last_updated = last_updated or dt_util.utcnow()
         self.last_changed = last_changed or self.last_updated
+        # ...except it cannot, which the first real trace settled: those two
+        # were identical in all 5917 rows. `last_reported` is bumped on every
+        # write whether the value moved or not, so it is the only one that
+        # tells a dead integration from a house drawing a steady 100 W.
+        self.last_reported = last_reported or self.last_updated
 
 
 class FakeStates:

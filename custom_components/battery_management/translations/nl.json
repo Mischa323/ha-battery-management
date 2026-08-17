@@ -110,7 +110,8 @@
           "discharge_recovery": "Eerst zover terugladen voordat hij weer ontlaadt (%)",
           "kp_return": "Terugregelfactor",
           "trace": "Logboekbestand schrijven",
-          "trace_days": "Bewaren"
+          "trace_days": "Bewaren",
+          "grid_max_age": "Meter negeren na (seconden)"
         },
         "data_description": {
           "bias": "Streef naar zoveel afname in plaats van precies nul, zodat een kleine doorschieter alsnog niets teruglevert.",
@@ -125,7 +126,8 @@
           "discharge_recovery": "Zodra een accu leeg is, wacht hij tot hij dit aantal procentpunten boven zijn ondergrens zit voordat hij weer ontlaadt. Zonder dit wordt een accu die door de zon van 5 % naar 6 % gaat meteen weer naar 5 % ontladen, keer op keer - en onderin de accu is cyclen het duurst. Geteld bóven de ondergrens, dus hij volgt je SoC-reserve en de eigen ontlaadlimiet van elke accu. Opladen wordt nooit geblokkeerd, en een accu die van vol naar beneden komt loopt gewoon door tot zijn limiet. 0 zet het uit.",
           "kp_return": "Hoe snel de opdracht weer wordt afgebouwd. Bewust hoger dan de factor hierboven: teruggaan kan niet gaan slingeren, en het is precies wat voorkomt dat de accus terugleveren aan een verbruik dat al weg is. Zet hem gelijk aan de factor hierboven voor het oude, symmetrische gedrag.",
           "trace": "Eén CSV-regel per tick in config/battery_management_trace/, zodat een vraag over vorige week nog te beantwoorden is. Kost ongeveer 2 MB per dag.",
-          "trace_days": "Hele dagen ouder dan dit worden verwijderd."
+          "trace_days": "Hele dagen ouder dan dit worden verwijderd.",
+          "grid_max_age": "Stop met regelen zodra de meter zo lang niets meer heeft gemeld, in plaats van door te rekenen op een getal dat stilstaat. Een bevroren meting blijft gewoon leesbaar, dus niets anders merkt het op: het setpoint loopt naar volle ontlading en blijft daar. 0 vertrouwt de meting ongeacht zijn leeftijd."
         }
       },
       "units": {
@@ -274,7 +276,9 @@
           "solar_headroom": "Koopt niet in, de zon past er nog in",
           "phase_limit": "Afgeremd door de hoofdzekering",
           "phase_detect": "Meten welke accu op welke fase zit",
-          "recovering": "Eerst terugladen voordat hij weer ontlaadt"
+          "recovering": "Eerst terugladen voordat hij weer ontlaadt",
+          "grid_stale": "Netmeter meldt niets meer",
+          "no_units": "Geen packs bereikbaar"
         }
       },
       "solar_remaining": {
@@ -345,6 +349,10 @@
     "hand_back_impossible": {
       "title": "{unit} kan niet worden teruggezet naar {mode}",
       "description": "**{unit}** staat ingesteld om terug te keren naar `{mode}` zodra de coördinator uitgaat of Home Assistant afsluit. Die pack biedt die stand niet aan — hij kent alleen: {options}.\n\nHet commando wordt dan simpelweg geweigerd, en deze packs hebben geen watchdog: eentje zou zijn laatste opdracht oneindig blijven uitvoeren, precies waar het veilige terugzetten voor bedoeld is. Proefdraaien laat dit nooit zien, want er wordt niets geschreven.\n\nEen pack zonder eigen P1-meter heeft helemaal geen zelfverbruik-modus. Laat het vangnetveld daar **leeg**: hij krijgt dan 0 W en zijn modus blijft ongemoeid, wat een veilige ruststand is.\n\nHerstel het onder **Configureren → Entiteiten van de accu-units**, door door te klikken naar het scherm dat vraagt wat de modi van deze unit betekenen."
+    },
+    "write_not_acknowledged": {
+      "title": "{units} bevestigt geen commando's",
+      "description": "De coördinator schrijft al meer dan {seconds} seconden naar **{units}** zonder dat de pack de waarde ooit terugmeldt.\n\nCommando's worden verstuurd zonder op antwoord te wachten, dus een geweigerde schrijfactie mislukt waar niemand luistert. Deze packs hebben bovendien geen watchdog: eentje die geen opdrachten meer aanneemt blijft oneindig doen wat hij als laatste accepteerde.\n\nControleer of de Anker-integratie nog verbonden is en of de doel-entiteit niet uitgeschakeld of alleen-lezen is. Dit lost zichzelf op zodra een commando wordt bevestigd."
     }
   },
   "selector": {

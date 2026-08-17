@@ -13,6 +13,7 @@ import pytest
 from custom_components.battery_management import coordinator as coordinator_module
 from custom_components.battery_management.const import (
     CONF_EXTERNAL_TIMEOUT,
+    CONF_GRID_MAX_AGE,
     MODE_EXTERNAL,
     MODE_GRID_ZERO,
 )
@@ -80,7 +81,11 @@ async def test_it_comes_back_when_the_plan_goes_quiet(
     build_system, issues, monkeypatch
 ):
     """The whole failure mode: EMHASS stops, and nobody notices."""
-    system = build_system(grid=500, **{CONF_EXTERNAL_TIMEOUT: 15})
+    # same reason as in test_external_plan: the clock jump would otherwise
+    # age out the meter as well, and that is not what is under test
+    system = build_system(
+        grid=500, **{CONF_EXTERNAL_TIMEOUT: 15, CONF_GRID_MAX_AGE: 0}
+    )
     await system.coordinator.async_set_mode(MODE_EXTERNAL)
     await system.coordinator.async_set_setpoint(1200)
     await system.coordinator._async_tick(None)
@@ -106,7 +111,13 @@ async def test_it_warns_in_dry_run_too(build_system, issues, dry_run):
 
 
 async def test_the_registry_is_only_touched_on_a_change(build_system, issues):
-    """No registry churn four times a minute for a state that has not moved."""
+    """No registry churn four times a minute for a state that has not moved.
+
+    One reconciliation on the very first tick is deliberate and is the whole
+    point of the hand-back fix: a coordinator that has just started cannot know
+    what a previous run left in the registry, so it clears once. What must not
+    happen is that repeating every tick forever.
+    """
     system = build_system(grid=500)
     calls: list[str] = []
     original = coordinator_module.ir.async_delete_issue
@@ -114,7 +125,10 @@ async def test_the_registry_is_only_touched_on_a_change(build_system, issues):
         lambda hass, domain, issue_id: (calls.append(issue_id), original(hass, domain, issue_id))[1]
     )
 
+    await system.coordinator._async_tick(None)
+    after_reconciling = len(calls)
+
     for _ in range(5):
         await system.coordinator._async_tick(None)
 
-    assert calls == []
+    assert len(calls) == after_reconciling
