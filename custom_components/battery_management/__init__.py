@@ -60,6 +60,27 @@ async def _card_version(hass: HomeAssistant) -> str:
         return "0"
 
 
+async def _async_card_url(hass: HomeAssistant) -> str:
+    """The cache-stamped URL for the card.
+
+    Both registrations need it and either can go first - `frontend` and
+    `lovelace` set up independently - so it cannot live inside only one of
+    them. Same recipe on both sides, so the two can never disagree about which
+    URL the card is at.
+    """
+    version = await _card_version(hass)
+    card_file = Path(__file__).parent / "www" / CARD_FILENAME
+
+    def _digest() -> str:
+        try:
+            return hashlib.sha256(card_file.read_bytes()).hexdigest()[:12]
+        except OSError:
+            return "0"
+
+    digest = await hass.async_add_executor_job(_digest)
+    return f"{CARD_URL}?v={version}-{digest}"
+
+
 async def _async_schedule_card(hass: HomeAssistant) -> None:
     """Register the card once the frontend exists - whenever that is.
 
@@ -83,7 +104,84 @@ async def _async_schedule_card(hass: HomeAssistant) -> None:
     async def _ready(hass: HomeAssistant, _component: str) -> None:
         await _async_register_card(hass)
 
+    async def _lovelace_ready(hass: HomeAssistant, _component: str) -> None:
+        await _async_register_resource(hass)
+
     async_when_setup(hass, "frontend", _ready)
+    async_when_setup(hass, "lovelace", _lovelace_ready)
+
+
+async def _async_register_resource(hass: HomeAssistant) -> None:
+    """Also register the card as a Lovelace *resource*, not just an extra module.
+
+    These are not two ways of saying the same thing, and the difference is the
+    whole bug. `add_extra_js_url` puts a `<script type="module">` on the page,
+    which the browser loads whenever it gets round to it - Lovelace does not
+    wait for it. Resources it does wait for, before it builds any card.
+
+    So on a cold load the module wins the race and everything is fine, and on
+    an ordinary reload the dashboard comes out of cache, renders immediately,
+    finds no `battery-management-card` registered yet and draws an error card
+    in its place. Reported from the primary site as "fine after Ctrl+Shift+R,
+    broken on F5", on desktop and phone alike, and confirmed by hand: adding
+    the resource made it stop. Every other custom card on that dashboard was
+    already a resource, which is why ours was the only one failing.
+
+    The extra module stays as well. Loading twice is harmless - `defineCard`
+    checks `customElements.get` first, and `double_load.mjs` pins that - and it
+    is the only mechanism left if this one cannot run, which is a real case:
+    a YAML-mode dashboard has no writable resource collection at all.
+    """
+    report = hass.data.get(_CARD_KEY) or {}
+    url = report.get("offered_to_frontend") or await _async_card_url(hass)
+    try:
+        data = hass.data.get("lovelace")
+        resources = getattr(data, "resources", None)
+        if resources is None and isinstance(data, dict):
+            resources = data.get("resources")
+        if resources is None:
+            report["resource"] = "no_lovelace"
+            return
+        # YAML-mode dashboards have a read-only collection: the user declares
+        # resources in their own file, and writing there is not ours to do.
+        if not hasattr(resources, "async_create_item"):
+            report["resource"] = "yaml_mode"
+            _LOGGER.info(
+                "Lovelace is in YAML mode, so the card cannot be registered as "
+                "a resource automatically. Add %s as a module under "
+                "`lovelace: resources:` if cards intermittently fail to load.",
+                url,
+            )
+            return
+        if hasattr(resources, "loaded") and not resources.loaded:
+            await resources.async_load()
+
+        # Match on the path and ignore the query, so the cache-busting stamp
+        # can change without leaving a second stale entry behind - and so a
+        # hand-added one gets adopted instead of duplicated.
+        mine = [
+            item
+            for item in resources.async_items()
+            if str(item.get("url", "")).split("?")[0] == CARD_URL
+        ]
+        if not mine:
+            await resources.async_create_item({"res_type": "module", "url": url})
+            report["resource"] = "created"
+        elif mine[0].get("url") != url:
+            await resources.async_update_item(mine[0]["id"], {"url": url})
+            report["resource"] = "updated"
+        else:
+            report["resource"] = "present"
+        _LOGGER.debug("card resource %s: %s", report["resource"], url)
+    except Exception as err:  # noqa: BLE001 - a dashboard nicety, never a blocker
+        report["resource"] = f"error: {err}"
+        _LOGGER.warning(
+            "Could not register the card as a Lovelace resource (%s). Cards may "
+            "show an error until the page is hard-refreshed; adding %s manually "
+            "under Settings > Dashboards > Resources fixes that.",
+            err,
+            url,
+        )
 
 
 async def _async_register_card(hass: HomeAssistant) -> None:

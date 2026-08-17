@@ -181,7 +181,9 @@ async def test_it_waits_for_the_frontend_before_registering(monkeypatch, offered
     hass = CardHass()
     await _async_schedule_card(hass)
 
-    assert waited == ["frontend"]
+    # both, and for different reasons: the frontend one serves the file, the
+    # lovelace one registers it as a resource so Lovelace waits for it
+    assert waited == ["frontend", "lovelace"]
     assert not offered, "registered before the frontend was ready"
 
 
@@ -191,8 +193,17 @@ async def test_once_the_frontend_is_up_it_registers(monkeypatch, offered):
 
     setup_mod = types.ModuleType("homeassistant.setup")
 
+    # keyed, because two components are waited on now and a single slot
+    # would silently hand back whichever registered last
+    setup_mod.hooks = {}
+
     def async_when_setup(hass, component, callback):
-        setup_mod.pending = callback
+        setup_mod.hooks[component] = callback
+
+    async def pending(hass, component):
+        await setup_mod.hooks[component](hass, component)
+
+    setup_mod.pending = pending
 
     setup_mod.async_when_setup = async_when_setup
     monkeypatch.setitem(sys.modules, "homeassistant.setup", setup_mod)
@@ -204,3 +215,124 @@ async def test_once_the_frontend_is_up_it_registers(monkeypatch, offered):
     await setup_mod.pending(hass, "frontend")
 
     assert offered, "the frontend came up and the card still was not offered"
+
+
+class FakeResources:
+    """A storage-mode resource collection, as Lovelace exposes one."""
+
+    def __init__(self, items=None, loaded=True) -> None:
+        self._items = list(items or [])
+        self.loaded = loaded
+        self.created: list = []
+        self.updated: list = []
+
+    async def async_load(self):
+        self.loaded = True
+
+    def async_items(self):
+        return list(self._items)
+
+    async def async_create_item(self, data):
+        self.created.append(data)
+        self._items.append({"id": "new", **data})
+
+    async def async_update_item(self, item_id, data):
+        self.updated.append((item_id, data))
+
+
+class YamlResources:
+    """YAML mode: readable, not writable. No create/update at all."""
+
+    def __init__(self, items=None) -> None:
+        self._items = list(items or [])
+
+    def async_items(self):
+        return list(self._items)
+
+
+def lovelace_hass(resources):
+    hass = CardHass()
+    hass.data["lovelace"] = {"resources": resources}
+    return hass
+
+
+async def test_the_card_is_registered_as_a_resource(offered):
+    """The extra module is not awaited by Lovelace; a resource is.
+
+    That difference is the whole bug: on an ordinary reload the dashboard came
+    out of cache and rendered before the module had defined the element, so
+    Lovelace drew an error card instead. Confirmed by hand at the primary site.
+    """
+    from custom_components.battery_management import _async_register_resource
+
+    resources = FakeResources()
+    hass = lovelace_hass(resources)
+    await _async_register_card(hass)
+
+    await _async_register_resource(hass)
+
+    assert len(resources.created) == 1
+    assert resources.created[0]["res_type"] == "module"
+    assert resources.created[0]["url"].startswith(f"{CARD_URL}?v=")
+    assert hass.data["battery_management_card_registered"]["resource"] == "created"
+
+
+async def test_an_existing_entry_is_updated_not_duplicated(offered):
+    """Two entries for one card would load it twice and never expire."""
+    from custom_components.battery_management import _async_register_resource
+
+    stale = {"id": "abc", "res_type": "module", "url": f"{CARD_URL}?v=0.12.3"}
+    resources = FakeResources([stale])
+    hass = lovelace_hass(resources)
+    await _async_register_card(hass)
+
+    await _async_register_resource(hass)
+
+    assert resources.created == [], "made a second entry for the same card"
+    assert len(resources.updated) == 1
+    item_id, data = resources.updated[0]
+    assert item_id == "abc"
+    assert data["url"] != stale["url"], "left the stale cache stamp in place"
+
+
+async def test_a_matching_entry_is_left_alone(offered):
+    """No storage write four times a day for a URL that has not moved."""
+    from custom_components.battery_management import (
+        _async_card_url,
+        _async_register_resource,
+    )
+
+    hass = CardHass()
+    url = await _async_card_url(hass)
+    resources = FakeResources([{"id": "abc", "res_type": "module", "url": url}])
+    hass.data["lovelace"] = {"resources": resources}
+    await _async_register_card(hass)
+
+    await _async_register_resource(hass)
+
+    assert resources.created == [] and resources.updated == []
+    assert hass.data["battery_management_card_registered"]["resource"] == "present"
+
+
+async def test_yaml_mode_is_left_to_its_owner(offered):
+    """A YAML dashboard's resources are the user's file, not ours to write."""
+    from custom_components.battery_management import _async_register_resource
+
+    hass = lovelace_hass(YamlResources())
+    await _async_register_card(hass)
+
+    await _async_register_resource(hass)
+
+    assert hass.data["battery_management_card_registered"]["resource"] == "yaml_mode"
+
+
+async def test_no_lovelace_is_not_an_error(offered):
+    """The batteries have no business depending on a dashboard."""
+    from custom_components.battery_management import _async_register_resource
+
+    hass = CardHass()
+    await _async_register_card(hass)
+
+    await _async_register_resource(hass)
+
+    assert hass.data["battery_management_card_registered"]["resource"] == "no_lovelace"

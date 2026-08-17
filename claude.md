@@ -560,6 +560,24 @@ possible, and they gate section A.
     ever called it. `tap_wiring.mjs` asserts the listener exists per card and
     that a tap moves the readout — verified by reintroducing the bug.
 
+- **The soft-reload card error was a load *race*, not a stale cache.**
+  Reported as "fine after Ctrl+Shift+R, broken on F5", desktop and phone.
+  The content hash (above) was a real fix for a real problem and did not
+  touch this one - the error survived it. `add_extra_js_url` puts a
+  `<script type="module">` on the page and **Lovelace does not wait for it**;
+  resources it does wait for, before building any card. Cold load, the module
+  wins the race; ordinary reload, the dashboard comes out of cache, renders
+  first, finds nothing registered and draws an error card. Confirmed at the
+  primary site the decisive way: every *other* custom card on that dashboard
+  was already a resource and none of them failed, and adding ours by hand
+  stopped it immediately. Now registered as a resource too, on a
+  `lovelace` setup hook - matched on the path so the cache stamp can change
+  without leaving a duplicate, and so a hand-added entry is adopted rather
+  than doubled. The extra module stays: loading twice is harmless
+  (`defineCard` checks `customElements.get` first) and it is the only route
+  left in YAML mode, where the resource collection is read-only and not ours
+  to write.
+
 - **Five things the first real traces found, 2026-08-17.** All from 5917 ticks
   of live data plus two diagnostics downloads, none of them visible from the
   code alone.
