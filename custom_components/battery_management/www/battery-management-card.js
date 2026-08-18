@@ -181,7 +181,18 @@ function chargeSplit(total, grid) {
   };
 }
 
-const kwh = (value) => (value === null || value === undefined ? "—" : `${value.toFixed(1)} kWh`);
+/**
+ * Kilowatt-hours, at a precision that does not lie about small ones.
+ *
+ * One decimal renders a freshly-installed counter at 0.01 kWh as "0.0 kWh",
+ * three times over, which reads as broken rather than as new - and new is
+ * exactly what it will be for everyone the first time they switch this on.
+ * Below a kilowatt-hour the second decimal is the whole number.
+ */
+const kwh = (value) => {
+  if (value === null || value === undefined) return "—";
+  return `${value.toFixed(Math.abs(value) < 1 ? 2 : 1)} kWh`;
+};
 
 const hhmm = (iso) => {
   const at = new Date(iso);

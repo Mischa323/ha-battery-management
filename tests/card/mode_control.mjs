@@ -165,7 +165,7 @@ check("the bar is that same proportion",
 // the total. The split has to stay a split - a negative sun is not a number.
 const drift = build(CONFIG, statesWith("grid_zero", options, "grid_zero", 4.0, 4.2));
 check("drift cannot produce a negative sun",
-  el(drift, "csunt").textContent === "zon 0.0 kWh" &&
+  el(drift, "csunt").textContent === "zon 0.00 kWh" &&
   el(drift, "cnett").textContent === "net 4.0 kWh",
   [el(drift, "csunt").textContent, el(drift, "cnett").textContent]);
 
@@ -187,8 +187,15 @@ check("neither sensor, no charge block",
 // negative sun, which is not a quantity of anything.
 const backwards = build(CONFIG, statesWith("grid_zero", options, "grid_zero", -1.0, 0));
 check("a negative total cannot render a negative sun",
-  el(backwards, "csunt").textContent === "zon 0.0 kWh",
+  el(backwards, "csunt").textContent === "zon 0.00 kWh",
   el(backwards, "csunt").textContent);
+
+// A counter switched on an hour ago reads 0.01 kWh. At one decimal that is
+// "0.00" three times over, which reads as broken rather than as new - and new
+// is what it is for everyone the first time they enable it.
+const tiny = build(CONFIG, statesWith("grid_zero", options, "grid_zero", 0.01, 0.01));
+check("a freshly started counter is not rounded away",
+  el(tiny, "ctotal").textContent === "0.01 kWh", el(tiny, "ctotal").textContent);
 
 // a fresh install has charged nothing yet; 0 out of 0 is not 100 % sun
 const fresh = build(CONFIG, statesWith("grid_zero", options, "grid_zero", 0, 0));
