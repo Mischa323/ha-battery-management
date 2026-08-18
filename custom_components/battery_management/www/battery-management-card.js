@@ -94,6 +94,70 @@ function knownEntities(hass, entities) {
   return [...suggested, ...everything.filter((id) => !suggested.includes(id))];
 }
 
+/**
+ * A state, or one particular option of it, in the reader's own language.
+ *
+ * The integration already ships nl/en translations for every mode and every
+ * policy. Repeating them here would give the card a second vocabulary that
+ * drifts from the entity's the first time one is reworded, so this asks Home
+ * Assistant's own resolver instead. It takes an explicit value, which is what
+ * lets the dropdown label the options the coordinator is *not* currently in.
+ *
+ * Older frontends have no such method — then the raw key, tidied up. Ugly, but
+ * never wrong, and the raw key is what the documentation calls it anyway.
+ */
+function stateLabel(hass, stateObj, value) {
+  const raw = value === undefined ? stateObj && stateObj.state : value;
+  if (raw === undefined || raw === null || raw === "") return "";
+  if (stateObj && typeof hass.formatEntityState === "function") {
+    try {
+      const out = hass.formatEntityState(stateObj, value);
+      if (out) return out;
+    } catch (err) {
+      /* fall through to the raw key */
+    }
+  }
+  return String(raw).replace(/_/g, " ").replace(/^./, (ch) => ch.toUpperCase());
+}
+
+/**
+ * How much of the charge came off the roof rather than off the meter.
+ *
+ * The sun is the *remainder*, not a third measurement, so the two halves add
+ * up to the total that really went in. Two independent sensors would drift
+ * apart within a day and the card would then be splitting something that is
+ * not the whole.
+ *
+ * Both inputs are measured by the packs themselves and integrated by Home
+ * Assistant — never derived from what this integration commanded. That
+ * distinction is the whole point: a command is a plan, and the packs answer
+ * 10–30 s later, so integrating our own orders would produce an
+ * authoritative-looking number that is not what happened.
+ *
+ * One figure without the other is still shown, but it gets no split: knowing
+ * only what came off the meter says nothing about the share, and "0 % from the
+ * sun" is a far worse answer than no answer.
+ */
+function chargeSplit(total, grid) {
+  if (total === null && grid === null) return null;
+  if (total === null || grid === null) {
+    return { total, grid, solar: null, share: null };
+  }
+  // two meters that never quite agree can put grid fractionally over the
+  // total; the split has to remain a split, so it is capped rather than
+  // allowed to render a negative sun
+  const net = Math.min(Math.max(grid, 0), Math.max(total, 0));
+  const solar = Math.max(total - net, 0);
+  return {
+    total,
+    grid: net,
+    solar,
+    share: total > 0 ? (solar / total) * 100 : null,
+  };
+}
+
+const kwh = (value) => (value === null || value === undefined ? "—" : `${value.toFixed(1)} kWh`);
+
 const hhmm = (iso) => {
   const at = new Date(iso);
   if (isNaN(at.getTime())) return String(iso).slice(11, 16);
@@ -294,6 +358,18 @@ class BatteryManagementCard extends HTMLElement {
     put("grid_power", has(`sensor.${prefix}_grid_power_as_read`));
     // the plan carries the whole price series, which is what the chart draws
     put("prices", has(`sensor.${prefix}_plan`));
+    put("mode", has(`select.${prefix}_mode`));
+    put("policy", has(`sensor.${prefix}_active_policy`));
+
+    // The charge split is measured by Home Assistant helpers, not by this
+    // integration - the packs' own charging power, integrated. They are the
+    // reader's own entities, so they are matched on their suffix rather than
+    // on a full id: the README's package names them, and renaming the pair
+    // does not have to break the card.
+    const bySuffix = (suffix) =>
+      all.find((id) => id.startsWith("sensor.") && id.endsWith(suffix));
+    put("charged_total", bySuffix("_geladen_totaal"));
+    put("charged_grid", bySuffix("_geladen_uit_net"));
 
     // one row per pack, found by its target sensor - the state of charge comes
     // out of that sensor's own attributes, so no Anker entity has to be guessed
@@ -313,7 +389,13 @@ class BatteryManagementCard extends HTMLElement {
   }
 
   getCardSize() {
-    return 4 + (this._config?.units?.length || 0) + (this._config?.prices ? 3 : 0);
+    const c = this._config;
+    return (
+      4 +
+      (c?.units?.length || 0) +
+      (c?.prices ? 3 : 0) +
+      (c?.charged_total || c?.charged_grid ? 1 : 0)
+    );
   }
 
   _s(id) {
@@ -356,6 +438,17 @@ class BatteryManagementCard extends HTMLElement {
           .uname { font-weight:600; }
           .bar { height:10px; border-radius:6px; background: var(--divider-color); overflow:hidden; margin:6px 0 4px; }
           .fill { height:100%; width:0%; background: var(--success-color, #4caf50); transition:width .4s; }
+          .sel { font: inherit; max-width:62%; padding:6px 8px; border-radius:8px;
+                 background: var(--secondary-background-color); color: var(--primary-text-color);
+                 border:1px solid var(--divider-color); }
+          .charge { padding:10px 0; border-top:1px solid var(--divider-color); }
+          .bar.split { display:flex; }
+          .bar.split .fill.sun { background: var(--success-color, #4caf50); }
+          .bar.split .fill.net { background: var(--info-color, #039be5); }
+          /* the swatches repeat the bar's colours, but the words carry the
+             meaning on their own - nobody should have to match a hue */
+          .cleg i { display:inline-block; width:9px; height:9px; border-radius:3px;
+                    margin-right:5px; vertical-align:middle; font-style:normal; }
           .prices { margin-top:12px; padding:10px 10px 6px; border-radius:10px;
                     background: var(--secondary-background-color); }
 ${PRICE_CSS}
@@ -368,11 +461,26 @@ ${PRICE_CSS}
           <div class="row">
             <span class="muted">Setpoint / net</span><span id="power" class="muted">—</span>
           </div>
+          <div class="row" id="moderow" style="display:none">
+            <span>Modus</span>
+            <select class="sel" id="mode"></select>
+          </div>
+          <div class="row" id="policyrow" style="display:none">
+            <span class="muted">Actief beleid</span><span class="muted" id="policy">—</span>
+          </div>
           <div class="btns">
             <div class="btn" id="enable">Coördinator</div>
             <div class="btn warn" id="fast">Snelladen</div>
           </div>
           <div id="units"></div>
+          <div class="charge" id="charge" style="display:none">
+            <div class="uhead"><span>Geladen</span><span class="muted" id="ctotal">—</span></div>
+            <div class="bar split"><div class="fill sun" id="csun"></div><div class="fill net" id="cnet"></div></div>
+            <div class="uhead muted cleg">
+              <span><i style="background:var(--success-color,#4caf50)"></i><span id="csunt">—</span></span>
+              <span><span id="cnett">—</span><i style="background:var(--info-color,#039be5);margin:0 0 0 5px"></i></span>
+            </div>
+          </div>
           <div class="prices" id="prices" style="display:none">
             <div class="phead"><span>Prijs per uur</span><span id="pnow" class="muted"></span></div>
             <div class="plot" id="plot"></div>
@@ -387,6 +495,13 @@ ${PRICE_LEGEND}
       this._svc("switch", "toggle", { entity_id: c.enable });
     });
     wirePlot(this);
+    // Changing the mode is the one control here that is not a toggle, so it is
+    // a plain <select>: it is what every phone already knows how to open.
+    this.querySelector("#mode").addEventListener("change", (event) => {
+      const option = event.target.value;
+      if (!c.mode || !option) return;
+      this._svc("select", "select_option", { entity_id: c.mode, option });
+    });
     this.querySelector("#fast").addEventListener("click", () => {
       if (!c.fast_charge) return;
       const on = this._s(c.fast_charge) === "on";
@@ -416,9 +531,102 @@ ${PRICE_LEGEND}
     this._built = true;
   }
 
+  /**
+   * The mode, as a control rather than a readout.
+   *
+   * The options are rebuilt only when the option list itself changes. `_update`
+   * runs on every state change in the entire house - dozens per minute - and
+   * replacing the innerHTML of an open dropdown closes it under the reader's
+   * finger. That would make the mode readable but not actually changeable on a
+   * phone, which is exactly where it gets changed.
+   *
+   * The list comes from the entity, never from a constant here: Dynamic only
+   * exists once a price source is configured, so a hard-coded list would offer
+   * a mode half the installs cannot take.
+   */
+  _renderMode() {
+    const row = this.querySelector("#moderow");
+    const sel = this.querySelector("#mode");
+    const st = this._hass.states[this._config.mode];
+    if (!st) {
+      row.style.display = "none";
+      return;
+    }
+    row.style.display = "flex";
+    const options = Array.isArray(st.attributes.options) ? st.attributes.options : [];
+    // stringified rather than joined: no separator to be wrong about
+    const key = JSON.stringify(options);
+    if (key !== this._modeOptions) {
+      this._modeOptions = key;
+      sel.innerHTML = options
+        .map(
+          (o) =>
+            `<option value="${esc(o)}">${esc(stateLabel(this._hass, st, o))}</option>`
+        )
+        .join("");
+    }
+    if (sel.value !== st.state) sel.value = st.state;
+  }
+
+  /**
+   * Which rule is currently holding the packs where they are.
+   *
+   * The mode above says what is *allowed*; this says what is actually binding
+   * right now, and the two are often different - "Volg de meter" with a flat
+   * setpoint reads as a broken card until this line says "Accu's leeg". That
+   * is the whole reason the sensor exists, so it belongs next to the graph it
+   * explains rather than three screens away in the entity list.
+   */
+  _renderPolicy() {
+    const row = this.querySelector("#policyrow");
+    const st = this._hass.states[this._config.policy];
+    if (!st) {
+      row.style.display = "none";
+      return;
+    }
+    row.style.display = "flex";
+    this.querySelector("#policy").textContent = stateLabel(this._hass, st);
+  }
+
+  /**
+   * How much went into the packs, and how much of it was bought.
+   *
+   * Both numbers are measured by the packs and integrated by Home Assistant -
+   * see the helper package in the README. Deliberately *not* derived from this
+   * integration's own commands: those are the plan, and the packs answer
+   * 10-30 s later, so integrating them would put an authoritative-looking
+   * number on the dashboard that is not what happened.
+   */
+  _renderCharge() {
+    const c = this._config;
+    const wrap = this.querySelector("#charge");
+    const split = chargeSplit(this._num(c.charged_total), this._num(c.charged_grid));
+    if (!split) {
+      wrap.style.display = "none";
+      return;
+    }
+    wrap.style.display = "block";
+    this.querySelector("#ctotal").textContent = kwh(split.total);
+    const sun = this.querySelector("#csun");
+    const net = this.querySelector("#cnet");
+    // no split without both halves; a half-drawn bar would read as a real
+    // proportion, and it would be the wrong one
+    const share = split.share === null ? 0 : split.share;
+    sun.style.width = share + "%";
+    net.style.width = (split.share === null ? 0 : 100 - share) + "%";
+    this.querySelector("#csunt").textContent =
+      split.solar === null ? "" : `zon ${kwh(split.solar)}`;
+    this.querySelector("#cnett").textContent =
+      split.grid === null ? "" : `net ${kwh(split.grid)}`;
+  }
+
   _update() {
     if (!this._hass || !this._built) return;
     const c = this._config;
+
+    this._renderMode();
+    this._renderPolicy();
+    this._renderCharge();
 
     const status = this._s(c.status) || "—";
     this.querySelector("#status").textContent = status;

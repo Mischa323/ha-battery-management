@@ -1,0 +1,108 @@
+# How much of the charge came off the roof, and how much was bought.
+#
+# Copy into `config/packages/` (with `homeassistant: packages: !include_dir_named
+# packages` in configuration.yaml), or paste the blocks into configuration.yaml
+# directly. It is not installed by HACS: these are your entities, on your
+# entity ids, and the integration must not create sensors nobody asked for.
+#
+# Change the two Anker entity prefixes below to match your own packs and
+# nothing else needs touching. The management card finds the result on its own.
+#
+# ---------------------------------------------------------------------------
+# Why it is built this way, and not the obvious way
+#
+# The obvious way is to integrate what the coordinator *commanded*. Do not.
+# A command is a plan; the packs answer 10-30 s later and their Modbus sensors
+# update in bursts, so integrating our own orders puts an authoritative-looking
+# kWh figure on the dashboard that is not what actually happened. Everything
+# here is measured by the packs themselves.
+#
+# The split is marginal attribution, and it is exact rather than a convention:
+# while the packs draw Y W and the meter reads X W of import, the house without
+# them would have been at X - Y. So min(X, Y) of the charge came off the meter
+# and the rest came out of the surplus - whichever way that subtraction lands.
+# Export (X <= 0) means all of it was sun.
+#
+# The honest caveat: the meter is near-live and the packs' own sensors lag
+# 10-30 s, so during a fast transition the two are briefly misaligned and the
+# attribution is noisy. It averages out over a day; it is not exact by the
+# minute, and nothing here pretends otherwise.
+# ---------------------------------------------------------------------------
+
+template:
+  - sensor:
+      # What both packs are drawing right now.
+      #
+      # `float(0)` treats an unavailable pack as zero, which under-counts
+      # rather than over-counts. That is the safe direction for an energy
+      # figure: a pack that dropped off Modbus is one this cannot see, and
+      # guessing its last value forward would invent kWh that may never have
+      # been stored.
+      - name: "Accu laadvermogen totaal"
+        unique_id: bm_charge_power_total
+        unit_of_measurement: W
+        device_class: power
+        state_class: measurement
+        state: >
+          {{ (states('sensor.anker_solix_solarbank_max_ac_093_battery_charging_power') | float(0))
+           + (states('sensor.tuin_batterij_02_battery_charging_power') | float(0)) }}
+
+      # The part of that which is coming off the meter.
+      #
+      # Deliberately recomputes the sum instead of reading the sensor above, so
+      # the two do not have to render in order and neither lags the other by a
+      # tick at startup.
+      - name: "Accu laadvermogen uit net"
+        unique_id: bm_charge_power_grid
+        unit_of_measurement: W
+        device_class: power
+        state_class: measurement
+        state: >
+          {% set laden = (states('sensor.anker_solix_solarbank_max_ac_093_battery_charging_power') | float(0))
+                       + (states('sensor.tuin_batterij_02_battery_charging_power') | float(0)) %}
+          {% set net = states('sensor.p1_meter_power') | float(0) %}
+          {{ [laden, [net, 0] | max] | min }}
+
+# Watts into kilowatt-hours.
+#
+# `method: left` on purpose, not the trapezium default. The packs publish in
+# bursts of 10-30 s, and interpolating a straight line between two readings
+# that far apart invents a ramp that never happened. Left-hand sums hold the
+# last known value, which is what a burst-publishing sensor actually means.
+#
+# `max_sub_interval` is not optional here: without it the integral only
+# advances when the source *changes*, so a pack sitting steady at 400 W for ten
+# minutes would contribute nothing at all.
+sensor:
+  - platform: integration
+    source: sensor.accu_laadvermogen_totaal
+    name: "Accu laadenergie totaal"
+    unique_id: bm_charged_total
+    unit_prefix: k
+    unit_time: h
+    method: left
+    max_sub_interval: "00:01:00"
+
+  - platform: integration
+    source: sensor.accu_laadvermogen_uit_net
+    name: "Accu laadenergie uit net"
+    unique_id: bm_charged_grid
+    unit_prefix: k
+    unit_time: h
+    method: left
+    max_sub_interval: "00:01:00"
+
+# Per day, which is what the card reads and what makes sense next to the Energy
+# dashboard. The two entity ids below are the ones the card looks for.
+#
+# Want the all-time figure instead? Drop this block and point the card straight
+# at `sensor.accu_laadenergie_totaal` / `sensor.accu_laadenergie_uit_net`.
+utility_meter:
+  accu_geladen_totaal:
+    source: sensor.accu_laadenergie_totaal
+    name: "Accu geladen totaal"
+    cycle: daily
+  accu_geladen_uit_net:
+    source: sensor.accu_laadenergie_uit_net
+    name: "Accu geladen uit net"
+    cycle: daily

@@ -265,6 +265,12 @@ fast_charge: switch.battery_management_fast_charge
 status: sensor.battery_management_status
 setpoint: sensor.battery_management_setpoint
 grid_power: sensor.p1_meter_power
+# the mode as a control, and the policy that explains what it is actually doing
+mode: select.battery_management_mode
+policy: sensor.battery_management_active_policy
+# how much went in, and how much of it was bought - see the package below
+charged_total: sensor.accu_geladen_totaal
+charged_grid: sensor.accu_geladen_uit_net
 units:
   - name: Batterij 01
     soc: sensor.anker_solix_solarbank_max_ac_093_soc
@@ -283,6 +289,45 @@ forecast_tomorrow: sensor.zonverwachting_morgen
 number, so it shows the **commanded** value with a sign (+ discharge, − charge).
 Comparing that against the unit's own power sensor is how you spot a pack that
 is not following orders — those Modbus sensors lag 10–30 s.
+
+`mode` makes the card a control rather than a readout: it is the same
+`select.battery_management_mode` described below, with the options the entity
+itself offers, so an install without a price source is not shown a Dynamic it
+cannot take. Its labels come from Home Assistant's own translations, not from a
+list inside the card.
+
+`policy` is the read-only companion, and it is what makes a flat graph legible.
+The mode says what is *allowed*; the policy says what is actually binding right
+now. “Follow the meter” with a setpoint pinned at zero reads as a broken card
+until the line underneath says **Accu's leeg**.
+
+### How much came off the roof
+
+`charged_total` and `charged_grid` draw a split bar: how much energy went into
+the packs, and how much of it was bought rather than caught. Both are ordinary
+Home Assistant helpers —
+[`packages/battery_management_charge_split.yaml`](packages/battery_management_charge_split.yaml)
+sets them up; change the two Anker entity prefixes in it and nothing else.
+
+The sun is the **remainder**, not a third measurement, so the two halves always
+add up to the total that really went in. Two independent sensors would drift
+apart within a day and the card would then be splitting something that is not
+the whole. Give it only one of the two and it shows that figure without a
+split: knowing what came off the meter says nothing about the share, and
+“0 % from the sun” is a worse answer than no answer.
+
+**These numbers are measured by the packs, never derived from what this
+integration commanded.** That distinction is the whole point. A command is a
+plan; the packs answer 10–30 s later and their Modbus sensors update in
+bursts, so integrating our own orders would put an authoritative-looking kWh
+figure on the dashboard that is not what happened.
+
+The split itself is exact rather than a convention: while the packs draw *Y* W
+and the meter reads *X* W of import, the house without them would have been at
+*X − Y*, so `min(X, Y)` came off the meter and the rest came out of the
+surplus. Export means all of it was sun. The honest caveat is timing — the
+meter is near-live and the pack sensors lag, so by the minute the attribution is
+noisy. Over a day it settles.
 
 ## Modes and time windows
 

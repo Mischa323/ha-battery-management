@@ -20,6 +20,8 @@ const entities = [
   `${P}setpoint`, `${P}status`, `${P}plan`, `${P}grid_power_as_read`,
   `${P}batterij_01_target`, `${P}batterij_02_target`,
   `${P}batterij_01_phase`, `${P}current_price`,
+  `${P}active_policy`, "select.battery_management_mode",
+  "sensor.accu_geladen_totaal", "sensor.accu_geladen_uit_net",
   "binary_sensor.battery_management_batterij_01_online",
   "binary_sensor.battery_management_batterij_02_online",
   "switch.battery_management_coordinator_enabled",
@@ -46,6 +48,24 @@ check("readable names", cfg.units?.[0].name === "Batterij 01", cfg.units?.[0]);
 check("online sensor found", !!cfg.units?.[1].status, cfg.units?.[1]);
 check("no soc entity guessed", cfg.units?.every((u) => !u.soc), cfg.units);
 check("phase sensor not mistaken for a unit", cfg.units?.length === 2, cfg.units);
+check("the mode select is wired up", cfg.mode === "select.battery_management_mode", cfg.mode);
+check("the policy sensor is wired up", cfg.policy === `${P}active_policy`, cfg.policy);
+// the charge helpers are the reader's own entities, matched on their suffix so
+// that renaming the pair does not silently drop the split off the card
+check("the charge helpers are found",
+  cfg.charged_total === "sensor.accu_geladen_totaal" &&
+  cfg.charged_grid === "sensor.accu_geladen_uit_net", cfg);
+const noHelpers = Manage.getStubConfig({ states: {} }, [`${P}setpoint`, `${P}plan`]);
+check("no helpers made, nothing claimed",
+  !noHelpers.charged_total && !noHelpers.charged_grid, noHelpers);
+// "geladen totaal" without "uit net" must not be silently paired with anything
+const renamedHelpers = Manage.getStubConfig(
+  { states: {} },
+  [`${P}setpoint`, "sensor.thuisaccu_geladen_totaal"]
+);
+check("a renamed helper is still found by its suffix",
+  renamedHelpers.charged_total === "sensor.thuisaccu_geladen_totaal" &&
+  !renamedHelpers.charged_grid, renamedHelpers);
 
 // a site whose device was renamed, and one with nothing installed
 const renamed = Manage.getStubConfig({ states: {} }, ["sensor.accus_setpoint", "sensor.accus_plan"]);

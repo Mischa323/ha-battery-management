@@ -539,6 +539,45 @@ possible, and they gate section A.
 
 ### H. Done
 
+- **The card became a control, 2026-08-18.** Asked for by the owner: see which
+  mode it is on *and change it*, plus how much was charged from the sun and how
+  much from the grid. Cost deliberately left out - that lives on the Energy
+  dashboard.
+  - *Mode.* A plain `<select>` backed by `select.…_mode`. Two things it would
+    have got wrong: the options are rebuilt **only when the option list itself
+    changes**, because `_update` runs on every state change in the house and
+    replacing the innerHTML of an open dropdown closes it under the reader's
+    finger - readable but not changeable, on exactly the phone it is used from.
+    And the option list comes from the entity, never a constant in the card,
+    since Dynamic only exists once a price source is configured.
+  - *Labels* come from `hass.formatEntityState`, so the card does not grow a
+    second vocabulary that drifts from `nl.json` the first time a mode is
+    reworded. No such method on an older frontend means the raw key, tidied -
+    ugly, never wrong.
+  - *Policy* alongside it, read-only. The mode says what is allowed; the policy
+    says what is binding. "Volg de meter" with a flat setpoint reads as a broken
+    card until the line underneath says "Accu's leeg".
+  - *The split* is `charged_total` / `charged_grid`, from ordinary Home
+    Assistant helpers shipped as `packages/battery_management_charge_split.yaml`
+    - **not** from our own commands, per D15. The sun is the *remainder*, so the
+    halves always add up to what really went in; two independent sensors would
+    drift apart within a day. One figure without the other shows the number and
+    no split, because "0 % from the sun" is worse than no answer.
+  - Two settings in that package are wrong by default for these sensors and
+    both fail into a plausible-looking number: `method: left` (the packs publish
+    in bursts 10-30 s apart, so trapezium interpolation draws a ramp that never
+    happened) and `max_sub_interval` (without it the integral does not advance
+    while the source sits still, so a pack steady at 400 W for ten minutes
+    contributes nothing). Pinned by `tests/test_charge_split_package.py`, which
+    also walks the whole four-helper chain and reads the card's search suffixes
+    out of the card - every link is a bare string, and a rename would break it
+    in silence.
+  - Both new checks were confirmed by reintroducing the bug. Worth recording
+    that the first attempt at the negative-sun guard was **unreachable**: the
+    grid half is already capped at the total, so `max(total - net, 0)` only
+    fires when the *total* itself is negative, which a Riemann sum over a
+    briefly-negative power sensor can be.
+
 - **Two card faults from the primary site, 2026-08-17.**
   - *Cards errored on an ordinary reload and were fine after Ctrl+Shift+R*, on
     desktop and phone alike. The cache buster was the **manifest version**, and
