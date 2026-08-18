@@ -7,3 +7,8 @@ pytest-asyncio>=0.24
 # a genuine dependency of the integration (service + config-flow schemas), and
 # pure Python, so it installs anywhere - stubbing it would prove nothing
 voluptuous>=0.13
+
+# the shipped helper package (packages/) is plain YAML with no Home Assistant
+# tags in it, so it can be checked in the stubbed run too - and that check is
+# what keeps the card's search suffixes and the package's entity ids together
+PyYAML>=6
