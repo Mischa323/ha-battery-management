@@ -93,19 +93,17 @@ async def test_it_reports_exactly_what_it_registered(offered):
     assert report["path"].endswith(CARD_FILENAME)
     assert report["bytes"] > 0, "served an empty file without noticing"
     assert report["served"] in {"view", "static"}
-    assert report["offered_to_frontend"] == CARD_URL
+    assert report["offered_to_frontend"].startswith(f"{CARD_URL}?v=")
     assert "error" not in report
 
 
-async def test_the_url_never_moves(offered):
-    """The stamp came off, and this is what stops it creeping back.
+async def test_the_url_identifies_the_contents(offered):
+    """The hash is what makes `immutable` an honest thing to say.
 
-    It was there to defeat a browser cache, and it did - at the price of
-    guaranteeing a cache miss on the first load after every update. Lovelace
-    does not wait for a module before building its cards, so losing that race
-    is what puts "custom element doesn't exist" on the dashboard, which is
-    exactly when the primary site saw it. Freshness is the response headers'
-    job now; the URL's job is to be boring.
+    Not a cache-buster bolted on: different bytes are a different URL, so a
+    stored copy can never be the wrong one - which is what lets the response
+    tell the browser to reuse it without asking, and that is what gets the
+    module defined before Lovelace builds its cards.
     """
     from custom_components.battery_management import CARD_URL
 
@@ -113,17 +111,24 @@ async def test_the_url_never_moves(offered):
 
     await _async_register_card(hass)
 
-    assert offered == [CARD_URL], offered
-    assert "?" not in offered[0]
+    assert offered, "nothing was offered to the frontend at all"
+    assert offered[0].startswith(f"{CARD_URL}?v=")
+    assert hass.data[_CARD_KEY]["fingerprint"] in offered[0]
 
 
 async def test_the_card_is_served_with_headers_that_forbid_guessing(offered):
-    """Two headers, and both of them were wrong by omission before.
+    """Two headers, and this repo has had each of them wrong in turn.
 
-    No Cache-Control at all is not "do not cache" - it lets the browser invent
-    a lifetime from the file's modification date, which is what served stale
-    copies of this card for a week. And a guessed content type is how a module
-    gets fetched and then silently never executed.
+    No Cache-Control at all lets the browser invent a lifetime from the file's
+    modification date, which served week-old copies. `no-cache` fixed that and
+    broke something worse: it forces a round trip to the server before the
+    module may run, on every load, and Lovelace does not wait for a module
+    before building its cards - so the race was lost every single time.
+
+    `immutable` is the honest answer *because* the URL carries the file's
+    hash: a stored copy cannot be the wrong one. And the content type is
+    explicit because a guessed one is how a module gets fetched and then
+    silently never executed.
     """
     hass = CardHass()
 
@@ -313,7 +318,7 @@ async def test_the_card_is_registered_as_a_resource(offered):
 
     assert len(resources.created) == 1
     assert resources.created[0]["res_type"] == "module"
-    assert resources.created[0]["url"] == CARD_URL
+    assert resources.created[0]["url"].startswith(f"{CARD_URL}?v=")
     assert hass.data["battery_management_card_registered"]["resource"] == "created"
 
 
@@ -346,7 +351,8 @@ async def test_a_matching_entry_is_left_alone(offered):
     )
 
     hass = CardHass()
-    resources = FakeResources([{"id": "abc", "type": "module", "url": CARD_URL}])
+    url = await _async_card_url(hass)
+    resources = FakeResources([{"id": "abc", "type": "module", "url": url}])
     hass.data["lovelace"] = {"resources": resources}
     await _async_register_card(hass)
 
@@ -385,7 +391,7 @@ async def test_duplicate_entries_are_collapsed_to_one(offered):
     assert resources.deleted == ["ours"], resources.deleted
     remaining = [i["url"] for i in resources.async_items()]
     assert len(remaining) == 1
-    assert remaining[0] == CARD_URL
+    assert remaining[0] == await _async_card_url(hass)
     report = hass.data["battery_management_card_registered"]
     assert report["resource_removed"] == 1
 
@@ -398,7 +404,8 @@ async def test_one_entry_is_never_deleted(offered):
     )
 
     hass = CardHass()
-    resources = FakeResources([{"id": "abc", "type": "module", "url": CARD_URL}])
+    url = await _async_card_url(hass)
+    resources = FakeResources([{"id": "abc", "type": "module", "url": url}])
     hass.data["lovelace"] = {"resources": resources}
     await _async_register_card(hass)
 

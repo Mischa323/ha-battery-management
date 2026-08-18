@@ -60,10 +60,24 @@ def _card_view(path: Path):
     does not wait for a module before it builds its cards. Losing that race is
     what puts "custom element doesn't exist" on the dashboard.
 
-    So: one stable URL, and `no-cache` - which does not mean "do not store",
-    it means "revalidate before reusing". The browser keeps its copy and asks
-    if it still applies; unchanged, that is a 304 and nothing is transferred.
-    Fresh on every load, instant on every load.
+    `no-cache` was the previous attempt and it was worse than what it replaced.
+    It does not mean "do not store", it means "revalidate before reusing" - so
+    the browser has to reach the server before it may run the module, on every
+    single page load. Lovelace does not wait for a module before it builds its
+    cards, so that turns losing the race from a possibility into a certainty.
+    Reported back from the primary site as "still broken", deterministically
+    rather than now and then, which is what a mandatory round trip looks like.
+
+    What works is what every card on that dashboard that *does* load uses: a
+    URL that identifies the contents, cached hard because it then cannot go
+    stale. The stamp is not a cache-buster bolted on, it is what makes
+    `immutable` a true statement - different bytes are a different URL, so the
+    stored copy is never wrong, and after the first load the module is there
+    before Lovelace asks for it.
+
+    The cost is one cache miss per release, on the first load after an update.
+    That is the same deal HACS cards take, and it is the cheap half of the
+    trade: one slow load against every load being slow.
 
     Built by a function rather than declared at import time:
     `homeassistant.components.http` is not importable in the stubbed test run,
@@ -90,7 +104,8 @@ def _card_view(path: Path):
                     # explicit, because a guess is how a module ends up
                     # fetched and then silently never executed
                     "Content-Type": "text/javascript; charset=utf-8",
-                    "Cache-Control": "no-cache, must-revalidate",
+                    # safe precisely because the URL carries the file's hash
+                    "Cache-Control": "public, max-age=31536000, immutable",
                 },
             )
 
@@ -113,15 +128,30 @@ async def _card_version(hass: HomeAssistant) -> str:
 
 
 async def _async_card_url(hass: HomeAssistant) -> str:
-    """Where the card lives. One URL, and it never moves.
+    """Where the card lives: the path, plus a hash of what is at it.
 
-    It used to carry a cache stamp, and both registrations recomputed it so
-    that they could not disagree. There is nothing left to disagree about: the
-    freshness question is answered by the response headers now, not by the
-    URL, so this is a constant with a docstring attached to explain why it is
-    not the more clever thing it once was.
+    Both registrations need it and either can go first - `frontend` and
+    `lovelace` set up independently - so the recipe lives here and neither
+    side can disagree about where the card is.
+
+    The hash is not a cache-buster in the usual sense. It is what lets the
+    response say `immutable` honestly: different bytes are a different URL, so
+    a stored copy can never be the wrong one, and the browser is free to reuse
+    it without asking. That is what gets the module defined before Lovelace
+    builds its cards - see `_card_view` for the version of this that got it
+    backwards.
     """
-    return CARD_URL
+    version = await _card_version(hass)
+    card_file = Path(__file__).parent / "www" / CARD_FILENAME
+
+    def _digest() -> str:
+        try:
+            return hashlib.sha256(card_file.read_bytes()).hexdigest()[:12]
+        except OSError:
+            return "0"
+
+    digest = await hass.async_add_executor_job(_digest)
+    return f"{CARD_URL}?v={version}-{digest}"
 
 
 async def _async_schedule_card(hass: HomeAssistant) -> None:
@@ -331,28 +361,25 @@ async def _async_register_card(hass: HomeAssistant) -> None:
     try:
         from homeassistant.components.frontend import add_extra_js_url
 
-        # A *stable* URL, on purpose, and this is the second correction to it.
+        # The URL carries a hash of the file, and the response says
+        # `immutable`. The two only work together, and this repo has now had
+        # each half without the other.
         #
-        # It first carried the version, then the version plus a content hash,
-        # both to defeat a browser cache that was demonstrably serving stale
-        # copies. That diagnosis was right; the remedy was aimed at the wrong
-        # thing. The staleness came from *heuristic caching* - with no
-        # Cache-Control header at all, a browser invents a lifetime of its own
-        # - so the fix belongs in the response headers, which `_CardView` now
-        # sets. Bust the cache at the source and the URL has no work to do.
+        # Stamped URL, no cache headers: the browser invents its own lifetime
+        # (heuristic caching), which served week-old copies of this card.
+        # Stable URL, `no-cache`: never stale, but the browser must reach the
+        # server before it may run the module - on every load - and Lovelace
+        # does not wait for a module before building its cards. That made
+        # losing the race certain rather than occasional, which is what
+        # "still broken, every reload" from the primary site meant.
         #
-        # And the moving URL was not free. It made this module a guaranteed
-        # cache miss on the first load after every update, while every other
-        # custom card on the dashboard came straight out of cache. Lovelace
-        # does not wait for a module before it builds its cards, so losing
-        # that race is what puts "custom element doesn't exist" on the screen
-        # - which is exactly when the primary site saw it: after an update,
-        # gone after a hard refresh. Reported twice, from two releases.
-        #
-        # It also churned the Lovelace resource list on every release, for a
-        # URL that never needed to move.
-        add_extra_js_url(hass, CARD_URL)
-        report["offered_to_frontend"] = CARD_URL
+        # Together they are what the cards that do load on that same
+        # dashboard use: content in the URL, so a cached copy cannot be the
+        # wrong one, and caching hard enough that after the first load the
+        # module is already there when Lovelace asks.
+        url = f"{CARD_URL}?v={version}-{report['fingerprint']}"
+        add_extra_js_url(hass, url)
+        report["offered_to_frontend"] = url
         _LOGGER.info(
             "Battery Management card registered: %s (%s bytes, version %s, "
             "served %s). The URL is stable and the response is sent "
