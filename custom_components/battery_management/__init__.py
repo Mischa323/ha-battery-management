@@ -153,8 +153,15 @@ async def _async_register_resource(hass: HomeAssistant) -> None:
                 url,
             )
             return
-        if hasattr(resources, "loaded") and not resources.loaded:
+        # Home Assistant's own accessor, because it sets `loaded` as well as
+        # reading the file. Calling `async_load()` directly leaves the flag
+        # False, so the collection reloads itself from disk again on the next
+        # access - and every reload re-announces every item as newly created.
+        if hasattr(resources, "_async_ensure_loaded"):
+            await resources._async_ensure_loaded()
+        elif hasattr(resources, "loaded") and not resources.loaded:
             await resources.async_load()
+            resources.loaded = True
 
         # Match on the path and ignore the query, so the cache-busting stamp
         # can change without leaving a second stale entry behind - and so a
@@ -164,14 +171,46 @@ async def _async_register_resource(hass: HomeAssistant) -> None:
             for item in resources.async_items()
             if str(item.get("url", "")).split("?")[0] == CARD_URL
         ]
+        report["resource_urls"] = [str(item.get("url", "")) for item in mine]
+        report["resource_type"] = mine[0].get("type") if mine else None
+
         if not mine:
             await resources.async_create_item({"res_type": "module", "url": url})
             report["resource"] = "created"
-        elif mine[0].get("url") != url:
-            await resources.async_update_item(mine[0]["id"], {"url": url})
-            report["resource"] = "updated"
         else:
-            report["resource"] = "present"
+            # Exactly one entry, and it is ours. A second one pointing at the
+            # same file is not harmless bookkeeping: the browser imports the
+            # module twice, and the two copies race to define the same custom
+            # elements. `defineCard` survives that, but nothing downstream of a
+            # half-registered pair is worth relying on - and a hand-added entry
+            # from before this existed is exactly how a site ends up with two.
+            for stale in mine[1:]:
+                await resources.async_delete_item(stale["id"])
+            if len(mine) > 1:
+                report["resource_removed"] = len(mine) - 1
+                _LOGGER.warning(
+                    "Removed %s duplicate Lovelace resource(s) for the card. "
+                    "Reload the page once; the cards may show an error until "
+                    "you do.",
+                    len(mine) - 1,
+                )
+            if mine[0].get("url") != url:
+                await resources.async_update_item(mine[0]["id"], {"url": url})
+                report["resource"] = "updated"
+            else:
+                report["resource"] = "present"
+
+        # A resource whose type is not "module" is fetched and then ignored,
+        # and the only symptom is "custom element doesn't exist" - the same
+        # message as half a dozen unrelated causes. Say so here instead.
+        if report.get("resource_type") not in (None, "module"):
+            _LOGGER.warning(
+                "The Lovelace resource for the card is registered as %r rather "
+                "than 'module', so the browser will never execute it. Remove it "
+                "under Settings > Dashboards > Resources and restart.",
+                report["resource_type"],
+            )
+
         _LOGGER.debug("card resource %s: %s", report["resource"], url)
     except Exception as err:  # noqa: BLE001 - a dashboard nicety, never a blocker
         report["resource"] = f"error: {err}"

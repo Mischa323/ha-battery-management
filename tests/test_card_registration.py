@@ -225,6 +225,7 @@ class FakeResources:
         self.loaded = loaded
         self.created: list = []
         self.updated: list = []
+        self.deleted: list = []
 
     async def async_load(self):
         self.loaded = True
@@ -238,6 +239,13 @@ class FakeResources:
 
     async def async_update_item(self, item_id, data):
         self.updated.append((item_id, data))
+        for item in self._items:
+            if item.get("id") == item_id:
+                item.update(data)
+
+    async def async_delete_item(self, item_id):
+        self.deleted.append(item_id)
+        self._items = [i for i in self._items if i.get("id") != item_id]
 
 
 class YamlResources:
@@ -281,7 +289,10 @@ async def test_an_existing_entry_is_updated_not_duplicated(offered):
     """Two entries for one card would load it twice and never expire."""
     from custom_components.battery_management import _async_register_resource
 
-    stale = {"id": "abc", "res_type": "module", "url": f"{CARD_URL}?v=0.12.3"}
+    stale = {"id": "abc", "type": "module", "url": f"{CARD_URL}?v=0.12.3"}
+    # snapshot: the fake merges updates into the stored item, as Home Assistant
+    # does, so the dict itself no longer holds the old value afterwards
+    was = stale["url"]
     resources = FakeResources([stale])
     hass = lovelace_hass(resources)
     await _async_register_card(hass)
@@ -292,7 +303,7 @@ async def test_an_existing_entry_is_updated_not_duplicated(offered):
     assert len(resources.updated) == 1
     item_id, data = resources.updated[0]
     assert item_id == "abc"
-    assert data["url"] != stale["url"], "left the stale cache stamp in place"
+    assert data["url"] != was, "left the stale cache stamp in place"
 
 
 async def test_a_matching_entry_is_left_alone(offered):
@@ -312,6 +323,105 @@ async def test_a_matching_entry_is_left_alone(offered):
 
     assert resources.created == [] and resources.updated == []
     assert hass.data["battery_management_card_registered"]["resource"] == "present"
+
+
+async def test_duplicate_entries_are_collapsed_to_one(offered):
+    """Two entries for the same file is how a site ends up importing it twice.
+
+    The realistic route to it: somebody added the resource by hand while a
+    release was failing to register it, and a later release added its own. Both
+    then point at the same module, the browser imports it twice, and the two
+    copies race to define the same custom elements.
+    """
+    from custom_components.battery_management import (
+        _async_card_url,
+        _async_register_resource,
+    )
+
+    hass = CardHass()
+    url = await _async_card_url(hass)
+    resources = FakeResources(
+        [
+            {"id": "hand", "type": "module", "url": CARD_URL},
+            {"id": "ours", "type": "module", "url": url},
+        ]
+    )
+    hass.data["lovelace"] = {"resources": resources}
+    await _async_register_card(hass)
+
+    await _async_register_resource(hass)
+
+    assert resources.deleted == ["ours"], resources.deleted
+    remaining = [i["url"] for i in resources.async_items()]
+    assert len(remaining) == 1
+    # the survivor is brought up to the current stamp rather than left stale
+    assert remaining[0] == url
+    report = hass.data["battery_management_card_registered"]
+    assert report["resource_removed"] == 1
+
+
+async def test_one_entry_is_never_deleted(offered):
+    """The ordinary case must not touch the collection at all."""
+    from custom_components.battery_management import (
+        _async_card_url,
+        _async_register_resource,
+    )
+
+    hass = CardHass()
+    url = await _async_card_url(hass)
+    resources = FakeResources([{"id": "abc", "type": "module", "url": url}])
+    hass.data["lovelace"] = {"resources": resources}
+    await _async_register_card(hass)
+
+    await _async_register_resource(hass)
+
+    assert resources.deleted == []
+    assert "resource_removed" not in hass.data["battery_management_card_registered"]
+
+
+async def test_the_collection_is_marked_loaded(offered):
+    """Loading it without setting the flag makes it reload on every access.
+
+    Home Assistant's own `_async_ensure_loaded` does both. Calling
+    `async_load()` directly - which is what this used to do - leaves `loaded`
+    False, so the collection re-reads from disk on the next access and
+    re-announces every item as newly created.
+    """
+    from custom_components.battery_management import _async_register_resource
+
+    resources = FakeResources([], loaded=False)
+    hass = lovelace_hass(resources)
+    await _async_register_card(hass)
+
+    await _async_register_resource(hass)
+
+    assert resources.loaded is True
+    assert len(resources.created) == 1
+
+
+async def test_a_resource_of_the_wrong_type_is_reported(offered, caplog):
+    """Fetched, then ignored - and the browser only says "doesn't exist".
+
+    A resource registered as "js" rather than "module" is downloaded and never
+    executed, which reaches the user as exactly the same message as a missing
+    file, a failed import, or a load race. The server side knows better, so it
+    says so.
+    """
+    from custom_components.battery_management import (
+        _async_card_url,
+        _async_register_resource,
+    )
+
+    hass = CardHass()
+    url = await _async_card_url(hass)
+    resources = FakeResources([{"id": "abc", "type": "js", "url": url}])
+    hass.data["lovelace"] = {"resources": resources}
+    await _async_register_card(hass)
+
+    await _async_register_resource(hass)
+
+    assert hass.data["battery_management_card_registered"]["resource_type"] == "js"
+    assert "never execute it" in caplog.text
 
 
 async def test_yaml_mode_is_left_to_its_owner(offered):

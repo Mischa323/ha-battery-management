@@ -588,11 +588,11 @@ ${PRICE_LEGEND}
   /**
    * How much went into the packs, and how much of it was bought.
    *
-   * Both numbers are measured by the packs and integrated by Home Assistant -
-   * see the helper package in the README. Deliberately *not* derived from this
-   * integration's own commands: those are the plan, and the packs answer
-   * 10-30 s later, so integrating them would put an authoritative-looking
-   * number on the dashboard that is not what happened.
+   * Both numbers are counted by the integration from the packs' own charging
+   * power - `sensor.…_charged` and `sensor.…_charged_from_grid`. Deliberately
+   * *not* derived from its own commands: those are the plan, and the packs
+   * answer 10-30 s later, so integrating them would put an authoritative-
+   * looking number on the dashboard that is not what happened.
    */
   _renderCharge() {
     const c = this._config;
