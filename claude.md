@@ -557,21 +557,40 @@ possible, and they gate section A.
   - *Policy* alongside it, read-only. The mode says what is allowed; the policy
     says what is binding. "Volg de meter" with a flat setpoint reads as a broken
     card until the line underneath says "Accu's leeg".
-  - *The split* is `charged_total` / `charged_grid`, from ordinary Home
-    Assistant helpers shipped as `packages/battery_management_charge_split.yaml`
-    - **not** from our own commands, per D15. The sun is the *remainder*, so the
-    halves always add up to what really went in; two independent sensors would
-    drift apart within a day. One figure without the other shows the number and
-    no split, because "0 % from the sun" is worse than no answer.
-  - Two settings in that package are wrong by default for these sensors and
-    both fail into a plausible-looking number: `method: left` (the packs publish
-    in bursts 10-30 s apart, so trapezium interpolation draws a ramp that never
-    happened) and `max_sub_interval` (without it the integral does not advance
-    while the source sits still, so a pack steady at 400 W for ten minutes
-    contributes nothing). Pinned by `tests/test_charge_split_package.py`, which
-    also walks the whole four-helper chain and reads the card's search suffixes
-    out of the card - every link is a bare string, and a rename would break it
-    in silence.
+  - *The split* is `charged_total` / `charged_grid`. **Second pass, same day:**
+    the first version shipped these as a YAML helper package. The owner's
+    answer was the right one - "als ik die entiteiten moet toevoegen dan moet
+    dat hierin staan, niet handmatig" - and it is not a preference. This is
+    meant to be installed at several family sites and maintained from one
+    repo; a per-site YAML file that has to be hand-edited with each house's own
+    entity ids is the thing that works here and rots there. So the package is
+    gone and the integration counts it itself, from a new optional per-unit
+    **charge power sensor** that `discovery.py` suggests like every other
+    field. Still not from our own commands, per D15 - it reads the packs'
+    `Battery Charging Power`.
+  - That new field is deliberately *not* the existing `power_sensor`. That one
+    prefers `ac_output`, which is the better witness for "did this pack obey"
+    but is blind while charging - and charging is the only thing that splits
+    into sun and grid. Two questions, two fields. The discovery scorer has to
+    rule out "discharg" before matching, because `discharging_power` contains
+    `charging_power`; filing every discharge as a charge would be backwards
+    rather than merely wrong, and entirely plausible-looking.
+  - Three ways the counter refuses to guess, each pinned by a test and each
+    verified by reintroducing the bug: an unreadable pack contributes 0 rather
+    than holding its last value forward; an unreadable meter advances *neither*
+    counter, since crediting the lot to the sun would make a broken meter look
+    like a good solar day; and a tick after a gap longer than
+    `MAX_ENERGY_GAP_INTERVALS` counts nothing, because multiplying the power
+    read now by two hours of downtime manufactures kilowatt-hours. That last
+    one is Home Assistant's `max_sub_interval` in reverse - the helper needs a
+    floor under the sampling, a fixed 15 s tick needs a ceiling on the gap.
+  - It counts while the coordinator is off and throughout a shadow run: the
+    question is how the packs got charged, not who ordered it. A counter that
+    only ran while we were steering would make the whole shadow month read as
+    nothing at all.
+  - The sensors are **unavailable** rather than 0 without a configured sensor.
+    Zero is a claim about the packs; a flat line on the floor must not be able
+    to mean both that and "nobody is counting".
   - Both new checks were confirmed by reintroducing the bug. Worth recording
     that the first attempt at the negative-sun guard was **unreachable**: the
     grid half is already capped at the total, so `max(total - net, 0)` only

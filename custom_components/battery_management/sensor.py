@@ -39,6 +39,8 @@ async def async_setup_entry(
             OtherControllerSensor(coordinator, entry),
             FuseHeadroomSensor(coordinator, entry),
             PhaseDetectionSensor(coordinator, entry),
+            ChargedTotalSensor(coordinator, entry),
+            ChargedFromGridSensor(coordinator, entry),
         ]
         + [
             entity
@@ -378,6 +380,70 @@ class MarketPriceSensor(_BaseSensor):
     @property
     def native_value(self) -> float | None:
         return self.coordinator.current_market_price()
+
+
+class _ChargedSensor(_BaseSensor):
+    """A cumulative kilowatt-hour counter kept by the coordinator.
+
+    Energy, not power, so Home Assistant records it as a total and it can go
+    straight onto the Energy dashboard. TOTAL_INCREASING because it only ever
+    goes up: nothing resets it but a reinstall, and a `utility_meter` helper is
+    the right way to get a daily or monthly figure out of it.
+
+    Deliberately **unavailable** rather than 0 while no pack has a charging
+    power sensor configured. Zero is a measurement, and a graph flat at zero
+    reads as "nothing was charged" rather than "nobody is counting" - the same
+    reasoning that leaves minutes-to-full unavailable without a measured
+    charge time.
+    """
+
+    _attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
+    _attr_device_class = SensorDeviceClass.ENERGY
+    _attr_state_class = SensorStateClass.TOTAL_INCREASING
+    _attr_suggested_display_precision = 2
+
+    @property
+    def available(self) -> bool:
+        return self.coordinator.counts_charge_energy
+
+
+class ChargedTotalSensor(_ChargedSensor):
+    _attr_name = "Charged"
+    _attr_icon = "mdi:battery-plus-variant"
+
+    def __init__(self, coordinator, entry) -> None:
+        super().__init__(coordinator, entry)
+        self._attr_unique_id = f"{entry.entry_id}_charged"
+
+    @property
+    def native_value(self) -> float:
+        return round(self.coordinator.charged_wh / 1000.0, 3)
+
+
+class ChargedFromGridSensor(_ChargedSensor):
+    """The bought half. Whatever is left over came off the roof.
+
+    The sun is published as the remainder rather than counted separately, so
+    the two halves always add up to the total that really went in - two
+    independent counters would drift apart within a day, and then the split
+    would be a split of something that is not the whole.
+    """
+
+    _attr_name = "Charged from grid"
+    _attr_icon = "mdi:transmission-tower-import"
+
+    def __init__(self, coordinator, entry) -> None:
+        super().__init__(coordinator, entry)
+        self._attr_unique_id = f"{entry.entry_id}_charged_from_grid"
+
+    @property
+    def native_value(self) -> float:
+        return round(self.coordinator.charged_grid_wh / 1000.0, 3)
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        solar = max(self.coordinator.charged_wh - self.coordinator.charged_grid_wh, 0.0)
+        return {"charged_from_solar_kwh": round(solar / 1000.0, 3)}
 
 
 class UnitTargetSensor(_BaseSensor):

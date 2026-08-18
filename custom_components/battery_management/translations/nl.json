@@ -47,7 +47,8 @@
           "charge_limit_number": "Laadlimiet (%, optioneel)",
           "discharge_limit_number": "Ontlaadlimiet (%, optioneel)",
           "unit_phase": "Fase (0 = zelf meten)",
-          "power_sensor": "Vermogenssensor (optioneel)"
+          "power_sensor": "Vermogenssensor (optioneel)",
+          "charge_power_sensor": "Laadvermogen-sensor (optioneel)"
         },
         "data_description": {
           "name": "Wordt gebruikt in de sensornamen van deze integratie. Moet uniek zijn: twee packs met dezelfde naam worden als een behandeld.",
@@ -58,7 +59,8 @@
           "charge_limit_number": "De eigen bovengrens van de pack, in procenten. Leeglaten betekent 100 %. Wijs hier nooit een watt-entiteit aan.",
           "discharge_limit_number": "De eigen ondergrens van de pack. Leeglaten betekent 5 %. Dit is het hardware-vangnet waar de coordinator boven blijft.",
           "unit_phase": "Op welke fase deze accu zit: 1, 2 of 3. Laat op 0 staan en het wordt gemeten. Wat je hier invult wint van elke meting - wie de meterkast heeft bekeken weet het beter dan een proefmeting.",
-          "power_sensor": "De eigen vermogensmeting van de accu. Wordt nooit gebruikt om te sturen - hij loopt 10-30 s achter - maar hiermee laat het logboek zien wat de accu werkelijk deed naast wat hij opgedragen kreeg."
+          "power_sensor": "De eigen vermogensmeting van de accu. Wordt nooit gebruikt om te sturen - hij loopt 10-30 s achter - maar hiermee laat het logboek zien wat de accu werkelijk deed naast wat hij opgedragen kreeg.",
+          "charge_power_sensor": "Het eigen laadvermogen van deze accu, in watt. Optioneel en nooit voor de regeling gebruikt - hiermee telt de integratie hoeveel energie erin ging en hoeveel daarvan gekocht is in plaats van uit de zon. Geen sensor, geen energiecijfers; er wordt niets geraden."
         }
       },
       "unit_modes": {

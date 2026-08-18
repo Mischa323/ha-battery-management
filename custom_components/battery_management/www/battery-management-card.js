@@ -361,15 +361,12 @@ class BatteryManagementCard extends HTMLElement {
     put("mode", has(`select.${prefix}_mode`));
     put("policy", has(`sensor.${prefix}_active_policy`));
 
-    // The charge split is measured by Home Assistant helpers, not by this
-    // integration - the packs' own charging power, integrated. They are the
-    // reader's own entities, so they are matched on their suffix rather than
-    // on a full id: the README's package names them, and renaming the pair
-    // does not have to break the card.
-    const bySuffix = (suffix) =>
-      all.find((id) => id.startsWith("sensor.") && id.endsWith(suffix));
-    put("charged_total", bySuffix("_geladen_totaal"));
-    put("charged_grid", bySuffix("_geladen_uit_net"));
+    // The charge split, counted by the integration itself from the packs' own
+    // charging power. Only present once a pack has that sensor configured, and
+    // `has` already refuses to write an entity that does not exist - so a site
+    // that never picked one simply gets a card without the split.
+    put("charged_total", has(`sensor.${prefix}_charged`));
+    put("charged_grid", has(`sensor.${prefix}_charged_from_grid`));
 
     // one row per pack, found by its target sensor - the state of charge comes
     // out of that sensor's own attributes, so no Anker entity has to be guessed

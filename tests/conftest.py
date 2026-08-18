@@ -19,6 +19,7 @@ import pytest
 from custom_components.battery_management.const import (
     CONF_BIAS,
     CONF_CHARGE_LIMIT,
+    CONF_CHARGE_POWER_SENSOR,
     CONF_DEADBAND,
     CONF_DISCHARGE_LIMIT,
     CONF_FLOW_SELECT,
@@ -200,7 +201,9 @@ class FakeEntry:
         self.entry_id = entry_id
 
 
-def unit_config(name: str, prefix: str, *, with_limits: bool = True) -> dict:
+def unit_config(
+    name: str, prefix: str, *, with_limits: bool = True, charge_power: bool = False
+) -> dict:
     """A unit dict shaped exactly like the config flow stores it."""
     cfg = {
         CONF_UNIT_NAME: name,
@@ -209,6 +212,9 @@ def unit_config(name: str, prefix: str, *, with_limits: bool = True) -> dict:
         CONF_TARGET_NUMBER: f"number.{prefix}_target_grid_power",
         CONF_SOC_SENSOR: f"sensor.{prefix}_soc",
     }
+    if charge_power:
+        # opt-in, exactly like the real wizard field: no sensor, no count
+        cfg[CONF_CHARGE_POWER_SENSOR] = f"sensor.{prefix}_battery_charging_power"
     if with_limits:
         # vol.Optional without a default simply omits the key when left blank,
         # so `with_limits=False` is the real "user skipped it" shape.
@@ -336,12 +342,18 @@ def build_system():
         with_limits: bool = True,
         enabled: bool = True,
         dry_run: bool = False,
+        charge_power: bool = False,
         phases: tuple | None = None,
         unit_phase: tuple | None = None,
         **tunables,
     ) -> System:
         unit_cfgs = [
-            unit_config(f"Batterij {i + 1}", prefix, with_limits=with_limits)
+            unit_config(
+                f"Batterij {i + 1}",
+                prefix,
+                with_limits=with_limits,
+                charge_power=charge_power,
+            )
             for i, (prefix, _) in enumerate(units)
         ]
         if unit_phase is not None:

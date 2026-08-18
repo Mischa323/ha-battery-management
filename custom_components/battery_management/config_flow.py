@@ -60,6 +60,7 @@ from .const import (
     CONF_TARGET_NUMBER,
     CONF_TRACE,
     CONF_TRACE_DAYS,
+    CONF_CHARGE_POWER_SENSOR,
     CONF_UNIT_POWER_SENSOR,
     CONF_UNIT_COUNT,
     CONF_UNIT_MAX,
@@ -136,6 +137,7 @@ def _unit_schema() -> vol.Schema:
             vol.Required(CONF_TARGET_NUMBER): _NUMBER,
             vol.Required(CONF_SOC_SENSOR): _SENSOR,
             vol.Optional(CONF_UNIT_POWER_SENSOR): _SENSOR,
+            vol.Optional(CONF_CHARGE_POWER_SENSOR): _SENSOR,
             vol.Optional(CONF_CHARGE_LIMIT): _NUMBER,
             vol.Optional(CONF_DISCHARGE_LIMIT): _NUMBER,
             # 0 = work it out by probing. Anyone who has read the meter cupboard

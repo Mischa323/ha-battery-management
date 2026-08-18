@@ -21,7 +21,7 @@ const entities = [
   `${P}batterij_01_target`, `${P}batterij_02_target`,
   `${P}batterij_01_phase`, `${P}current_price`,
   `${P}active_policy`, "select.battery_management_mode",
-  "sensor.accu_geladen_totaal", "sensor.accu_geladen_uit_net",
+  `${P}charged`, `${P}charged_from_grid`,
   "binary_sensor.battery_management_batterij_01_online",
   "binary_sensor.battery_management_batterij_02_online",
   "switch.battery_management_coordinator_enabled",
@@ -50,22 +50,20 @@ check("no soc entity guessed", cfg.units?.every((u) => !u.soc), cfg.units);
 check("phase sensor not mistaken for a unit", cfg.units?.length === 2, cfg.units);
 check("the mode select is wired up", cfg.mode === "select.battery_management_mode", cfg.mode);
 check("the policy sensor is wired up", cfg.policy === `${P}active_policy`, cfg.policy);
-// the charge helpers are the reader's own entities, matched on their suffix so
-// that renaming the pair does not silently drop the split off the card
-check("the charge helpers are found",
-  cfg.charged_total === "sensor.accu_geladen_totaal" &&
-  cfg.charged_grid === "sensor.accu_geladen_uit_net", cfg);
-const noHelpers = Manage.getStubConfig({ states: {} }, [`${P}setpoint`, `${P}plan`]);
-check("no helpers made, nothing claimed",
-  !noHelpers.charged_total && !noHelpers.charged_grid, noHelpers);
-// "geladen totaal" without "uit net" must not be silently paired with anything
-const renamedHelpers = Manage.getStubConfig(
-  { states: {} },
-  [`${P}setpoint`, "sensor.thuisaccu_geladen_totaal"]
-);
-check("a renamed helper is still found by its suffix",
-  renamedHelpers.charged_total === "sensor.thuisaccu_geladen_totaal" &&
-  !renamedHelpers.charged_grid, renamedHelpers);
+// the energy counters are the integration's own, so they resolve off the same
+// prefix as everything else
+check("the charge counters are found",
+  cfg.charged_total === `${P}charged` &&
+  cfg.charged_grid === `${P}charged_from_grid`, cfg);
+// no pack has a charge-power sensor -> the entities do not exist -> the card
+// must not name them, or it renders a split of nothing
+const noCounters = Manage.getStubConfig({ states: {} }, [`${P}setpoint`, `${P}plan`]);
+check("no counters, nothing claimed",
+  !noCounters.charged_total && !noCounters.charged_grid, noCounters);
+// "charged" must not be mistaken for "charged_from_grid" or the reverse
+const onlyTotal = Manage.getStubConfig({ states: {} }, [`${P}setpoint`, `${P}charged`]);
+check("the two counters are told apart",
+  onlyTotal.charged_total === `${P}charged` && !onlyTotal.charged_grid, onlyTotal);
 
 // a site whose device was renamed, and one with nothing installed
 const renamed = Manage.getStubConfig({ states: {} }, ["sensor.accus_setpoint", "sensor.accus_plan"]);

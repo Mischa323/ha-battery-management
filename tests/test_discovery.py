@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from custom_components.battery_management.const import (
     CONF_CHARGE_LIMIT,
+    CONF_CHARGE_POWER_SENSOR,
     CONF_DISCHARGE_LIMIT,
     CONF_FLOW_SELECT,
     CONF_MODE_SELECT,
@@ -21,6 +22,7 @@ REAL_DEVICE = [
     f"sensor.{PREFIX}_soc",
     f"number.{PREFIX}_charging_limit",
     f"number.{PREFIX}_discharge_limit",
+    f"sensor.{PREFIX}_battery_charging_power",
     # noise a real device also exposes
     f"sensor.{PREFIX}_battery_discharging_power",
     f"sensor.{PREFIX}_ac_output",
@@ -42,6 +44,10 @@ def test_resolves_a_real_anker_device():
         # ac_output beats battery_discharging_power on purpose: gotcha 2
         # records the latter reading 0 while the pack was plainly working
         CONF_UNIT_POWER_SENSOR: f"sensor.{PREFIX}_ac_output",
+        # a different question from the one above, and the reason it is a
+        # separate field: ac_output is blind while the pack is charging,
+        # and charging is the only thing that splits into sun and grid
+        CONF_CHARGE_POWER_SENSOR: f"sensor.{PREFIX}_battery_charging_power",
     }
 
 
@@ -114,3 +120,18 @@ def test_missing_optional_entities_are_simply_absent():
 
 def test_an_unrelated_device_yields_nothing():
     assert match_unit_entities(["sensor.washing_machine_power", "switch.lamp"]) == {}
+def test_discharging_power_is_not_mistaken_for_charging_power():
+    """The trap: "discharging_power" contains "charging_power".
+
+    Matching it would file every discharge as a charge, which is not merely a
+    wrong number on the dashboard but a backwards one - and it would look
+    entirely plausible, because a pack that discharges a lot also charges a lot.
+    """
+    matches = match_unit_entities(
+        [
+            f"sensor.{PREFIX}_battery_discharging_power",
+            f"sensor.{PREFIX}_ac_output",
+        ]
+    )
+
+    assert CONF_CHARGE_POWER_SENSOR not in matches

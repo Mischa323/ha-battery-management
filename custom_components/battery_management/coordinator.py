@@ -68,6 +68,7 @@ from .const import (
     CONF_PHASE_SENSORS,
     CONF_PHASE_VOLTAGE,
     CONF_SOC_SENSOR,
+    CONF_CHARGE_POWER_SENSOR,
     CONF_UNIT_POWER_SENSOR,
     CONF_UNIT_PHASE,
     CONF_TARGET_NUMBER,
@@ -138,6 +139,7 @@ from .const import (
     FLOW_CHARGE,
     FLOW_DISCHARGE,
     MAX_PRICE_AGE,
+    MAX_ENERGY_GAP_INTERVALS,
     MAX_SETPOINT_AGE,
     MODE_CHARGE_ONLY,
     MODE_DISCHARGE_ONLY,
@@ -209,6 +211,10 @@ class UnitConfig:
     discharge_limit: str | None = None
     #: the pack's own power reading; observation only, never control
     power_sensor: str | None = None
+    #: the pack's own *charging* power, for the sun-versus-grid energy split.
+    #: Also observation only - but a different observation: `power_sensor`
+    #: prefers `ac_output`, which is blind while charging.
+    charge_power_sensor: str | None = None
     mode_control: str = DEVICE_MODE_THIRD_PARTY
     #: False when this entry predates the mode step, so both values below are
     #: defaults rather than choices - which is exactly when they are wrong
@@ -237,6 +243,7 @@ class UnitConfig:
             charge_limit=raw.get(CONF_CHARGE_LIMIT),
             discharge_limit=raw.get(CONF_DISCHARGE_LIMIT),
             power_sensor=raw.get(CONF_UNIT_POWER_SENSOR),
+            charge_power_sensor=raw.get(CONF_CHARGE_POWER_SENSOR),
             modes_configured=CONF_MODE_CONTROL in raw,
             mode_control=raw.get(CONF_MODE_CONTROL) or DEVICE_MODE_THIRD_PARTY,
             # An absent hand-back means two opposite things, and getting them
@@ -439,6 +446,18 @@ class BatteryCoordinator:
         self.last_grid_observed: float | None = None
         self.last_grid_used: float | None = None
         self.last_other_power: float | None = None
+        # How much energy went into the packs, and how much of it was bought.
+        # Measured - the packs' own charging power, integrated over the tick -
+        # and never derived from what we commanded: a command is the plan, and
+        # per gotcha 2 the packs answer 10-30 s later, so integrating our own
+        # orders would put an authoritative-looking number on the dashboard
+        # that is not what happened. Watt-hours internally; the sensors publish
+        # kWh, and rounding to kWh every tick would lose most of the small ones.
+        self.charged_wh: float = 0.0
+        self.charged_grid_wh: float = 0.0
+        #: when the counters were last advanced, so the elapsed time is
+        #: measured rather than assumed - a tick can be late
+        self._charged_at: float | None = None
         self.unit_status: dict[str, UnitStatus] = {
             u.name: UnitStatus() for u in self._units
         }
@@ -522,6 +541,10 @@ class BatteryCoordinator:
             "phase_attempts": dict(self.phase_attempts),
             "unit_phase": dict(self.unit_phase),
             "phase_detected_at": self.phase_detected_at,
+            # cumulative totals, so unlike the setpoint they are restored
+            # whatever their age - an old figure is the whole point of a total
+            "charged_wh": self.charged_wh,
+            "charged_grid_wh": self.charged_grid_wh,
             "saved_at": time.time(),
         }
 
@@ -562,6 +585,12 @@ class BatteryCoordinator:
             if name in self.recovering:
                 self.recovering[name] = bool(value)
         self._restore_phases(stored)
+        for key in ("charged_wh", "charged_grid_wh"):
+            # a meter reading, not runtime state: restored regardless of age
+            # and regardless of whether the coordinator was even switched on.
+            # A total that resets on restart is not a total.
+            if stored and stored.get(key) is not None:
+                setattr(self, key, float(stored[key]))
         if stored and stored.get("soc_reserve") is not None:
             # a user setting, not runtime state: restore it even when the
             # coordinator was switched off, and regardless of age
@@ -1643,6 +1672,9 @@ class BatteryCoordinator:
                 "grid_max_age_s": self._grid_max_age,
                 # units whose last command the device never showed back
                 "write_stalled": self.write_stalled,
+                "charged_kwh": round(self.charged_wh / 1000.0, 3),
+                "charged_from_grid_kwh": round(self.charged_grid_wh / 1000.0, 3),
+                "counts_charge_energy": self.counts_charge_energy,
                 # the fuse protection, including the evidence behind each
                 # placement - a probe that guessed wrong is only findable here
                 "phase_protection": self.phase_report() if self.phase_protection else None,
@@ -1834,6 +1866,72 @@ class BatteryCoordinator:
             return round((dt_util.utcnow() - stamp).total_seconds(), 1)
         except TypeError:
             return None
+
+    @property
+    def counts_charge_energy(self) -> bool:
+        """Whether anything is actually being counted.
+
+        No pack with a charging-power sensor means no measurement, and the two
+        energy sensors say "unavailable" rather than nought. Zero is a claim
+        about the packs; this is a fact about the configuration, and a graph
+        flat on the floor should not be able to mean either one.
+        """
+        return any(u.charge_power_sensor for u in self._units)
+
+    def _accumulate_charge(self, grid: float | None) -> None:
+        """Advance the two energy counters by one tick.
+
+        How much went into the packs, and how much of it came off the meter
+        rather than off the roof. The split is marginal attribution, and it is
+        exact rather than a convention: while the packs draw Y W and the meter
+        reads X W of import, the house without them would have been at X - Y,
+        so min(X, Y) was bought and the rest came out of the surplus. Export
+        means all of it was sun.
+
+        Runs whether or not we are steering. The question is how the packs got
+        charged, not who ordered it - during a shadow run the site's own
+        automations are driving and the energy is just as real.
+
+        Three ways to count nothing rather than count wrongly:
+
+        * A pack whose sensor cannot be read contributes 0. That under-reports
+          a pack that dropped off Modbus, which is the safe direction; holding
+          its last value forward would invent kilowatt-hours it may never have
+          stored.
+        * No readable meter means no attribution is possible. The total is not
+          advanced either - crediting it all to the sun because the meter is
+          unreadable is exactly the flattering guess to avoid.
+        * A gap far longer than a tick is not a late tick, it is an outage.
+          Multiplying the power read *now* by two hours of downtime would
+          manufacture energy, so past MAX_ENERGY_GAP_INTERVALS we admit we do
+          not know and count nothing.
+        """
+        now = time.time()
+        previous, self._charged_at = self._charged_at, now
+        if previous is None or grid is None:
+            return
+        elapsed = now - previous
+        if elapsed <= 0 or elapsed > self._interval * MAX_ENERGY_GAP_INTERVALS:
+            return
+
+        charging = 0.0
+        seen = False
+        for cfg in self._units:
+            if not cfg.charge_power_sensor:
+                continue
+            value = self._read_float(cfg.charge_power_sensor)
+            if value is None:
+                continue
+            seen = True
+            # the sensor reports charging as a positive number; anything
+            # negative is a discharge leaking through and is not charge
+            charging += max(value, 0.0)
+        if not seen:
+            return
+
+        hours = elapsed / 3600.0
+        self.charged_wh += charging * hours
+        self.charged_grid_wh += min(charging, max(grid, 0.0)) * hours
 
     def _grid_age(self) -> float | None:
         """How long since the meter last reported anything at all.
@@ -2551,6 +2649,9 @@ class BatteryCoordinator:
             self._refresh_observations()
             self._check_hand_back()
             self.last_grid_observed = self._read_float(self._grid_sensor)
+            # the packs still charge while the kill-switch is off - native
+            # self-consumption is doing it - and that energy is just as real
+            self._accumulate_charge(self.last_grid_observed)
             self._notify()
             return
         try:
@@ -2622,6 +2723,7 @@ class BatteryCoordinator:
 
             # ---- NORMAL grid-zero control ----------------------------------
             grid = self._read_float(self._grid_sensor)
+            self._accumulate_charge(grid)
             if grid is None:
                 _LOGGER.debug(
                     "grid sensor %s unreadable; holding setpoint at %.0f W",

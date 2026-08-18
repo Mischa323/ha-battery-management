@@ -21,6 +21,11 @@ CONF_CHARGE_LIMIT = "charge_limit_number"      # number.* (%) - optional
 # trace can show what we commanded next to what the pack actually did,
 # which is the only way to see how far behind it runs.
 CONF_UNIT_POWER_SENSOR = "power_sensor"        # sensor.* (W) - optional
+# The pack's own *charging* power, which is a different question from the one
+# above. `ac_output` is the better witness for "did this pack follow orders",
+# but it is blind while charging, and charging is the only thing that can be
+# split into sun and grid. Optional: no sensor, no energy figures, no guessing.
+CONF_CHARGE_POWER_SENSOR = "charge_power_sensor"  # sensor.* (W) - optional
 CONF_DISCHARGE_LIMIT = "discharge_limit_number"  # number.* (%) - optional
 
 # Which option on this unit's mode select means what. Not hard-coded, because
@@ -429,6 +434,15 @@ STORAGE_VERSION = 1
 # moved on, so the integrator restarts from 0 rather than re-applying a stale
 # command. The on/off state itself is restored regardless of age.
 MAX_SETPOINT_AGE = 300  # seconds
+
+# The energy counters accumulate power x elapsed time, and the elapsed time is
+# measured rather than assumed - a tick can be late. But a gap is not always a
+# late tick: Home Assistant may have been down for hours, and multiplying the
+# power read *now* by that gap would invent kilowatt-hours out of nothing. Past
+# this many intervals we admit we do not know what happened and count nothing,
+# which under-reports rather than inventing. The mirror image of Home
+# Assistant's own `max_sub_interval`, and needed for the opposite reason.
+MAX_ENERGY_GAP_INTERVALS = 4
 # Debounce for writing runtime state to disk; the setpoint changes every tick.
 SAVE_DELAY = 30  # seconds
 

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from .const import (
     CONF_CHARGE_LIMIT,
+    CONF_CHARGE_POWER_SENSOR,
     CONF_DISCHARGE_LIMIT,
     CONF_FLOW_SELECT,
     CONF_MODE_SELECT,
@@ -65,6 +66,23 @@ def _score_power(name: str) -> int:
     return 0
 
 
+def _score_charge_power(name: str) -> int:
+    """The pack's own charging power, for the sun-versus-grid split.
+
+    "discharging_power" contains "charging_power", so it is ruled out first -
+    exactly the trap the charge-limit scorer below already sidesteps. Matching
+    it would attribute every discharge to the charge counter and put a figure
+    on the dashboard that is not merely wrong but backwards.
+    """
+    if "discharg" in name:
+        return 0
+    if "battery_charging_power" in name:
+        return 3
+    if "charging_power" in name or "charge_power" in name:
+        return 2
+    return 0
+
+
 def _score_charge_limit(name: str) -> int:
     # "discharge_limit" contains "charge_limit", so rule it out first
     if "discharge" in name:
@@ -85,6 +103,7 @@ _RULES = {
     CONF_TARGET_NUMBER: ("number", _score_target),
     CONF_SOC_SENSOR: ("sensor", _score_soc),
     CONF_UNIT_POWER_SENSOR: ("sensor", _score_power),
+    CONF_CHARGE_POWER_SENSOR: ("sensor", _score_charge_power),
     CONF_CHARGE_LIMIT: ("number", _score_charge_limit),
     CONF_DISCHARGE_LIMIT: ("number", _score_discharge_limit),
 }

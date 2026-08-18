@@ -269,8 +269,8 @@ grid_power: sensor.p1_meter_power
 mode: select.battery_management_mode
 policy: sensor.battery_management_active_policy
 # how much went in, and how much of it was bought - see the package below
-charged_total: sensor.accu_geladen_totaal
-charged_grid: sensor.accu_geladen_uit_net
+charged_total: sensor.battery_management_charged
+charged_grid: sensor.battery_management_charged_from_grid
 units:
   - name: Batterij 01
     soc: sensor.anker_solix_solarbank_max_ac_093_soc
@@ -304,17 +304,25 @@ until the line underneath says **Accu's leeg**.
 ### How much came off the roof
 
 `charged_total` and `charged_grid` draw a split bar: how much energy went into
-the packs, and how much of it was bought rather than caught. Both are ordinary
-Home Assistant helpers —
-[`packages/battery_management_charge_split.yaml`](packages/battery_management_charge_split.yaml)
-sets them up; change the two Anker entity prefixes in it and nothing else.
+the packs, and how much of it was bought rather than caught.
+
+**Nothing to install.** Give each pack its **Charge power sensor** in the
+wizard — on an Anker device that is *Battery Charging Power*, and the setup
+wizard suggests it for you — and the integration counts it itself, publishing
+`sensor.battery_management_charged` and
+`sensor.battery_management_charged_from_grid`. Both are proper energy sensors,
+so they can go on the Energy dashboard, and a `utility_meter` helper on top of
+either gives you a daily or monthly figure.
+
+Skip the field and nothing is counted: the two sensors report **unavailable**
+rather than nought, because zero is a claim about the packs, and a graph flat
+on the floor must not also be able to mean “nobody is counting”.
 
 The sun is the **remainder**, not a third measurement, so the two halves always
-add up to the total that really went in. Two independent sensors would drift
+add up to the total that really went in. Two independent counters would drift
 apart within a day and the card would then be splitting something that is not
-the whole. Give it only one of the two and it shows that figure without a
-split: knowing what came off the meter says nothing about the share, and
-“0 % from the sun” is a worse answer than no answer.
+the whole. Give the card only one of the two and it shows that figure without a
+split.
 
 **These numbers are measured by the packs, never derived from what this
 integration commanded.** That distinction is the whole point. A command is a
@@ -324,10 +332,19 @@ figure on the dashboard that is not what happened.
 
 The split itself is exact rather than a convention: while the packs draw *Y* W
 and the meter reads *X* W of import, the house without them would have been at
-*X − Y*, so `min(X, Y)` came off the meter and the rest came out of the
+*X* − *Y*, so `min(X, Y)` came off the meter and the rest came out of the
 surplus. Export means all of it was sun. The honest caveat is timing — the
-meter is near-live and the pack sensors lag, so by the minute the attribution is
-noisy. Over a day it settles.
+meter is near-live and the pack sensors lag, so by the minute the attribution
+is noisy. Over a day it settles.
+
+Counting keeps running while the coordinator is switched off, and throughout a
+shadow run. The question is how the packs got charged, not who ordered it — a
+counter that only ran while we were steering would make a month of shadow
+running look like a month of nothing. Two things are deliberately **not**
+counted: a pack whose sensor cannot be read (under-report rather than hold a
+stale value forward), and any tick following a long gap, because multiplying
+the power read *now* by two hours of downtime would manufacture kilowatt-hours
+that were never stored.
 
 ## Modes and time windows
 
