@@ -279,11 +279,13 @@ POLICY_DYNAMIC_NO_PRICES = "dynamic_no_prices"  # dynamic, but the sensor is mut
 POLICY_PHASE_LIMIT = "phase_limit"      # the main fuse on one leg says no
 POLICY_PHASE_DETECT = "phase_detect"    # working out which pack is on which leg
 POLICY_DEADBAND = "deadband"            # error too small to act on
+POLICY_MIN_OUTPUT = "min_output"        # setpoint too small for a pack to hold
 POLICY_GRID_ZERO = "grid_zero"          # regulating normally, nothing limiting
 
 POLICIES = [
     POLICY_GRID_ZERO,
     POLICY_DEADBAND,
+    POLICY_MIN_OUTPUT,
     POLICY_PHASE_LIMIT,
     POLICY_PHASE_DETECT,
     POLICY_MODE_CHARGE_ONLY,
@@ -336,6 +338,13 @@ DEFAULT_GRID_MAX_AGE = 60
 # three ticks is well clear of the lag: past this the device is not taking
 # orders, and per gotcha 1 it is still executing whatever it took last.
 UNACKED_TICKS = 3
+
+# The floor releases lower than it engages, so the packs cannot chatter across
+# it. Engaging at `min_output` and releasing at the same number would let a
+# setpoint hovering there switch them on and off every tick - the very
+# micro-cycling the floor exists to prevent. Only ever on the way *down*, so a
+# command below `min_output` is transient rather than a resting state.
+MIN_OUTPUT_RELEASE = 0.75
 DEFAULT_MIN_OUTPUT = 150
 DEFAULT_UNIT_MAX = 3500
 

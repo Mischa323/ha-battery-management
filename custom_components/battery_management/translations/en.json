@@ -260,6 +260,7 @@
         "state": {
           "grid_zero": "Following the meter",
           "deadband": "Difference too small to act on",
+          "min_output": "Below the smallest output a pack can hold, so nothing is commanded",
           "soc_reserve": "Holding the SoC reserve",
           "packs_empty": "Packs empty",
           "packs_full": "Packs full",

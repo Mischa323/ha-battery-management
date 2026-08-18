@@ -260,6 +260,7 @@
         "state": {
           "grid_zero": "Volgt de meter",
           "deadband": "Verschil te klein om op te sturen",
+          "min_output": "Onder het kleinste vermogen dat een accu kan leveren, dus niets gevraagd",
           "soc_reserve": "Houdt de SoC-reserve vast",
           "packs_empty": "Accu's leeg",
           "packs_full": "Accu's vol",

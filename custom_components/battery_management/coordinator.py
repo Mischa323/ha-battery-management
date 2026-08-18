@@ -140,6 +140,7 @@ from .const import (
     FLOW_DISCHARGE,
     MAX_PRICE_AGE,
     MAX_ENERGY_GAP_INTERVALS,
+    MIN_OUTPUT_RELEASE,
     MAX_SETPOINT_AGE,
     MODE_CHARGE_ONLY,
     MODE_DISCHARGE_ONLY,
@@ -150,6 +151,7 @@ from .const import (
     DEVICE_MODE_SELF,
     DEVICE_MODE_THIRD_PARTY,
     POLICY_DEADBAND,
+    POLICY_MIN_OUTPUT,
     POLICY_DISABLED,
     POLICY_DYNAMIC_CHARGE,
     POLICY_DYNAMIC_HOLD,
@@ -458,6 +460,9 @@ class BatteryCoordinator:
         #: when the counters were last advanced, so the elapsed time is
         #: measured rather than assumed - a tick can be late
         self._charged_at: float | None = None
+        #: whether the packs are currently above the min-output floor. Starts
+        #: idle, so a restart never opens with a command too small to hold.
+        self._above_min_output: bool = False
         self.unit_status: dict[str, UnitStatus] = {
             u.name: UnitStatus() for u in self._units
         }
@@ -2865,7 +2870,44 @@ class BatteryCoordinator:
                 or self._classify(error, sp, online, maxdis, maxchg)
             )
 
-            if sp > 0:  # discharge
+            # A floor under the *total*, not only under each pack's share.
+            #
+            # `_distribute` consolidates small shares onto one unit, but once
+            # one unit is left it hands over whatever is asked - so a setpoint
+            # of 63 W was commanded in full, below what a Max AC can actually
+            # hold. The pack's own integration says so out loud: "input power
+            # of 63 W is below the optimal operating range, control accuracy
+            # may deviate". Reported from the primary site with the floor set
+            # to 100 W, which is what showed this guarded the share and never
+            # the sum.
+            #
+            # Hysteresis, because a single threshold is how you get chatter:
+            # a setpoint resting near the floor would switch the packs on and
+            # off every tick, which is the micro-cycling the floor exists to
+            # prevent. Engages at `min_output`, releases at three quarters of
+            # it. Between the two the packs keep doing what they were doing.
+            #
+            # The setpoint itself is untouched - it is the integrator state,
+            # and clamping it here would wind it down and make the floor
+            # impossible to climb back over. Only the command is withheld, so
+            # a persistent small import keeps integrating until it clears the
+            # floor honestly.
+            floor = self._min_output
+            if abs(sp) >= floor:
+                self._above_min_output = True
+            elif abs(sp) < floor * MIN_OUTPUT_RELEASE:
+                self._above_min_output = False
+
+            if floor > 0 and not self._above_min_output and not self.fast_charge:
+                flow = FLOW_CHARGE
+                alloc = {n: 0 for n in online}
+                self.status = "idle"
+                # only when nothing better was already established. "Deadband"
+                # or "packs full" explain the small setpoint; the floor is
+                # then a consequence of the reason, not the reason itself.
+                if self.active_policy == POLICY_GRID_ZERO:
+                    self.active_policy = POLICY_MIN_OUTPUT
+            elif sp > 0:  # discharge
                 flow = FLOW_DISCHARGE
                 weights = {
                     n: max(s.soc - self._discharge_floor(s), 0.0)
