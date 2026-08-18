@@ -202,5 +202,69 @@ const fresh = build(CONFIG, statesWith("grid_zero", options, "grid_zero", 0, 0))
 check("nothing charged yet claims no share",
   el(fresh, "csun").style.width === "0%", el(fresh, "csun").style.width);
 
+// ---------------------------------------------- found without being told
+// A card already on a dashboard keeps the config it was created with, so
+// entities added in a later release would never appear on it - getStubConfig
+// only runs when a card is *added*. Hand-editing the YAML of every dashboard
+// on every site is exactly what this integration exists to avoid, so the card
+// resolves its own entities off the setpoint sensor it was given.
+const SP = "sensor.battery_management_setpoint";
+const derived = build(
+  { setpoint: SP },
+  {
+    [SP]: { state: "51", attributes: {} },
+    "select.battery_management_mode": {
+      state: "grid_zero",
+      attributes: { options },
+    },
+    "sensor.battery_management_active_policy": {
+      state: "packs_empty",
+      attributes: {},
+    },
+    "sensor.battery_management_charged": { state: "12.5", attributes: {} },
+    "sensor.battery_management_charged_from_grid": { state: "2.5", attributes: {} },
+  }
+);
+
+check("the mode is found from the setpoint's own prefix",
+  el(derived, "moderow").style.display === "flex" &&
+  el(derived, "mode").value === "grid_zero", el(derived, "mode").value);
+check("so is the policy",
+  el(derived, "policy").textContent === "Accu's leeg", el(derived, "policy").textContent);
+check("and so is the charge split",
+  el(derived, "ctotal").textContent === "12.5 kWh" &&
+  el(derived, "csunt").textContent === "zon 10.0 kWh",
+  [el(derived, "ctotal").textContent, el(derived, "csunt").textContent]);
+
+// changing the mode must reach the derived entity, not nothing at all
+const dsel = el(derived, "mode");
+dsel.value = "pause";
+dsel.listeners.change[0]({ target: dsel });
+check("changing a derived mode still calls the service",
+  derived.calls.length === 1 &&
+  derived.calls[0][2].entity_id === "select.battery_management_mode",
+  derived.calls);
+
+// an entity that does not exist must not be named - a site without the charge
+// sensors gets a card without the split, not a split of nothing
+const sparse = build({ setpoint: SP }, { [SP]: { state: "51", attributes: {} } });
+check("nothing is invented for a site that has none",
+  el(sparse, "charge").style.display === "none" &&
+  el(sparse, "moderow").style.display === "none",
+  [el(sparse, "charge").style.display, el(sparse, "moderow").style.display]);
+
+// an explicit setting still wins over the derived one
+const pinned = build(
+  { setpoint: SP, charged_total: "sensor.elders", charged_grid: GRID },
+  {
+    [SP]: { state: "51", attributes: {} },
+    "sensor.elders": { state: "8", attributes: {} },
+    [GRID]: { state: "2", attributes: {} },
+    "sensor.battery_management_charged": { state: "999", attributes: {} },
+  }
+);
+check("an explicit entity is not overridden",
+  el(pinned, "ctotal").textContent === "8.0 kWh", el(pinned, "ctotal").textContent);
+
 console.log(fails ? "\n" + fails + " FAILED" : "\nmode / policy / charge checks pass");
 process.exit(fails ? 1 : 0);

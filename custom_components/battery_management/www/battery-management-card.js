@@ -450,6 +450,30 @@ class BatteryManagementCard extends HTMLElement {
     this._hass.callService(domain, service, data);
   }
 
+  /**
+   * An entity this card needs, named in the config or worked out from the
+   * setpoint sensor sitting next to it.
+   *
+   * `getStubConfig` fills these in, but only for a card being *added*. A card
+   * already on a dashboard keeps the config it was created with, so every
+   * release that introduces an entity would otherwise mean hand-editing YAML
+   * on every dashboard that already has one - which is exactly the thing this
+   * integration is meant to avoid, since it is installed at several sites and
+   * maintained from one place.
+   *
+   * These all belong to one config entry and share its prefix, so there is
+   * nothing to guess: an explicit setting still wins, and a derived id that
+   * does not exist is simply skipped by the caller.
+   */
+  _entity(key, suffix, domain = "sensor") {
+    const c = this._config;
+    if (c[key]) return c[key];
+    if (!c.setpoint || !this._hass) return undefined;
+    const prefix = c.setpoint.slice("sensor.".length, -"_setpoint".length);
+    const id = `${domain}.${prefix}${suffix}`;
+    return this._hass.states[id] ? id : undefined;
+  }
+
   _build() {
     const c = this._config;
     this.innerHTML = `
@@ -532,8 +556,9 @@ ${PRICE_LEGEND}
     // a plain <select>: it is what every phone already knows how to open.
     this.querySelector("#mode").addEventListener("change", (event) => {
       const option = event.target.value;
-      if (!c.mode || !option) return;
-      this._svc("select", "select_option", { entity_id: c.mode, option });
+      const entity = this._entity("mode", "_mode", "select");
+      if (!entity || !option) return;
+      this._svc("select", "select_option", { entity_id: entity, option });
     });
     this.querySelector("#fast").addEventListener("click", () => {
       if (!c.fast_charge) return;
@@ -580,7 +605,7 @@ ${PRICE_LEGEND}
   _renderMode() {
     const row = this.querySelector("#moderow");
     const sel = this.querySelector("#mode");
-    const st = this._hass.states[this._config.mode];
+    const st = this._hass.states[this._entity("mode", "_mode", "select")];
     if (!st) {
       row.style.display = "none";
       return;
@@ -612,7 +637,7 @@ ${PRICE_LEGEND}
    */
   _renderPolicy() {
     const row = this.querySelector("#policyrow");
-    const st = this._hass.states[this._config.policy];
+    const st = this._hass.states[this._entity("policy", "_active_policy")];
     if (!st) {
       row.style.display = "none";
       return;
@@ -633,7 +658,10 @@ ${PRICE_LEGEND}
   _renderCharge() {
     const c = this._config;
     const wrap = this.querySelector("#charge");
-    const split = chargeSplit(this._num(c.charged_total), this._num(c.charged_grid));
+    const split = chargeSplit(
+      this._num(this._entity("charged_total", "_charged")),
+      this._num(this._entity("charged_grid", "_charged_from_grid"))
+    );
     if (!split) {
       wrap.style.display = "none";
       return;
