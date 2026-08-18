@@ -78,7 +78,12 @@ def offered(monkeypatch):
         monkeypatch.setitem(sys.modules, "homeassistant.components.frontend", frontend)
         monkeypatch.setattr(components, "frontend", frontend, raising=False)
     monkeypatch.setattr(
-        frontend, "add_extra_js_url", lambda hass, url: seen.append(url), raising=False
+        frontend,
+        "add_extra_js_url",
+        # the real one takes es5=; a fake that does not would silently push
+        # this back onto the deferred module route
+        lambda hass, url, es5=False: seen.append(url),
+        raising=False,
     )
     return seen
 
@@ -95,6 +100,26 @@ async def test_it_reports_exactly_what_it_registered(offered):
     assert report["served"] in {"view", "static"}
     assert report["offered_to_frontend"].startswith(f"{CARD_URL}?v=")
     assert "error" not in report
+
+
+async def test_the_card_is_offered_as_a_classic_script(offered):
+    """A module is deferred by specification, and that is the whole bug.
+
+    Deferred means the browser runs it after the document is parsed, which is
+    after Home Assistant has booted and started building cards - and Lovelace
+    does not wait. Every card on the page is an error card by then, which is
+    exactly what the primary site reported: "Custom element not found", on
+    every load, deterministically rather than now and again.
+
+    A classic script runs during parsing, so the elements exist before
+    anything asks for them. The card file has no import or export in it, so it
+    is already valid as one.
+    """
+    hass = CardHass()
+
+    await _async_register_card(hass)
+
+    assert hass.data[_CARD_KEY]["offered_as"] == "script"
 
 
 async def test_the_url_identifies_the_contents(offered):

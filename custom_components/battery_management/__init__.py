@@ -378,7 +378,29 @@ async def _async_register_card(hass: HomeAssistant) -> None:
         # wrong one, and caching hard enough that after the first load the
         # module is already there when Lovelace asks.
         url = f"{CARD_URL}?v={version}-{report['fingerprint']}"
-        add_extra_js_url(hass, url)
+        # As a *classic* script, not a module, and this is the point of the
+        # whole exercise. A module is deferred by specification: the browser
+        # runs it after the document is parsed, which is after Home Assistant
+        # has booted and started building cards. Lovelace does not wait, so
+        # the elements get defined moments too late and every card on the page
+        # is already an error card. Reported from the primary site as
+        # "Custom element not found" out of create-element-base.ts, on every
+        # load, deterministically - which is what a losing race looks like
+        # when the timing is not actually close.
+        #
+        # A classic script is not deferred. It executes while the page is
+        # being parsed, so `customElements.define` has run before anything
+        # asks for a card. The card file has no import or export in it, so it
+        # is a valid classic script as it stands - and `defineCard` is
+        # idempotent, so the Lovelace resource importing it again afterwards
+        # costs nothing.
+        try:
+            add_extra_js_url(hass, url, es5=True)
+            report["offered_as"] = "script"
+        except TypeError:
+            # older cores take two arguments and only offer the module route
+            add_extra_js_url(hass, url)
+            report["offered_as"] = "module"
         report["offered_to_frontend"] = url
         _LOGGER.info(
             "Battery Management card registered: %s (%s bytes, version %s, "
