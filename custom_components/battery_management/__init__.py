@@ -154,6 +154,32 @@ async def _async_card_url(hass: HomeAssistant) -> str:
     return f"{CARD_URL}?v={version}-{digest}"
 
 
+def _frontend_lists(hass: HomeAssistant) -> dict:
+    """Which of the frontend's two url lists this card actually landed in.
+
+    Asking is the point. `es5=True` is meant to put the file on the page as a
+    plain `<script src>` rather than `<script type="module">`, and the whole
+    argument for it rests on that having happened. Reasoning about it has been
+    wrong four times here; reading it back is cheap and settles it.
+
+    A module is deferred by specification, so landing in the module list means
+    the card cannot possibly be defined before Lovelace builds its cards - and
+    that is visible from the server, without asking anyone to open a console.
+    """
+    out: dict = {}
+    for key, name in (
+        ("frontend_extra_js_url_es5", "script"),
+        ("frontend_extra_module_url", "module"),
+    ):
+        holder = hass.data.get(key)
+        urls = getattr(holder, "urls", holder)
+        try:
+            out[name] = sorted(u for u in urls if CARD_FILENAME in str(u))
+        except TypeError:
+            out[name] = "unreadable"
+    return out
+
+
 async def _async_schedule_card(hass: HomeAssistant) -> None:
     """Register the card once the frontend exists - whenever that is.
 
@@ -402,6 +428,7 @@ async def _async_register_card(hass: HomeAssistant) -> None:
             add_extra_js_url(hass, url)
             report["offered_as"] = "module"
         report["offered_to_frontend"] = url
+        report["frontend_lists"] = _frontend_lists(hass)
         _LOGGER.info(
             "Battery Management card registered: %s (%s bytes, version %s, "
             "served %s). The URL is stable and the response is sent "

@@ -4,6 +4,31 @@
  * auto-registered, so `type: custom:battery-management-card` just works.
  */
 
+/**
+ * When this file ran, and as what. Measured, not assumed.
+ *
+ * Four fixes were shipped at this problem on reasoning alone and none of them
+ * landed, so the file now reports its own circumstances instead. Two facts
+ * decide almost everything:
+ *
+ * - `document.currentScript` is an element inside a classic script and null
+ *   inside a module. That is the difference between running *during* parsing
+ *   and running after it, and Lovelace builds its cards in between.
+ * - `document.readyState` says how far the page had got. "loading" means this
+ *   ran early enough by construction; "interactive" or "complete" means it
+ *   cannot have been.
+ */
+const BOOT = {
+  at: typeof performance !== "undefined" ? Math.round(performance.now()) : -1,
+  readyState: typeof document !== "undefined" ? document.readyState : "?",
+  loadedAs:
+    typeof document !== "undefined" && document.currentScript ? "script" : "module",
+  src:
+    typeof document !== "undefined" && document.currentScript
+      ? document.currentScript.src
+      : "",
+};
+
 const FILL = {
   charging: "var(--info-color, #039be5)",
   discharging: "var(--warning-color, #ff9800)",
@@ -696,7 +721,14 @@ ${PRICE_LEGEND}
  * the second card is simply missing. Registering is made idempotent instead.
  */
 function defineCard(tag, cls, entry) {
-  if (!customElements.get(tag)) customElements.define(tag, cls);
+  try {
+    if (!customElements.get(tag)) customElements.define(tag, cls);
+  } catch (err) {
+    // Recorded rather than thrown. A throw here kills the rest of the file,
+    // taking the second card with it - and the browser reports the casualty,
+    // not the cause.
+    (BOOT.failed = BOOT.failed || []).push(`${tag}: ${err && err.message}`);
+  }
   window.customCards = window.customCards || [];
   const already = window.customCards.findIndex((c) => c.type === tag);
   if (already >= 0) window.customCards.splice(already, 1);
@@ -711,7 +743,11 @@ defineCard("battery-management-card", BatteryManagementCard, {
   preview: false,
 });
 
-console.info("%c BATTERY-MANAGEMENT-CARD %c loaded ", "background:#039be5;color:#fff", "");
+console.info(
+  "%c BATTERY-MANAGEMENT-CARD %c loaded ",
+  "background:#039be5;color:#fff",
+  ""
+);
 
 
 /**
@@ -827,3 +863,32 @@ defineCard("battery-management-prices-card", BatteryManagementPricesCard, {
     "Today's electricity prices per hour, with the cheap and dear ones marked.",
   preview: false,
 });
+
+/**
+ * One line that answers "did this arrive in time, and did it work".
+ *
+ * Also left on `window.batteryManagementCardBoot`, so it can be read back
+ * afterwards rather than caught in the moment.
+ */
+window.batteryManagementCardBoot = {
+  ...BOOT,
+  finishedAt: typeof performance !== "undefined" ? Math.round(performance.now()) : -1,
+  readyStateAtEnd: typeof document !== "undefined" ? document.readyState : "?",
+  defined: [
+    "battery-management-card",
+    "battery-management-prices-card",
+  ].filter((tag) => !!customElements.get(tag)),
+  advertised: (window.customCards || [])
+    .map((c) => c.type)
+    .filter((type) => String(type).startsWith("battery-management")),
+};
+console.info(
+  "%c BATTERY-MANAGEMENT-CARD %c %s | readyState %s -> %s | defined %s | %s ",
+  "background:#039be5;color:#fff",
+  "",
+  window.batteryManagementCardBoot.loadedAs,
+  BOOT.readyState,
+  window.batteryManagementCardBoot.readyStateAtEnd,
+  window.batteryManagementCardBoot.defined.length,
+  (BOOT.failed || []).join("; ") || "no define errors"
+);

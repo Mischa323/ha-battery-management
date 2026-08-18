@@ -102,6 +102,29 @@ async def test_it_reports_exactly_what_it_registered(offered):
     assert "error" not in report
 
 
+async def test_it_reads_back_which_frontend_list_it_landed_in(offered):
+    """Asking, rather than assuming it worked.
+
+    `es5=True` is supposed to put the file on the page as a plain script
+    instead of a deferred module, and the entire argument for that change
+    rests on it having happened. Four fixes were shipped at this problem on
+    reasoning alone; this one reports what is actually there, and it shows up
+    in the diagnostics without anyone having to open a browser console.
+    """
+    from custom_components.battery_management import CARD_FILENAME
+
+    hass = CardHass()
+    hass.data["frontend_extra_js_url_es5"] = {f"/x/{CARD_FILENAME}?v=1"}
+    hass.data["frontend_extra_module_url"] = {"/hacsfiles/other/other.js"}
+
+    await _async_register_card(hass)
+
+    lists = hass.data[_CARD_KEY]["frontend_lists"]
+    assert lists["script"] == [f"/x/{CARD_FILENAME}?v=1"]
+    # somebody else's card must never be reported as ours
+    assert lists["module"] == []
+
+
 async def test_the_card_is_offered_as_a_classic_script(offered):
     """A module is deferred by specification, and that is the whole bug.
 
