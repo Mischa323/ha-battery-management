@@ -133,6 +133,22 @@ def _install_homeassistant_stub() -> None:
     config_validation = types.ModuleType("homeassistant.helpers.config_validation")
     config_validation.string = str
 
+    # The card is served by a view of our own, so that the cache headers are
+    # ours to set rather than guessed. Both of these are HA-only imports, done
+    # lazily inside the factory - stubbed here so the stubbed run still covers
+    # the registration path rather than skipping it.
+    components = types.ModuleType("homeassistant.components")
+    components.__path__ = []
+    http = types.ModuleType("homeassistant.components.http")
+
+    class HomeAssistantView:
+        url = None
+        name = None
+        requires_auth = True
+
+    http.HomeAssistantView = HomeAssistantView
+    components.http = http
+
     util = types.ModuleType("homeassistant.util")
     util.__path__ = []
     dt = types.ModuleType("homeassistant.util.dt")
@@ -146,6 +162,7 @@ def _install_homeassistant_stub() -> None:
     # bind submodules as attributes too, so `from homeassistant.util import dt`
     # resolves without touching the real import machinery
     ha.core = core
+    ha.components = components
     ha.config_entries = config_entries
     ha.const = ha_const
     ha.helpers = helpers
@@ -161,6 +178,8 @@ def _install_homeassistant_stub() -> None:
         {
             "homeassistant": ha,
             "homeassistant.core": core,
+            "homeassistant.components": components,
+            "homeassistant.components.http": http,
             "homeassistant.config_entries": config_entries,
             "homeassistant.const": ha_const,
             "homeassistant.helpers": helpers,

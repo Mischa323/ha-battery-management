@@ -45,6 +45,58 @@ CARD_URL = f"/{DOMAIN}/{CARD_FILENAME}"
 _CARD_KEY = f"{DOMAIN}_card_registered"
 
 
+def _card_view(path: Path):
+    """Serve the card with headers we control.
+
+    Home Assistant's static-path helper offers two settings and neither is the
+    one this needs: cache headers on means a month of hard caching, and cache
+    headers off means *no* Cache-Control at all - at which point the browser
+    falls back to heuristic caching and invents a lifetime from the file's
+    modification date. That is what was serving stale copies of this card, and
+    it is why two releases in a row tried to escape it by moving the URL.
+
+    Moving the URL worked, and cost more than it saved: a new URL is a
+    guaranteed cache miss on the first load after every update, and Lovelace
+    does not wait for a module before it builds its cards. Losing that race is
+    what puts "custom element doesn't exist" on the dashboard.
+
+    So: one stable URL, and `no-cache` - which does not mean "do not store",
+    it means "revalidate before reusing". The browser keeps its copy and asks
+    if it still applies; unchanged, that is a 304 and nothing is transferred.
+    Fresh on every load, instant on every load.
+
+    Built by a function rather than declared at import time:
+    `homeassistant.components.http` is not importable in the stubbed test run,
+    and the point of that run is that it needs no Home Assistant at all.
+    """
+    from homeassistant.components.http import HomeAssistantView
+
+    class CardView(HomeAssistantView):
+        """The card, served from one stable URL."""
+
+        url = CARD_URL
+        name = f"{DOMAIN}:card"
+        # a `<script src>` carries no bearer token, and this file is the card's
+        # own source, which ships publicly with the integration
+        requires_auth = False
+
+        async def get(self, request):
+            """Hand it back, and say how long it may be trusted for."""
+            from aiohttp import web
+
+            return web.FileResponse(
+                path,
+                headers={
+                    # explicit, because a guess is how a module ends up
+                    # fetched and then silently never executed
+                    "Content-Type": "text/javascript; charset=utf-8",
+                    "Cache-Control": "no-cache, must-revalidate",
+                },
+            )
+
+    return CardView()
+
+
 async def _card_version(hass: HomeAssistant) -> str:
     """This release's version, for busting the browser's cache of the card.
 
@@ -61,24 +113,15 @@ async def _card_version(hass: HomeAssistant) -> str:
 
 
 async def _async_card_url(hass: HomeAssistant) -> str:
-    """The cache-stamped URL for the card.
+    """Where the card lives. One URL, and it never moves.
 
-    Both registrations need it and either can go first - `frontend` and
-    `lovelace` set up independently - so it cannot live inside only one of
-    them. Same recipe on both sides, so the two can never disagree about which
-    URL the card is at.
+    It used to carry a cache stamp, and both registrations recomputed it so
+    that they could not disagree. There is nothing left to disagree about: the
+    freshness question is answered by the response headers now, not by the
+    URL, so this is a constant with a docstring attached to explain why it is
+    not the more clever thing it once was.
     """
-    version = await _card_version(hass)
-    card_file = Path(__file__).parent / "www" / CARD_FILENAME
-
-    def _digest() -> str:
-        try:
-            return hashlib.sha256(card_file.read_bytes()).hexdigest()[:12]
-        except OSError:
-            return "0"
-
-    digest = await hass.async_add_executor_job(_digest)
-    return f"{CARD_URL}?v={version}-{digest}"
+    return CARD_URL
 
 
 async def _async_schedule_card(hass: HomeAssistant) -> None:
@@ -265,20 +308,20 @@ async def _async_register_card(hass: HomeAssistant) -> None:
     )
 
     try:
-        from homeassistant.components.http import StaticPathConfig
-
-        await hass.http.async_register_static_paths(
-            [StaticPathConfig(CARD_URL, card_path, False)]
-        )
-        report["served"] = "async"
-    except Exception as err:  # noqa: BLE001  -- fall back to the legacy sync API
+        hass.http.register_view(_card_view(card_file))
+        report["served"] = "view"
+    except Exception as err:  # noqa: BLE001  -- fall back to a plain static path
         try:
-            hass.http.register_static_path(CARD_URL, card_path, False)
-            report["served"] = "legacy"
+            from homeassistant.components.http import StaticPathConfig
+
+            await hass.http.async_register_static_paths(
+                [StaticPathConfig(CARD_URL, card_path, False)]
+            )
+            report["served"] = "static"
         except Exception as err2:  # noqa: BLE001
-            report["error"] = f"static_path: {err2}"
+            report["error"] = f"serving: {err2}"
             _LOGGER.warning(
-                "Could not serve the Battery Management card (%s; legacy path also "
+                "Could not serve the Battery Management card (%s; static path also "
                 "failed: %s). No card will load.",
                 err,
                 err2,
@@ -288,29 +331,35 @@ async def _async_register_card(hass: HomeAssistant) -> None:
     try:
         from homeassistant.components.frontend import add_extra_js_url
 
-        # Stamped, because browsers cache this file hard and an unversioned URL
-        # means an update silently does nothing: the old script keeps running,
-        # so a card added in a new release never appears in the card list
-        # however many times you look for it. Found exactly that way.
+        # A *stable* URL, on purpose, and this is the second correction to it.
         #
-        # The version alone was not enough, and that gap was reported from the
-        # primary site: the cards errored on an ordinary reload and rendered
-        # fine after Ctrl+Shift+R, on desktop and phone alike. The card file
-        # changes far more often than the manifest version does - every fix
-        # between releases, and every checkout during development - so the URL
-        # stayed identical while the contents moved underneath it, and every
-        # browser that had ever loaded the page kept serving its stale copy.
-        # The content hash closes that: same bytes, same URL, cache still
-        # works; different bytes, different URL, no stale copy can survive.
-        url = f"{CARD_URL}?v={version}-{report['fingerprint']}"
-        add_extra_js_url(hass, url)
-        report["offered_to_frontend"] = url
+        # It first carried the version, then the version plus a content hash,
+        # both to defeat a browser cache that was demonstrably serving stale
+        # copies. That diagnosis was right; the remedy was aimed at the wrong
+        # thing. The staleness came from *heuristic caching* - with no
+        # Cache-Control header at all, a browser invents a lifetime of its own
+        # - so the fix belongs in the response headers, which `_CardView` now
+        # sets. Bust the cache at the source and the URL has no work to do.
+        #
+        # And the moving URL was not free. It made this module a guaranteed
+        # cache miss on the first load after every update, while every other
+        # custom card on the dashboard came straight out of cache. Lovelace
+        # does not wait for a module before it builds its cards, so losing
+        # that race is what puts "custom element doesn't exist" on the screen
+        # - which is exactly when the primary site saw it: after an update,
+        # gone after a hard refresh. Reported twice, from two releases.
+        #
+        # It also churned the Lovelace resource list on every release, for a
+        # URL that never needed to move.
+        add_extra_js_url(hass, CARD_URL)
+        report["offered_to_frontend"] = CARD_URL
         _LOGGER.info(
-            "Battery Management card registered: %s (%s bytes, served %s). "
-            "The query string carries a hash of the file, so a stale copy "
-            "cannot survive a reload.",
-            url,
+            "Battery Management card registered: %s (%s bytes, version %s, "
+            "served %s). The URL is stable and the response is sent "
+            "no-cache, so the browser revalidates instead of guessing.",
+            CARD_URL,
             report.get("bytes"),
+            version,
             report.get("served"),
         )
     except Exception as err:  # noqa: BLE001
