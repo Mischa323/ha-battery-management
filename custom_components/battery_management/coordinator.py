@@ -17,6 +17,7 @@ import logging
 import time
 from collections import deque
 from dataclasses import dataclass
+from datetime import timedelta, timezone
 
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
@@ -35,12 +36,11 @@ from .phases import (
 from .suppliers import FETCHERS, SOURCE_ENTITY, SOURCE_NONE
 from .trace import Trace
 from .prices import (
-    cheapest_slots,
     dearest_slots,
-    is_cheap_now,
     is_dear_now,
     parse_forecast,
     slot_at,
+    slots_to_buy,
     to_hourly,
     slots_in_window,
 )
@@ -198,6 +198,21 @@ from .const import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+#: how long a slot's recorded verdict is kept. Two days covers the chart, which
+#: pages back one day, plus the restart that happens in the middle of it.
+PRICE_HISTORY_HOURS = 48
+
+
+def _slot_key(slot) -> str:
+    """A stable identity for a price slot: its start, normalised to UTC.
+
+    Normalised because the identity has to survive being written to disk and
+    read back, and because a supplier publishing `+02:00` must not produce a
+    different key than the same moment published as `Z`. Plain Python rather
+    than `dt_util`, so it stays testable without Home Assistant.
+    """
+    return slot.start.astimezone(timezone.utc).isoformat()
 
 
 @dataclass
@@ -468,6 +483,17 @@ class BatteryCoordinator:
         }
         # packs that hit their floor and have not climbed back far enough yet
         self.recovering: dict[str, bool] = {u.name: False for u in self._units}
+        #: what each price slot was decided to be *while it was the current
+        #: one*, keyed by its start. The ranking looks forward, so an hour that
+        #: has gone cannot be re-ranked honestly - but it did have a verdict at
+        #: the time, and that is a fact worth keeping rather than recomputing.
+        #: `{"role": "cheap"|"dear"|"normal", "bought": bool}`.
+        self.price_history: dict[str, dict] = {}
+        #: the slot we are part-way through buying in. Once a purchase has
+        #: started the rest of that hour is bought too: the need shrinks as the
+        #: packs fill, so without this the hour we picked can stop qualifying
+        #: half-way through and the packs flap off mid-charge.
+        self._buying_slot: str | None = None
         # which leg each unit sits on (1-based), and how we came to believe it
         self.unit_phase: dict[str, int | None] = {u.name: None for u in self._units}
         self.phase_detection: str = PHASE_DETECT_UNKNOWN
@@ -521,8 +547,6 @@ class BatteryCoordinator:
             self.hass, self._async_tick, self._interval_timedelta()
         )
         if self._price_source in FETCHERS:
-            from datetime import timedelta
-
             await self.async_refresh_prices()
             self._unsub_prices = async_track_time_interval(
                 self.hass,
@@ -550,6 +574,9 @@ class BatteryCoordinator:
             # whatever their age - an old figure is the whole point of a total
             "charged_wh": self.charged_wh,
             "charged_grid_wh": self.charged_grid_wh,
+            # a record of hours that have gone, so a restart at noon does not
+            # grey out the morning the chart is being consulted about
+            "price_history": dict(self.price_history),
             "saved_at": time.time(),
         }
 
@@ -590,6 +617,15 @@ class BatteryCoordinator:
             if name in self.recovering:
                 self.recovering[name] = bool(value)
         self._restore_phases(stored)
+        for key, entry in (stored or {}).get("price_history", {}).items():
+            # what was decided is decided: restored whatever its age and
+            # whether or not the coordinator was switched on. Pruned on the
+            # first tick, so a long outage cannot leave a stale week behind.
+            if isinstance(entry, dict):
+                self.price_history[key] = {
+                    "role": entry.get("role") or "normal",
+                    "bought": bool(entry.get("bought")),
+                }
         for key in ("charged_wh", "charged_grid_wh"):
             # a meter reading, not runtime state: restored regardless of age
             # and regardless of whether the coordinator was even switched on.
@@ -674,8 +710,6 @@ class BatteryCoordinator:
             await self.hass.async_add_executor_job(self._trace.flush)
 
     def _interval_timedelta(self):
-        from datetime import timedelta
-
         return timedelta(seconds=max(5, self._interval))
 
     @callback
@@ -1069,11 +1103,16 @@ class BatteryCoordinator:
         return None if current is None else round(current.price, 4)
 
     def _price_role(self, slot, now) -> str:
-        """Which decision this slot belongs to - the same one the chart draws."""
+        """Which decision this slot belongs to - the same one the chart draws.
+
+        "Cheap" is the narrowed set, not every hour that clears the margin: the
+        card is asked "when does the battery charge", and answering with four
+        candidate hours when only one will be spent is not that answer.
+        """
         forecast = self._price_forecast() or []
-        if slot in cheapest_slots(
+        if slot in slots_to_buy(
             forecast, now, self._cheap_hours, PRICE_WINDOW_HOURS,
-            self._price_margin,
+            self._price_margin, self.hours_of_charge_needed(),
         ):
             return "cheap"
         if slot in dearest_slots(
@@ -1081,6 +1120,35 @@ class BatteryCoordinator:
         ):
             return "dear"
         return "normal"
+
+    def remember_price_verdict(self, bought: bool = False) -> None:
+        """Record what this hour was judged to be, while it still is this hour.
+
+        The ranking is forward-looking, so an hour that has gone cannot be
+        re-ranked - `cheapest_slots` only ever looks at what is ahead. But the
+        hour did have a verdict at the time, and a chart that greys out the
+        whole morning cannot show which hours the packs were filled on, which
+        is the one thing somebody consults a price chart on this card for.
+
+        So the verdict is written down as it is taken. `bought` is the stronger
+        fact of the two: the role says what we intended, `bought` says the grid
+        was actually paid.
+        """
+        slots = self._price_forecast()
+        now = dt_util.utcnow()
+        current = slot_at(slots, now) if slots else None
+        if current is None:
+            return
+        entry = self.price_history.setdefault(
+            _slot_key(current), {"role": "normal", "bought": False}
+        )
+        entry["role"] = self._price_role(current, now)
+        entry["bought"] = entry["bought"] or bought
+        cutoff = (now - timedelta(hours=PRICE_HISTORY_HOURS)).astimezone(
+            timezone.utc
+        ).isoformat()
+        for key in [k for k in self.price_history if k < cutoff]:
+            del self.price_history[key]
 
     def plan(self) -> dict:
         """What it expects and intends today, for the dashboard.
@@ -1103,8 +1171,9 @@ class BatteryCoordinator:
                 for slot in chosen
             ]
 
-        cheapest = cheapest_slots(
-            slots, now, self._cheap_hours, PRICE_WINDOW_HOURS, self._price_margin
+        cheapest = slots_to_buy(
+            slots, now, self._cheap_hours, PRICE_WINDOW_HOURS, self._price_margin,
+            self.hours_of_charge_needed(),
         ) if slots else []
         dearest = dearest_slots(
             slots, now, self._expensive_hours, PRICE_WINDOW_HOURS
@@ -1116,25 +1185,38 @@ class BatteryCoordinator:
         #
         # The roles are computed here rather than left to a dashboard picking a
         # threshold: "cheap" has to mean the hours this will actually buy on.
-        # An hour that has already passed gets no role at all - the ranking is
-        # forward-looking, so claiming one would be inventing a decision that
-        # was never made.
-        cheap_at = {slot.start for slot in cheapest}
-        dear_at = {slot.start for slot in dearest}
+        #
+        # An hour that has already passed is **not** re-ranked. The ranking
+        # looks forward, so today's ranking has nothing to say about this
+        # morning. It gets back the verdict it was given while it was the
+        # current hour - a record rather than a recomputation - and `bought`
+        # says whether the grid was actually paid during it. An hour with
+        # nothing recorded (the integration was not running) stays plain
+        # "past", which is the honest answer for it.
+        cheap_at = {_slot_key(slot) for slot in cheapest}
+        dear_at = {_slot_key(slot) for slot in dearest}
         day_start = dt_util.as_local(now).replace(
             hour=0, minute=0, second=0, microsecond=0
         )
+
+        def role_of(slot, key):
+            if slot.end <= now:
+                return self.price_history.get(key, {}).get("role") or "past"
+            if key in cheap_at:
+                return "cheap"
+            if key in dear_at:
+                return "dear"
+            return "normal"
+
         hours = [
             {
                 "start": slot.start.isoformat(),
                 "end": slot.end.isoformat(),
                 "price": round(slot.price, 4),
                 "past": slot.end <= now,
-                "role": (
-                    "past" if slot.end <= now
-                    else "cheap" if slot.start in cheap_at
-                    else "dear" if slot.start in dear_at
-                    else "normal"
+                "role": role_of(slot, _slot_key(slot)),
+                "bought": bool(
+                    self.price_history.get(_slot_key(slot), {}).get("bought")
                 ),
             }
             for slot in sorted(slots or [], key=lambda s: s.start)
@@ -1219,40 +1301,87 @@ class BatteryCoordinator:
             return False  # no forecast is not a reason to skip a cheap hour
         return remaining >= self._solar_forecast_max
 
+    def _buy_ceiling(self) -> tuple[float, bool]:
+        """How full it is worth buying to, and whether the sun is the reason.
+
+        Prefer the solar-aware ceiling: it answers "how much can I still get
+        free" instead of guessing with a fixed threshold, and falls back to the
+        plain SoC threshold while the capacity is unmeasured. Only name the sun
+        when the sun is actually why - with no forecast the threshold is doing
+        the work, and blaming the sun would send someone hunting through
+        Forecast.Solar for nothing.
+        """
+        ceiling = self._solar_headroom_ceiling()
+        blame_the_sun = ceiling is not None
+        if ceiling is None:
+            ceiling = self._charge_below_soc
+        return self._bound_ceiling(ceiling), blame_the_sun
+
+    def hours_of_charge_needed(self, online: dict | None = None) -> float | None:
+        """How long on the grid the packs still need to reach the buy ceiling.
+
+        The same arithmetic as `minutes_to_full`, but against the ceiling we
+        would actually buy up to rather than each pack's own charge limit -
+        buying is what this number is for, and buying stops at the ceiling. The
+        packs charge in parallel, so it is the slowest one, not the sum.
+
+        None when the empty-to-full time has not been measured: without it the
+        need is not knowable, and a guessed duration would silently decide
+        which hours get bought.
+        """
+        if self._full_charge_minutes <= 0:
+            return None
+        if online is None:
+            online = {
+                u.name: snap
+                for u in self._units
+                if (snap := self._unit_snapshot(u)).online
+            }
+        ceiling, _ = self._buy_ceiling()
+        longest = 0.0
+        for snap in online.values():
+            missing = max(min(ceiling, snap.charge_limit) - snap.soc, 0.0)
+            longest = max(longest, missing / 100.0 * self._full_charge_minutes)
+        return longest / 60.0
+
     def _dynamic_should_charge(self, online: dict) -> tuple[bool, str | None]:
         """Buy from the grid right now? Returns (yes/no, policy when it matters).
 
-        Three conditions, all of which must hold: the current slot is among the
-        cheapest ahead, the packs are empty enough to be worth filling, and not
-        so much sun is expected that we would be paying for what is coming free.
+        Three conditions, all of which must hold: this slot is one of the ones
+        we mean to spend, the packs are empty enough to be worth filling, and
+        not so much sun is expected that we would be paying for what is coming
+        free.
+
+        "One we mean to spend" used to be "one of the cheapest four ahead", and
+        that bought on whichever of the four came round first - which is the
+        dearest of them by construction. `slots_to_buy` narrows the set to the
+        cheapest few the packs actually need.
         """
         slots = self._price_forecast()
         if slots is None:
             return False, POLICY_DYNAMIC_NO_PRICES
-        if not is_cheap_now(
-            slots, dt_util.utcnow(), self._cheap_hours, PRICE_WINDOW_HOURS,
-            self._price_margin,
-        ):
+        now = dt_util.utcnow()
+        current = slot_at(slots, now)
+        buying = current is not None and current in slots_to_buy(
+            slots, now, self._cheap_hours, PRICE_WINDOW_HOURS, self._price_margin,
+            self.hours_of_charge_needed(online),
+        )
+        # a purchase already under way finishes its hour, whatever the
+        # shrinking need now says about that hour
+        if current is not None and self._buying_slot == _slot_key(current):
+            buying = True
+        if not buying:
             return False, None
-        # How full is it worth buying to? Prefer the solar-aware ceiling: it
-        # answers "how much can I still get free" instead of guessing with a
-        # fixed threshold. Falls back while the capacity is unmeasured.
-        ceiling = self._solar_headroom_ceiling()
-        # only name the sun when the sun is actually why: with no forecast the
-        # plain threshold is doing the work, and saying otherwise would send
-        # someone hunting through Forecast.Solar for nothing
-        blame_the_sun = ceiling is not None
-        if ceiling is None:
-            if self._sun_is_enough():
-                return False, None
-            ceiling = self._charge_below_soc
 
-        ceiling = self._bound_ceiling(ceiling)
+        ceiling, blame_the_sun = self._buy_ceiling()
+        if not blame_the_sun and self._sun_is_enough():
+            return False, None
         if ceiling <= 0:
             # more sun coming than the packs could hold: buying nothing is right
             return False, POLICY_SOLAR_HEADROOM if blame_the_sun else None
         if not any(s.soc < min(ceiling, s.charge_limit) for s in online.values()):
             return False, POLICY_SOLAR_HEADROOM if blame_the_sun else None
+        self._buying_slot = _slot_key(current)
         return True, POLICY_DYNAMIC_CHARGE
 
     def _dynamic_should_hold(self, online: dict) -> bool:
@@ -1669,6 +1798,11 @@ class BatteryCoordinator:
                 "prices_error": self.prices_error,
                 "price_slots": len((self._price_attributes() or {}).get("prices", [])),
                 "current_price": self.current_price(),
+                # how many hours of grid charging the packs still want, which
+                # is what decides how many of the cheap hours get spent
+                "hours_of_charge_needed": self.hours_of_charge_needed(),
+                "buying_slot": self._buying_slot,
+                "price_history": dict(self.price_history),
                 "last_tick": self.last_tick.isoformat() if self.last_tick else None,
                 # how fresh the number the loop actually regulates on was, and
                 # the limit it is held to; both here so a support download can
@@ -2646,6 +2780,10 @@ class BatteryCoordinator:
             # a probe owns the packs for its minute; regulating underneath it
             # would be measuring our own interference
             return
+        # before anything else, and outside the enabled check: what this hour
+        # was judged to be is a fact about the hour, not about whether we were
+        # steering during it, and the chart gets read either way
+        self.remember_price_verdict()
         if not self.enabled and not self.fast_charge:
             self.active_policy = POLICY_DISABLED
             # keep looking even while idle: "disconnected" has to mean the pack
@@ -2818,6 +2956,10 @@ class BatteryCoordinator:
             dynamic_charge, dynamic_policy = (False, None)
             if self.mode == MODE_DYNAMIC:
                 dynamic_charge, dynamic_policy = self._dynamic_should_charge(online)
+                if dynamic_charge:
+                    # the stronger of the two facts the chart keeps: not "this
+                    # hour looked cheap" but "the grid was paid during it"
+                    self.remember_price_verdict(bought=True)
 
             hold_policy = None
             if self.mode == MODE_DYNAMIC and not dynamic_charge:

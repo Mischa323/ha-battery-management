@@ -235,7 +235,9 @@ Build order, and why:
    today is worth charging on and leave the packs flat through this evening.
    Three conditions must all hold before a cent is spent: cheap now, a pack below
    `charge_below_soc`, and not more sun expected than `solar_forecast_max` (0 =
-   ignore; a *missing* forecast is not treated as "lots of sun"). Buying is the
+   ignore; a *missing* forecast is not treated as "lots of sun").
+   "Cheap now" was later narrowed from *the cheapest hours ahead* to *the
+   cheapest few we actually need* - see section H, 2026-08-19. Buying is the
    one thing expressed as a forced value rather than a bound — there is no
    surplus to regulate against.
    `MODE_DYNAMIC` is only in the select's options when a price sensor is set, so
@@ -538,6 +540,62 @@ possible, and they gate section A.
     will say so.
 
 ### H. Done
+
+- **Spending the cheap hours in the right order, 2026-08-19.** Reported from
+  the primary site: dynamic mode was switched on at 12:20 with `cheap_hours`
+  at 4, the packs went 4 % → 50 % in the hour that followed, and the day's
+  cheapest hour (0.284 at 14:00) was never used. `is_cheap_now` asked "is this
+  one of the cheapest four ahead", which by construction buys on whichever of
+  the four arrives first - the dearest of them.
+  - `slots_to_buy` narrows the candidate set to the cheapest few actually
+    needed. The need is `hours_of_charge_needed()`: the same arithmetic as
+    `minutes_to_full`, but against the ceiling we would **buy** up to rather
+    than the pack's own charge limit, because buying stops at the ceiling.
+    Slowest pack, not the sum - they charge in parallel. Rounded up to whole
+    slots, and quarter-hourly feeds count in slots rather than hours.
+  - **Unmeasured `full_charge_minutes` means no narrowing at all.** Without it
+    the need is not knowable, and a guessed duration would silently decide
+    which hours get bought - so it falls back to the old behaviour rather than
+    to a number nobody measured. The same reasoning as `minutes_to_full` being
+    unavailable rather than estimated.
+  - **A purchase already under way finishes its hour.** The need shrinks as
+    the packs fill, so the hour we picked can stop qualifying half-way through
+    it; without the latch the packs stop mid-charge and the rest of a cheap
+    hour is thrown away. Latched on the slot's own key, so it cannot bleed
+    into the next hour - a plain "we started buying" boolean would.
+  - Consequence on the card, and it is the answer to "why did a bar later in
+    the day suddenly go green": green now means *the hours this will spend*,
+    not *the hours that clear the ranking*. Fewer bars, and they stop moving
+    about as the rolling 24 h window slides. When the packs are full enough
+    that nothing will be bought there is **no green at all**, which is the
+    honest picture and not a broken chart.
+
+- **Hours that have gone keep their verdict, 2026-08-19.** Also from the
+  owner: the whole left half of the chart was flat grey by teatime, so it
+  could not answer "which hours did the battery charge on".
+  - **Re-ranking a past hour is still forbidden and always will be.**
+    `cheapest_slots` only looks forward, so colouring this morning against
+    this afternoon's ranking would draw decisions that were never taken. What
+    changed is that the verdict is now *written down as it is taken*:
+    `remember_price_verdict` records the current slot's role every tick, and
+    `plan()` hands it back instead of recomputing. A record, not a guess.
+  - Recorded **outside the enabled check**, because what an hour was is a fact
+    about the hour and not about who was steering during it - the chart is
+    looked at during a shadow month too. Persisted, so a restart at noon does
+    not grey out the morning being consulted. Pruned at 48 h, which is as far
+    back as the chart can page.
+  - `bought` is the stronger of the two facts and is kept separately: the role
+    says what was intended, `bought` says the grid was actually paid. An hour
+    that looked cheap while the packs were already full says `cheap` and
+    `bought: false`, and the tooltip only claims "toen geladen" for the other
+    kind.
+  - **Days before today still stay grey**, and that is not an oversight: they
+    come back from long-term statistics, which store prices and no verdicts.
+    `past` became a flag rather than a role so the two can be told apart -
+    faded-with-colour for a recorded hour, faded grey for one nobody watched.
+  - The wording moves with the tense (`PRICE_WAS`). "Goedkoop genoeg om te
+    kopen" about 09:00 at teatime reads as an offer that is still open.
+
 
 - **A pack is either off or working properly, 2026-08-19.** The primary site's
   Anker integration warned "the input power of 63 W is below the optimal

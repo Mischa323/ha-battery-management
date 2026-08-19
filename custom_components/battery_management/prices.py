@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from math import ceil
 
 #: attribute names that hold a list of upcoming prices, most specific first
 _LIST_KEYS = (
@@ -286,3 +287,43 @@ def is_cheap_now(
     return current in cheapest_slots(
         slots, now, cheap_hours, window_hours, min_margin
     )
+
+
+def slots_to_buy(
+    slots: list[Slot],
+    now: datetime,
+    cheap_hours: float,
+    window_hours: float = 24.0,
+    min_margin: float = 0.0,
+    needed_hours: float | None = None,
+) -> list[Slot]:
+    """Of the hours cheap enough to buy on, the cheapest few actually needed.
+
+    `cheapest_slots` answers "which hours are cheap enough". It does not answer
+    "which of them will we use", and buying on whichever cheap hour comes round
+    first spends the dearest of the set. Reported from the primary site on
+    2026-08-19: dynamic mode was switched on at 12:20, the packs were full an
+    hour later, and the day's cheapest hour arrived at 14:00 - unused, because
+    12:00 was also in the cheapest four and it was the one that came first.
+
+    The need is measured in hours of charging, which is what the empty-to-full
+    time already gives. Rounded **up** to whole slots, and never below one: the
+    packs draw what they draw, so half an hour of need still occupies an hour.
+
+    `needed_hours` of None means the need is not knowable - the empty-to-full
+    time has not been measured - and then every cheap hour qualifies, which is
+    the behaviour this had before. A need of zero returns nothing: there is
+    nothing to buy, and saying otherwise would paint hours on a dashboard that
+    no charging is planned for.
+    """
+    candidates = cheapest_slots(slots, now, cheap_hours, window_hours, min_margin)
+    if needed_hours is None or not candidates:
+        return candidates
+    if needed_hours <= 0:
+        return []
+    span_minutes = min(
+        (slot.end - slot.start).total_seconds() / 60 for slot in candidates
+    )
+    wanted = max(1, ceil(needed_hours * 60 / span_minutes))
+    ranked = sorted(candidates, key=lambda slot: (slot.price, slot.start))
+    return sorted(ranked[:wanted], key=lambda slot: slot.start)

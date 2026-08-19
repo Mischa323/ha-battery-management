@@ -50,8 +50,8 @@ const PRICE_COLOUR = {
   cheap: "#089408",
   dear: "#e07070",
   normal: "var(--disabled-text-color, #8a8a8a)",
-  // hours already gone: drawn so the shape of the day is there, but without
-  // claiming a decision. The ranking looks forward, so they never had one.
+  // an hour that has gone and has no recorded verdict - the integration was
+  // not running during it, or it comes from the recorder rather than the plan
   past: "var(--disabled-text-color, #8a8a8a)",
 };
 // Deliberately "mag" and not "wordt". Being a cheap hour is one of three
@@ -64,6 +64,28 @@ const PRICE_SAYS = {
   normal: "gewoon de meter volgen",
   past: "geweest",
 };
+// The same verdicts in the past tense. An hour that has gone keeps the colour
+// it was given at the time - that is what makes the charging hours visible on
+// a chart of a day that is mostly over - but it must not keep the wording:
+// "goedkoop genoeg om te kopen" about 09:00 at teatime reads as an offer.
+const PRICE_WAS = {
+  cheap: "was goedkoop genoeg om te kopen",
+  dear: "was duur — bewaard voor dit uur",
+  normal: "gewoon de meter gevolgd",
+  past: "geweest",
+};
+
+/** What one bar says: its hour, its price, its verdict, and whether we bought. */
+function slotLabel(bar) {
+  const says = (bar.past ? PRICE_WAS : PRICE_SAYS)[bar.role] || "";
+  // "bought" is the stronger fact of the two: the role is what was intended,
+  // this is the grid actually being paid. Only ever set on hours that have
+  // happened, so it never reads as a promise.
+  return (
+    `${hhmm(bar.start)} — ${bar.price.toFixed(3)} €/kWh — ${says}` +
+    (bar.bought ? " — toen geladen" : "")
+  );
+}
 
 /** Chart styles, shared by both cards. */
 const PRICE_CSS = `
@@ -112,7 +134,7 @@ const PRICE_LEGEND = `
               <span><i style="background:${PRICE_COLOUR.cheap}"></i>Goedkoop genoeg om te kopen</span>
               <span><i style="background:${PRICE_COLOUR.dear}"></i>Duur — hiervoor wordt bewaard</span>
               <span><i style="background:${PRICE_COLOUR.normal}"></i>Verder de meter volgen</span>
-              <span><i style="background:${PRICE_COLOUR.past};opacity:.35"></i>Geweest</span>
+              <span><i style="background:${PRICE_COLOUR.cheap};opacity:.35"></i>Geweest (vervaagd, kleur blijft)</span>
             </div>`;
 
 /**
@@ -369,16 +391,24 @@ function priceBars(hours) {
       const price = Number(h.price) || 0;
       const size = (Math.abs(price) / span) * 100;
       const role = PRICE_COLOUR[h.role] ? h.role : "normal";
-      return {
+      // "past" is now a flag rather than a role, because an hour that has gone
+      // keeps the verdict it was given at the time. It is drawn faded, not
+      // grey: the shape of the day and the hours that were bought on are both
+      // worth seeing, and only one of them survives being greyed out.
+      const past = h.past === true || role === "past" || at(h.end) <= now;
+      const bar = {
         role,
-        past: role === "past",
+        past,
+        bought: h.bought === true,
+        start: h.start,
         price,
         bottom: zero + (price < 0 ? -size : 0),
         height: size,
         down: price < 0,
         current: covers(h, now),
-        label: `${hhmm(h.start)} — ${price.toFixed(3)} €/kWh — ${PRICE_SAYS[role]}`,
       };
+      bar.label = slotLabel(bar);
+      return bar;
     }),
   };
 }
@@ -1211,14 +1241,22 @@ ${PRICE_LEGEND}
     big.style.color = s.current
       ? PRICE_COLOUR[PRICE_COLOUR[s.current.role] ? s.current.role : "normal"]
       : "var(--primary-text-color)";
+    // a tapped hour that has gone gets the past tense, and says whether the
+    // grid was actually paid during it - which is what the reader is asking
+    // when they tap a green bar in this morning
+    const gone = s.current && (s.current.past === true || at(s.current.end) <= Date.now());
+    const says = s.current
+      ? ((gone ? PRICE_WAS : PRICE_SAYS)[s.current.role] || "") +
+        (s.current.bought ? " — toen geladen" : "")
+      : "";
     sub.textContent = s.current
       ? (live ? "nu" : `${hhmm(s.current.start)}–${hhmm(s.current.end)}`) +
-        ` — ${PRICE_SAYS[s.current.role] || ""}` +
+        ` — ${says}` +
         (live ? `, tot ${hhmm(s.current.end)}` : " · tik nogmaals voor nu")
       // A day that is over, or one that has not started. The average is what
-      // that day is about, and the bars stay grey: which hours were bought on
-      // was decided against the ranking of the day itself and recorded
-      // nowhere, so colouring them now would invent decisions.
+      // that day is about. Days before today come from the recorder, which
+      // stores prices and not verdicts, so those bars stay grey: colouring
+      // them against today's ranking would invent decisions never taken.
       : "gemiddeld over " + dayLabel(this._day) + " · tik een staaf aan";
     this.querySelector("#pends").innerHTML =
       `<span><span class="muted">laagste</span> <b>${s.low.value.toFixed(3)}</b>` +

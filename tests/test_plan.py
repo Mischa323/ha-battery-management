@@ -300,9 +300,11 @@ def test_the_series_starts_at_midnight_not_at_now(planned):
     assert len([h for h in hours if h["past"]]) == 12
 
 
-def test_an_hour_that_has_passed_claims_no_decision(planned):
-    """The ranking looks forward, so calling a past hour "cheap" would be
-    inventing a decision that was never made."""
+def test_an_hour_that_has_passed_unwatched_claims_no_decision(planned):
+    """The ranking looks forward, so *re-ranking* a past hour would invent a
+    decision that was never made. An hour we did watch keeps the verdict it
+    was given at the time - see `test_price_history.py`; here nothing ever
+    ticked, so there is nothing on record and "past" is the honest answer."""
     system = planned()
 
     past = [h for h in system.coordinator.plan()["hours"] if h["past"]]
