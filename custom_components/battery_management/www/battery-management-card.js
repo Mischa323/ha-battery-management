@@ -644,6 +644,29 @@ ${PRICE_LEGEND}
   }
 
   /**
+   * What is actually there, when what we looked for is not.
+   *
+   * The site's own diagnostics said the counters were working - 0.052 kWh
+   * counted - while the card reported them missing, so the fault was in
+   * guessing the entity id. Two rounds went by narrowing that down by
+   * hypothesis. Listing the neighbours turns the next round into a reading:
+   * either the real id is in the list and the matching is wrong, or nothing
+   * is and the entity does not live under this prefix at all.
+   */
+  _nearby(word) {
+    const c = this._config;
+    if (!c.setpoint || !this._hass) return "";
+    const head = "sensor." + c.setpoint.slice("sensor.".length, -"_setpoint".length);
+    const near = Object.keys(this._hass.states)
+      .filter((id) => id.startsWith(head) && id.includes(word))
+      .sort();
+    return near.length
+      ? "Wel gevonden: " + near.slice(0, 4).join(", ") +
+        (near.length > 4 ? " (+" + (near.length - 4) + ")" : "") + "."
+      : "Er staat niets met '" + word + "' onder deze prefix.";
+  }
+
+  /**
    * Which rule is currently holding the packs where they are.
    *
    * The mode above says what is *allowed*; this says what is actually binding
@@ -706,8 +729,7 @@ ${PRICE_LEGEND}
           "accu de laadvermogen-sensor in bij de integratie."
         : "Laadtelling niet gevonden - gezocht naar sensor." +
           this._config.setpoint.slice("sensor.".length, -"_setpoint".length) +
-          "_charged. Staat hij onder een andere naam, geef die dan op als " +
-          "charged_total in de kaart.";
+          "_charged. " + this._nearby("charg");
       this.querySelector("#ctotal").textContent = "";
       this.querySelector("#csunt").textContent = "";
       this.querySelector("#cnett").textContent = "";

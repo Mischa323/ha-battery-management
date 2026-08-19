@@ -311,5 +311,26 @@ check("an unreadable counter is named, not called missing",
   el(empty, "cnote").textContent.includes("heeft nog geen waarde"),
   el(empty, "cnote").textContent);
 
+// When the id is not what we guessed, the note has to hand over the evidence
+// rather than another hypothesis - two rounds went by narrowing this down by
+// guessing, on a site whose counters were working the whole time.
+const elsewhere = build(
+  { setpoint: SP },
+  {
+    [SP]: { state: "51", attributes: {} },
+    "sensor.battery_management_energy_charged_total": { state: "3", attributes: {} },
+  }
+);
+check("the note lists what it did find nearby",
+  el(elsewhere, "cnote").textContent.includes(
+    "sensor.battery_management_energy_charged_total"
+  ), el(elsewhere, "cnote").textContent);
+
+// and says so plainly when there is genuinely nothing to point at
+const nothing = build({ setpoint: SP }, { [SP]: { state: "51", attributes: {} } });
+check("and says so when there is nothing at all",
+  nothing._els.get("cnote").textContent.includes("niets met"),
+  nothing._els.get("cnote").textContent);
+
 console.log(fails ? "\n" + fails + " FAILED" : "\nmode / policy / charge checks pass");
 process.exit(fails ? 1 : 0);
