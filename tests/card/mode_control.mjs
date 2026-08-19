@@ -249,9 +249,20 @@ check("changing a derived mode still calls the service",
 // sensors gets a card without the split, not a split of nothing
 const sparse = build({ setpoint: SP }, { [SP]: { state: "51", attributes: {} } });
 check("nothing is invented for a site that has none",
-  el(sparse, "charge").style.display === "none" &&
+  el(sparse, "csunt").textContent === "" && el(sparse, "cnett").textContent === "" &&
   el(sparse, "moderow").style.display === "none",
-  [el(sparse, "charge").style.display, el(sparse, "moderow").style.display]);
+  [el(sparse, "csunt").textContent, el(sparse, "moderow").style.display]);
+
+// Silently hiding is what cost three rounds of "I still do not see it": a
+// block that vanishes when it cannot find its entities looks exactly like a
+// broken card, and naming the id it looked for turns the next question into
+// a one-line answer.
+check("it says what it looked for instead of vanishing",
+  el(sparse, "charge").style.display === "block" &&
+  el(sparse, "cnote").textContent.includes("sensor.battery_management_charged"),
+  el(sparse, "cnote").textContent);
+check("and the bar is not drawn on nothing",
+  el(sparse, "cbar").style.display === "none", el(sparse, "cbar").style.display);
 
 // an explicit setting still wins over the derived one
 const pinned = build(

@@ -504,6 +504,7 @@ class BatteryManagementCard extends HTMLElement {
           .bar.split .fill.net { background: var(--info-color, #039be5); }
           /* the swatches repeat the bar's colours, but the words carry the
              meaning on their own - nobody should have to match a hue */
+          .cnote { font-size:.82em; margin-top:4px; }
           .cleg i { display:inline-block; width:9px; height:9px; border-radius:3px;
                     margin-right:5px; vertical-align:middle; font-style:normal; }
           .prices { margin-top:12px; padding:10px 10px 6px; border-radius:10px;
@@ -532,7 +533,8 @@ ${PRICE_CSS}
           <div id="units"></div>
           <div class="charge" id="charge" style="display:none">
             <div class="uhead"><span>Geladen</span><span class="muted" id="ctotal">—</span></div>
-            <div class="bar split"><div class="fill sun" id="csun"></div><div class="fill net" id="cnet"></div></div>
+            <div class="bar split" id="cbar"><div class="fill sun" id="csun"></div><div class="fill net" id="cnet"></div></div>
+            <div class="muted cnote" id="cnote" style="display:none"></div>
             <div class="uhead muted cleg">
               <span><i style="background:var(--success-color,#4caf50)"></i><span id="csunt">—</span></span>
               <span><span id="cnett">—</span><i style="background:var(--info-color,#039be5);margin:0 0 0 5px"></i></span>
@@ -656,17 +658,42 @@ ${PRICE_LEGEND}
    * looking number on the dashboard that is not what happened.
    */
   _renderCharge() {
-    const c = this._config;
     const wrap = this.querySelector("#charge");
-    const split = chargeSplit(
-      this._num(this._entity("charged_total", "_charged")),
-      this._num(this._entity("charged_grid", "_charged_from_grid"))
-    );
+    const note = this.querySelector("#cnote");
+    const bar = this.querySelector("#cbar");
+    const total = this._entity("charged_total", "_charged");
+    const grid = this._entity("charged_grid", "_charged_from_grid");
+    const split = chargeSplit(this._num(total), this._num(grid));
+
     if (!split) {
-      wrap.style.display = "none";
+      // Says why, rather than vanishing. A block that hides itself when it
+      // cannot find its entities looks exactly like a card that is broken,
+      // and the reader has no way to tell which - three rounds of "I still
+      // do not see it" went by before this was written. Naming the id it
+      // looked for turns the next question into a one-line answer.
+      // Only where there is something to explain. Without a setpoint the card
+      // does not know which integration it belongs to, so it has no id to
+      // name and no business nagging about one.
+      if (!this._config.setpoint) {
+        wrap.style.display = "none";
+        return;
+      }
+      wrap.style.display = "block";
+      bar.style.display = "none";
+      note.style.display = "block";
+      note.textContent =
+        "Nog niets geteld. Vul per accu de laadvermogen-sensor in bij de " +
+        "integratie (gezocht: sensor." +
+        this._config.setpoint.slice("sensor.".length, -"_setpoint".length) +
+        "_charged).";
+      this.querySelector("#ctotal").textContent = "";
+      this.querySelector("#csunt").textContent = "";
+      this.querySelector("#cnett").textContent = "";
       return;
     }
     wrap.style.display = "block";
+    bar.style.display = "flex";
+    note.style.display = "none";
     this.querySelector("#ctotal").textContent = kwh(split.total);
     const sun = this.querySelector("#csun");
     const net = this.querySelector("#cnet");
