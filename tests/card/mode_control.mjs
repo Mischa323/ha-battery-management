@@ -277,5 +277,39 @@ const pinned = build(
 check("an explicit entity is not overridden",
   el(pinned, "ctotal").textContent === "8.0 kWh", el(pinned, "ctotal").textContent);
 
+// Home Assistant appends _2 when the id it wants is taken, and an entity that
+// predates a device rename keeps its old slug. Guessing the exact slug is what
+// put "not found" on a dashboard whose counters were working perfectly.
+const suffixed = build(
+  { setpoint: SP },
+  {
+    [SP]: { state: "51", attributes: {} },
+    "sensor.battery_management_charged_2": { state: "12.5", attributes: {} },
+    "sensor.battery_management_charged_from_grid_2": { state: "2.5", attributes: {} },
+  }
+);
+check("a _2 suffix is still recognised as ours",
+  el(suffixed, "ctotal").textContent === "12.5 kWh" &&
+  el(suffixed, "csunt").textContent === "zon 10.0 kWh",
+  [el(suffixed, "ctotal").textContent, el(suffixed, "csunt").textContent]);
+
+// "..._charged" must not swallow "..._charged_from_grid", or the total and the
+// grid half become the same number and the sun silently reads zero
+check("the two counters are not confused for each other",
+  el(suffixed, "cnett").textContent === "net 2.5 kWh", el(suffixed, "cnett").textContent);
+
+// found but with nothing in it is a different fault from not found at all, and
+// they need different answers - one is a setting, the other is a bug here
+const empty = build(
+  { setpoint: SP },
+  {
+    [SP]: { state: "51", attributes: {} },
+    "sensor.battery_management_charged": { state: "unknown", attributes: {} },
+  }
+);
+check("an unreadable counter is named, not called missing",
+  el(empty, "cnote").textContent.includes("heeft nog geen waarde"),
+  el(empty, "cnote").textContent);
+
 console.log(fails ? "\n" + fails + " FAILED" : "\nmode / policy / charge checks pass");
 process.exit(fails ? 1 : 0);

@@ -470,8 +470,23 @@ class BatteryManagementCard extends HTMLElement {
     if (c[key]) return c[key];
     if (!c.setpoint || !this._hass) return undefined;
     const prefix = c.setpoint.slice("sensor.".length, -"_setpoint".length);
-    const id = `${domain}.${prefix}${suffix}`;
-    return this._hass.states[id] ? id : undefined;
+    const exact = `${domain}.${prefix}${suffix}`;
+    if (this._hass.states[exact]) return exact;
+    // Home Assistant appends _2 when the id it wants is already taken, and an
+    // entity created before a device was renamed keeps its old slug. Either
+    // way the result is still recognisably ours, so look for it rather than
+    // reporting nothing found - guessing the exact slug is what put "gezocht:
+    // ..._charged" on a dashboard whose counter was working perfectly.
+    const head = `${domain}.${prefix}`;
+    // a plain string, not a template literal: a template literal eats the
+    // backslash and leaves the regex matching a literal d
+    // `[0-9]` rather than `\d`, so no backslash has to survive being written
+    // into a string inside a source file - it did not, twice
+    const tail = new RegExp(suffix + "(_[0-9]+)?$");
+    const found = Object.keys(this._hass.states)
+      .filter((id) => id.startsWith(head) && tail.test(id))
+      .sort((a, b) => a.length - b.length);
+    return found[0];
   }
 
   _build() {
@@ -681,11 +696,18 @@ ${PRICE_LEGEND}
       wrap.style.display = "block";
       bar.style.display = "none";
       note.style.display = "block";
-      note.textContent =
-        "Nog niets geteld. Vul per accu de laadvermogen-sensor in bij de " +
-        "integratie (gezocht: sensor." +
-        this._config.setpoint.slice("sensor.".length, -"_setpoint".length) +
-        "_charged).";
+      // Two different faults, and they need two different answers. Found but
+      // unreadable means the counter exists and has nothing to say yet, which
+      // is what an unconfigured charge-power sensor looks like. Not found at
+      // all means the card is looking in the wrong place, which is a bug here
+      // rather than a setting there.
+      note.textContent = total
+        ? "Nog niets geteld: " + total + " heeft nog geen waarde. Vul per " +
+          "accu de laadvermogen-sensor in bij de integratie."
+        : "Laadtelling niet gevonden - gezocht naar sensor." +
+          this._config.setpoint.slice("sensor.".length, -"_setpoint".length) +
+          "_charged. Staat hij onder een andere naam, geef die dan op als " +
+          "charged_total in de kaart.";
       this.querySelector("#ctotal").textContent = "";
       this.querySelector("#csunt").textContent = "";
       this.querySelector("#cnett").textContent = "";
