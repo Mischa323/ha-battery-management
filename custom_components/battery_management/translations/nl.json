@@ -11,7 +11,7 @@
           "deadband": "Deadband (W)",
           "kp": "Versterking (Kp)",
           "interval": "Regelinterval (seconden)",
-          "min_output": "Minimaal vermogen per unit (W)",
+          "min_output": "Minimaal vermogen (W)",
           "unit_max": "Maximaal vermogen per unit (W)"
         },
         "data_description": {
@@ -21,7 +21,7 @@
           "deadband": "Negeer afwijkingen kleiner dan dit, anders jagen de packs op elke waterkoker. Kost een blijvende afwijking van hoogstens marge + deadband.",
           "kp": "Hoe hard hij per tick corrigeert: nieuw setpoint = oud + Kp x afwijking. Hoger reageert sneller en schiet eerder door. 0,25 bij 15 s is hier stabiel gebleken.",
           "interval": "Seconden tussen beslissingen. Ga niet onder 15: de Modbus-sensoren lopen 10-30 s achter, en bij 10 s liepen beide packs op en ontlaadden ze in een teruglevering.",
-          "min_output": "Hieronder doet een pack niets zinvols, dus kleine delen worden op een unit samengevoegd in plaats van beide te laten pruttelen. Meet dit; 150 W is een gok.",
+          "min_output": "Hieronder krijgen de accu's opdracht om niets te doen. De bodem ligt onder het totaal, niet alleen onder het aandeel per accu, zodat een kleine vraag nooit wordt opgesplitst in twee waarden die geen van beide nauwkeurig geregeld kunnen worden - de firmware van de accu waarschuwt daar zelf voor. Hij laat pas weer los op driekwart van deze waarde, zodat een setpoint dat vlak bij de grens hangt ze niet elke tick aan en uit zet. Het setpoint blijft ondertussen integreren, dus een aanhoudende kleine afname klimt er vanzelf overheen. Meet hem voor jouw hardware.",
           "unit_max": "Harde bovengrens per pack, nodig omdat het maximum dat de doel-entiteit zelf meldt onbetrouwbaar is - een unit hier meldt 10000 voor een 3500 W-apparaat."
         }
       },
@@ -104,7 +104,7 @@
           "deadband": "Deadband (W)",
           "kp": "Versterking (Kp)",
           "interval": "Regelinterval (seconden)",
-          "min_output": "Minimaal vermogen per unit (W)",
+          "min_output": "Minimaal vermogen (W)",
           "unit_max": "Maximaal vermogen per unit (W)",
           "fast_charge_hold": "Accu's vol houden na snelladen",
           "full_charge_minutes": "Minuten van leeg naar vol op vol vermogen",
@@ -120,7 +120,7 @@
           "deadband": "Negeer afwijkingen kleiner dan dit, anders jagen de packs op elke waterkoker. Kost een blijvende afwijking van hoogstens marge + deadband.",
           "kp": "Hoe hard hij per tick corrigeert: nieuw setpoint = oud + Kp x afwijking. Hoger reageert sneller en schiet eerder door. 0,25 bij 15 s is hier stabiel gebleken.",
           "interval": "Seconden tussen beslissingen. Ga niet onder 15: de Modbus-sensoren lopen 10-30 s achter, en bij 10 s liepen beide packs op en ontlaadden ze in een teruglevering.",
-          "min_output": "Hieronder doet een pack niets zinvols, dus kleine delen worden op een unit samengevoegd in plaats van beide te laten pruttelen. Meet dit; 150 W is een gok.",
+          "min_output": "Hieronder krijgen de accu's opdracht om niets te doen. De bodem ligt onder het totaal, niet alleen onder het aandeel per accu, zodat een kleine vraag nooit wordt opgesplitst in twee waarden die geen van beide nauwkeurig geregeld kunnen worden - de firmware van de accu waarschuwt daar zelf voor. Hij laat pas weer los op driekwart van deze waarde, zodat een setpoint dat vlak bij de grens hangt ze niet elke tick aan en uit zet. Het setpoint blijft ondertussen integreren, dus een aanhoudende kleine afname klimt er vanzelf overheen. Meet hem voor jouw hardware.",
           "unit_max": "Harde bovengrens per pack, nodig omdat het maximum dat de doel-entiteit zelf meldt onbetrouwbaar is - een unit hier meldt 10000 voor een 3500 W-apparaat.",
           "fast_charge_hold": "Aan: de schakelaar blijft aan bij vol en houdt ze daar tot jij hem uitzet. Uit: hij schakelt zichzelf uit en je modus ontlaadt ze weer.",
           "full_charge_minutes": "Eenmalig gemeten, per pack. Levert zowel de minuten-tot-vol-schatting als de bruikbare capaciteit die het zon-plafond nodig heeft. 0 verbergt beide in plaats van te gokken.",
