@@ -463,6 +463,28 @@ type: custom:battery-management-card
 prices: sensor.battery_management_plan
 ```
 
+### Looking back, and forward
+
+Both charts show one day at a time, with `‹` and `›` under them; tapping the
+label in the middle returns to today.
+
+Forward costs nothing — the plan sensor already carries every slot the supplier
+has published, so tomorrow appears there by itself once it is released, usually
+in the early afternoon. Backward is fetched on demand from **long-term
+statistics** of `sensor.battery_management_current_price`, once per day viewed
+and cached for the session. Statistics rather than raw history on purpose: the
+recorder purges after ten days by default and statistics are kept indefinitely,
+so a month ago is still there. They are hourly means, which is also why a
+quarter-hourly feed folds to 24 bars once it is in the past.
+
+**History is drawn grey, and that is deliberate.** Green on these charts does
+not mean "a low price", it means *this is where the coordinator buys* — a
+decision taken at the time, against the ranking published at the time, and
+recorded nowhere. Colouring yesterday with today's ranking would draw decisions
+that were never taken. A past day gets its **average** as the headline instead,
+which is the number that day is actually about, and every bar can still be
+tapped for its own price.
+
 ### Quarter-hourly prices
 
 The market settles in 15-minute blocks and suppliers are starting to publish

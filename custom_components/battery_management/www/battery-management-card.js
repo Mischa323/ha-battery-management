@@ -87,7 +87,25 @@ const PRICE_CSS = `
                     color: var(--secondary-text-color); }
           .legend i { display:inline-block; width:10px; height:10px; border-radius:3px;
                       margin-right:5px; vertical-align:middle; font-style:normal; }
+          .pnav { display:flex; align-items:center; justify-content:center; gap:14px;
+                  margin-top:8px; font-size:.86em; }
+          .pnav .pbtn { cursor:pointer; user-select:none; padding:1px 10px 3px;
+                        border-radius:8px; touch-action:manipulation;
+                        background: var(--secondary-background-color);
+                        color: var(--primary-text-color);
+                        border:1px solid var(--divider-color); }
+          .pnav .pbtn.off { opacity:.3; cursor:default; }
+          .pnav .pday { min-width:8.5em; text-align:center; cursor:pointer;
+                        color: var(--secondary-text-color); }
 `;
+
+/** The day picker, shared by both charts. */
+const PRICE_NAV = `
+            <div class="pnav">
+              <span class="pbtn" id="pprev" title="dag terug">‹</span>
+              <span class="pday" id="pday" title="terug naar vandaag"></span>
+              <span class="pbtn" id="pnext" title="dag verder">›</span>
+            </div>`;
 
 const PRICE_LEGEND = `
             <div class="legend">
@@ -209,6 +227,131 @@ const at = (iso) => new Date(iso).getTime();
 const covers = (slot, moment) => at(slot.start) <= moment && moment < at(slot.end);
 
 /**
+ * A sibling entity: same integration, same device, known suffix.
+ *
+ * Asks the entity registry which device the anchor is on, rather than reading
+ * a name off it. A slug is a snapshot of what the device was called when that
+ * particular entity was created, so entities from before a rename keep the old
+ * one while later ones get the new - one install, two prefixes, and half of it
+ * unreachable by name. That cost four rounds of "not found" on an install
+ * whose counters were working the whole time.
+ *
+ * The name-derived route stays as a fallback: older frontends expose no
+ * registry, and an install that was never renamed resolves there fine. A
+ * registry entry without a state is skipped, so a disabled entity is never
+ * handed back as though it could be read.
+ */
+function resolveRelated(hass, anchor, anchorSuffix, suffix, domain = "sensor") {
+  if (!hass || !anchor || !anchor.endsWith(anchorSuffix)) return undefined;
+  // A plain string, not a template literal, and [0-9] rather than a backslash
+  // escape: the backslash did not survive being written into a source file,
+  // twice, and a template literal ate it silently rather than complaining.
+  const tail = new RegExp(suffix + "(_[0-9]+)?$");
+
+  const reg = hass.entities;
+  const device = reg && reg[anchor] && reg[anchor].device_id;
+  if (device) {
+    const onDevice = Object.keys(reg)
+      .filter(
+        (id) =>
+          id.startsWith(domain + ".") &&
+          reg[id].device_id === device &&
+          tail.test(id) &&
+          hass.states[id]
+      )
+      .sort((a, b) => a.length - b.length)[0];
+    if (onDevice) return onDevice;
+  }
+
+  const prefix = anchor.slice(anchor.indexOf(".") + 1, -anchorSuffix.length);
+  const exact = `${domain}.${prefix}${suffix}`;
+  if (hass.states[exact]) return exact;
+  // Home Assistant appends _2 when the id it wants is already taken.
+  const head = `${domain}.${prefix}`;
+  return Object.keys(hass.states)
+    .filter((id) => id.startsWith(head) && tail.test(id))
+    .sort((a, b) => a.length - b.length)[0];
+}
+
+/** A moment's calendar day in the reader's own zone, as YYYY-MM-DD. */
+const localDay = (moment) => {
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${moment.getFullYear()}-${pad(moment.getMonth() + 1)}-${pad(
+    moment.getDate()
+  )}`;
+};
+
+const dayOf = (iso) => {
+  const moment = new Date(iso);
+  return isNaN(moment.getTime()) ? "" : localDay(moment);
+};
+
+/** The day `offset` days from now, same format. */
+const dayKey = (offset, now = Date.now()) => {
+  const moment = new Date(now);
+  moment.setDate(moment.getDate() + offset);
+  return localDay(moment);
+};
+
+/** Local midnight to local midnight, which is what a reader means by a day. */
+function dayRange(day) {
+  const [y, m, d] = String(day).split("-").map(Number);
+  return {
+    start: new Date(y, m - 1, d).toISOString(),
+    end: new Date(y, m - 1, d + 1).toISOString(),
+  };
+}
+
+/** Only the published slots falling on one calendar day. */
+const slotsOnDay = (hours, day) =>
+  (hours || []).filter((h) => h && dayOf(h.start) === day);
+
+/**
+ * Recorder statistics, in the shape the chart already draws.
+ *
+ * Deliberately **without a role**, and that is the thing not to get clever
+ * about. Green here does not mean "a low price", it means "this is where the
+ * coordinator buys" - a decision taken at the time, against the ranking
+ * published at the time, and recorded nowhere. Re-colouring yesterday with
+ * today's ranking would draw decisions that were never taken. Grey is honest,
+ * and it is the same grey today's spent hours already get.
+ *
+ * `start` arrives as epoch milliseconds on current cores and as an ISO string
+ * on older ones, and `end` is sometimes absent. Normalised here so nothing
+ * downstream has to know which core it is talking to.
+ */
+function historySlots(rows) {
+  return (rows || [])
+    .filter((r) => r && r.mean !== null && r.mean !== undefined && r.start != null)
+    .map((r) => {
+      const start = new Date(r.start);
+      const end =
+        r.end != null ? new Date(r.end) : new Date(start.getTime() + 3600000);
+      return {
+        start: start.toISOString(),
+        end: end.toISOString(),
+        price: Number(r.mean),
+        role: "past",
+      };
+    })
+    .filter((h) => !isNaN(at(h.start)) && !isNaN(h.price))
+    .sort((a, b) => at(a.start) - at(b.start));
+}
+
+/** "vandaag", "morgen", "gisteren", or the date spelled out. */
+function dayLabel(day, now = Date.now()) {
+  for (const [offset, word] of [[0, "vandaag"], [1, "morgen"], [-1, "gisteren"]]) {
+    if (day === dayKey(offset, now)) return word;
+  }
+  const [y, m, d] = String(day).split("-").map(Number);
+  return new Date(y, m - 1, d).toLocaleDateString("nl-NL", {
+    weekday: "short",
+    day: "numeric",
+    month: "short",
+  });
+}
+
+/**
  * Bar geometry. The baseline is zero and negative prices hang below it rather
  * than being clipped: on a dynamic tariff they are real, and they are exactly
  * the hours worth noticing.
@@ -292,6 +435,116 @@ function wirePlot(card) {
 }
 
 /**
+ * Move the chart a day at a time, and back to today on the label.
+ *
+ * Shared, because both charts need it and the last time one card got the
+ * wiring and the other did not, the second was decorative for a fortnight
+ * before anyone noticed - it had every affordance except the listener.
+ */
+function wireNav(card) {
+  const step = (delta) => {
+    const [y, m, d] = (card._day || dayKey(0)).split("-").map(Number);
+    card._day = localDay(new Date(y, m - 1, d + delta));
+    // a tapped bar belongs to the day it was tapped on
+    card._picked = null;
+    card._update();
+  };
+  const on = (id, fn) => {
+    const el = card.querySelector(id);
+    if (el) el.addEventListener("click", fn);
+  };
+  on("#pprev", () => step(-1));
+  on("#pnext", () => step(1));
+  on("#pday", () => {
+    card._day = dayKey(0);
+    card._picked = null;
+    card._update();
+  });
+}
+
+/** Which day is on show, and whether there is a later one to go to. */
+function renderNav(card, hours) {
+  const label = card.querySelector("#pday");
+  if (!label) return;
+  const day = card._day || (card._day = dayKey(0));
+  label.textContent = dayLabel(day);
+  const next = card.querySelector("#pnext");
+  if (!next) return;
+  // forward only as far as the supplier has published; back is unbounded,
+  // because that is a question for the recorder rather than for the feed
+  const published = (hours || []).map((h) => dayOf(h.start)).sort();
+  const last = published[published.length - 1] || dayKey(0);
+  next.classList.toggle("off", day >= last);
+}
+
+/**
+ * The slots to draw: published if the day is covered, else the recorder.
+ *
+ * Forward is free - the plan sensor already carries every slot the supplier
+ * has released, today and usually tomorrow. Backward has to be asked for, and
+ * `sensor.…_current_price` is the one to ask about: it carries a state class,
+ * so Home Assistant keeps long-term statistics of it, and those survive the
+ * recorder's purge. Raw history would only reach back ten days.
+ */
+function chartSlots(card, hours) {
+  const day = card._day || (card._day = dayKey(0));
+  const published = slotsOnDay(hours, day);
+  if (published.length) return published;
+  const cached = (card._history || {})[day];
+  if (cached) return cached;
+  fetchDay(card, day);
+  return [];
+}
+
+/** Ask the recorder for one day of hourly means, once. */
+async function fetchDay(card, day) {
+  card._history = card._history || {};
+  card._fetching = card._fetching || {};
+  if (card._fetching[day] || card._history[day]) return;
+
+  const hass = card._hass;
+  const entity = resolveRelated(
+    hass,
+    card._config && card._config.prices,
+    "_plan",
+    "_current_price"
+  );
+  if (!hass || !entity || typeof hass.callWS !== "function") {
+    // nothing to ask, or nobody to ask: remember that, so a reader flicking
+    // through days does not fire a request per tick for the rest of the day
+    card._history[day] = [];
+    return;
+  }
+
+  card._fetching[day] = true;
+  const window = dayRange(day);
+  try {
+    const answer = await hass.callWS({
+      type: "recorder/statistics_during_period",
+      start_time: window.start,
+      end_time: window.end,
+      statistic_ids: [entity],
+      // hourly on purpose: a quarter-hourly feed is 96 bars a day, which is
+      // unreadable at this width and tells you nothing a mean does not
+      period: "hour",
+      types: ["mean"],
+    });
+    card._history[day] = historySlots(answer && answer[entity]);
+  } catch (err) {
+    card._history[day] = [];
+  }
+  delete card._fetching[day];
+  card._update();
+}
+
+/** The plain average of a day, which is the number a past day is about. */
+function dayAverage(slots) {
+  const values = (slots || []).map((h) => Number(h.price)).filter((v) => !isNaN(v));
+  if (!values.length) return null;
+  return values.reduce((a, b) => a + b, 0) / values.length;
+}
+
+/**
  * Which slot the readout is about: the one tapped, else the one happening now.
  *
  * Kept apart from the drawing so it can be tested, and so both cards answer the
@@ -352,16 +605,23 @@ class BatteryManagementCard extends HTMLElement {
       return;
     }
     wrap.style.display = "block";
+    renderNav(this, hours);
+    const slots = chartSlots(this, hours);
     drawPrices(
       this.querySelector("#plot"),
       this.querySelector("#paxis"),
-      hours,
+      slots,
       this._picked
     );
-    const { slot, live } = pickedSlot(hours, this._picked);
+    const { slot, live } = pickedSlot(slots, this._picked);
+    const average = dayAverage(slots);
     this.querySelector("#pnow").textContent = slot
       ? `${live ? "nu" : hhmm(slot.start)} ${slot.value.toFixed(3)} €/kWh`
-      : "";
+      : average !== null
+      ? `gemiddeld ${average.toFixed(3)} €/kWh`
+      : slots.length
+      ? ""
+      : "geen gegevens";
   }
 
   /**
@@ -451,77 +711,21 @@ class BatteryManagementCard extends HTMLElement {
   }
 
   /**
-   * An entity this card needs, named in the config or worked out from the
-   * setpoint sensor sitting next to it.
+   * An entity this card needs: named in the config, or found next to the
+   * setpoint sensor it was given.
    *
    * `getStubConfig` fills these in, but only for a card being *added*. A card
    * already on a dashboard keeps the config it was created with, so every
-   * release that introduces an entity would otherwise mean hand-editing YAML
-   * on every dashboard that already has one - which is exactly the thing this
-   * integration is meant to avoid, since it is installed at several sites and
-   * maintained from one place.
-   *
-   * These all belong to one config entry and share its prefix, so there is
-   * nothing to guess: an explicit setting still wins, and a derived id that
-   * does not exist is simply skipped by the caller.
+   * release introducing an entity would otherwise mean hand-editing YAML on
+   * every dashboard that already has one - the thing this integration exists
+   * to avoid, being installed at several sites and maintained from one place.
    */
   _entity(key, suffix, domain = "sensor") {
     const c = this._config;
     if (c[key]) return c[key];
-    if (!c.setpoint || !this._hass) return undefined;
-    // A plain string, not a template literal, and `[0-9]` rather than `\d`:
-    // the backslash did not survive being written into a source file, twice,
-    // and a template literal ate it silently rather than complaining.
-    const tail = new RegExp(suffix + "(_[0-9]+)?$");
-
-    // First choice: whatever is on the same device as the setpoint sensor.
-    // The registry knows that outright, and it is the only route that
-    // survives a device rename. A name is a snapshot of what the device was
-    // called when that particular entity was created, so entities from before
-    // a rename keep the old slug while later ones get the new - one install,
-    // two prefixes, and half of it unreachable by name. That is what put
-    // "laadtelling niet gevonden" on a dashboard whose counters were working.
-    const onDevice = this._sameDevice(c.setpoint, domain, tail);
-    if (onDevice) return onDevice;
-
-    // Otherwise fall back to the name. Older frontends expose no registry at
-    // all, and an install that has never been renamed resolves here fine.
-    const prefix = c.setpoint.slice("sensor.".length, -"_setpoint".length);
-    const exact = `${domain}.${prefix}${suffix}`;
-    if (this._hass.states[exact]) return exact;
-    // Home Assistant appends _2 when the id it wants is already taken.
-    const head = `${domain}.${prefix}`;
-    return Object.keys(this._hass.states)
-      .filter((id) => id.startsWith(head) && tail.test(id))
-      .sort((a, b) => a.length - b.length)[0];
+    return resolveRelated(this._hass, c.setpoint, "_setpoint", suffix, domain);
   }
 
-  /**
-   * The one entity on this integration's own device that ends the right way.
-   *
-   * Asking the entity registry instead of reading a name off another entity:
-   * the device id is what these actually have in common, and unlike a slug it
-   * does not change when somebody renames the device.
-   *
-   * Requires the entity to have a state as well as a registry entry, so a
-   * disabled one is never returned as if it were readable. Older frontends
-   * expose no `hass.entities`, and there this declines and the caller falls
-   * back to matching on the name.
-   */
-  _sameDevice(anchor, domain, tail) {
-    const reg = this._hass && this._hass.entities;
-    const device = reg && reg[anchor] && reg[anchor].device_id;
-    if (!device) return undefined;
-    return Object.keys(reg)
-      .filter(
-        (id) =>
-          id.startsWith(domain + ".") &&
-          reg[id].device_id === device &&
-          tail.test(id) &&
-          this._hass.states[id]
-      )
-      .sort((a, b) => a.length - b.length)[0];
-  }
 
   _build() {
     const c = this._config;
@@ -593,6 +797,7 @@ ${PRICE_CSS}
             <div class="phead"><span>Prijs per uur</span><span id="pnow" class="muted"></span></div>
             <div class="plot" id="plot"></div>
             <div class="paxis" id="paxis"></div>
+${PRICE_NAV}
 ${PRICE_LEGEND}
           <div class="plan" id="plan" style="display:none"></div>
         </div>
@@ -603,6 +808,7 @@ ${PRICE_LEGEND}
       this._svc("switch", "toggle", { entity_id: c.enable });
     });
     wirePlot(this);
+    wireNav(this);
     // Changing the mode is the one control here that is not a toggle, so it is
     // a plain <select>: it is what every phone already knows how to open.
     this.querySelector("#mode").addEventListener("change", (event) => {
@@ -946,11 +1152,13 @@ ${PRICE_CSS}
           <div class="sub" id="psub"></div>
           <div class="plot" id="plot"></div>
           <div class="paxis" id="paxis"></div>
+${PRICE_NAV}
           <div class="ends" id="pends"></div>
 ${PRICE_LEGEND}
         </div>
       </ha-card>`;
     wirePlot(this);
+    wireNav(this);
     this._built = true;
   }
 
@@ -974,16 +1182,32 @@ ${PRICE_LEGEND}
       return;
     }
 
+    renderNav(this, hours);
+    const slots = chartSlots(this, hours);
     drawPrices(
       this.querySelector("#plot"),
       this.querySelector("#paxis"),
-      hours,
+      slots,
       this._picked
     );
 
-    const { slot, live } = pickedSlot(hours, this._picked);
-    const s = { ...priceSummary(hours), current: slot };
-    big.textContent = s.current ? `${s.current.value.toFixed(3)} €/kWh` : "—";
+    if (!slots.length) {
+      // a day with nothing on it: say which of the two it is, rather than
+      // leaving an empty frame that reads as a broken chart
+      big.textContent = "—";
+      sub.textContent = (this._history || {})[this._day]
+        ? "Geen prijzen bewaard voor deze dag."
+        : "Bezig met ophalen…";
+      this.querySelector("#pends").innerHTML = "";
+      return;
+    }
+
+    const { slot, live } = pickedSlot(slots, this._picked);
+    const s = { ...priceSummary(slots), current: slot };
+    const average = dayAverage(slots);
+    big.textContent = s.current
+      ? `${s.current.value.toFixed(3)} €/kWh`
+      : `${average.toFixed(3)} €/kWh`;
     big.style.color = s.current
       ? PRICE_COLOUR[PRICE_COLOUR[s.current.role] ? s.current.role : "normal"]
       : "var(--primary-text-color)";
@@ -991,7 +1215,11 @@ ${PRICE_LEGEND}
       ? (live ? "nu" : `${hhmm(s.current.start)}–${hhmm(s.current.end)}`) +
         ` — ${PRICE_SAYS[s.current.role] || ""}` +
         (live ? `, tot ${hhmm(s.current.end)}` : " · tik nogmaals voor nu")
-      : "buiten de gepubliceerde uren";
+      // A day that is over, or one that has not started. The average is what
+      // that day is about, and the bars stay grey: which hours were bought on
+      // was decided against the ranking of the day itself and recorded
+      // nowhere, so colouring them now would invent decisions.
+      : "gemiddeld over " + dayLabel(this._day) + " · tik een staaf aan";
     this.querySelector("#pends").innerHTML =
       `<span><span class="muted">laagste</span> <b>${s.low.value.toFixed(3)}</b>` +
       ` <span class="muted">om ${hhmm(s.low.start)}</span></span>` +
