@@ -539,6 +539,33 @@ possible, and they gate section A.
 
 ### H. Done
 
+- **A pack is either off or working properly, 2026-08-19.** The primary site's
+  Anker integration warned "the input power of 63 W is below the optimal
+  operating range, control accuracy may deviate", with `min_output` set to 100.
+  - **First diagnosis was wrong, and worth recording why.** Reading
+    `_distribute` alone said there was no floor under the total, so one was
+    proposed - and it already existed, shipped in 9e499b8, in the *caller*. The
+    duplicate was reverted. Read the call site before concluding a mechanism is
+    missing.
+  - What was actually missing is that the floor governed whether the packs run
+    at all, not *what they are given*. Inside the hysteresis band - between
+    three quarters of the floor and the floor, which the latch deliberately
+    holds so the packs do not flap on and off every tick - the raw setpoint was
+    passed straight through, so one pack was commanded 88 W. Now the demand is
+    raised to the floor there instead. It overshoots by tens of watts, which
+    the deadband absorbs by construction, and tens of watts through a pack that
+    is regulating beats the same watts through one that is not.
+  - A second guard, for the case `_distribute` cannot fix by re-splitting: when
+    every ceiling is below the floor (a nearly-full leg, a nearly-full pack)
+    the last pack standing is clamped back under it, and there is nowhere to
+    hand the remainder. That goes to 0 rather than out of the door.
+  - Both were verified by reintroducing the bug, and the first attempt at the
+    test suite **caught neither**: a sweep of house loads never lands the
+    setpoint inside the band, because the fixture's meter does not respond to
+    the packs and the integrator walks straight past it. The band has to be
+    parked in deliberately - setpoint set, latch engaged, error inside the
+    deadband - which is one tick and pins it exactly.
+
 - **The card became a control, 2026-08-18.** Asked for by the owner: see which
   mode it is on *and change it*, plus how much was charged from the sun and how
   much from the grid. Cost deliberately left out - that lives on the Energy

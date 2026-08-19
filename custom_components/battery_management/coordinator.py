@@ -2898,6 +2898,24 @@ class BatteryCoordinator:
             elif abs(sp) < floor * MIN_OUTPUT_RELEASE:
                 self._above_min_output = False
 
+            # What to ask for, which is not the same as what the loop wants.
+            #
+            # A pack is either off or working properly; there is no useful
+            # in-between, and its own firmware says so ("input power of 63 W is
+            # below the optimal operating range, control accuracy may
+            # deviate"). Inside the hysteresis band the setpoint sits under the
+            # floor while the packs stay engaged, and handing that straight on
+            # is exactly how one pack ends up commanded 88 W. So the demand is
+            # raised to the floor instead.
+            #
+            # That overshoots by a few tens of watts. The deadband absorbs it -
+            # it is smaller than the deadband by construction on any sane
+            # configuration - and a few tens of watts through a pack that is
+            # regulating properly beats the same watts through one that is not.
+            demand = sp
+            if floor > 0 and abs(sp) < floor:
+                demand = floor if sp > 0 else -floor
+
             if floor > 0 and not self._above_min_output and not self.fast_charge:
                 flow = FLOW_CHARGE
                 alloc = {n: 0 for n in online}
@@ -2914,7 +2932,7 @@ class BatteryCoordinator:
                     for n, s in online.items()
                     if self._may_discharge(n, s)
                 }
-                alloc = self._distribute(sp, weights, umax, self._min_output)
+                alloc = self._distribute(demand, weights, umax, self._min_output)
                 self.status = "discharging"
             elif sp < 0:  # charge
                 flow = FLOW_CHARGE
@@ -2922,12 +2940,24 @@ class BatteryCoordinator:
                     n: max(s.charge_limit - s.soc, 0.0)
                     for n, s in online.items() if s.soc < s.charge_limit
                 }
-                alloc = self._distribute(-sp, weights, umax, self._min_output)
+                alloc = self._distribute(-demand, weights, umax, self._min_output)
                 self.status = "charging"
             else:
                 flow = FLOW_CHARGE
                 alloc = {n: 0 for n in online}
                 self.status = "idle"
+
+            # Last word on the floor, because a ceiling can undo it.
+            #
+            # `_distribute` drops a pack whose share falls under the floor and
+            # re-splits, so the usual case is already handled. What it cannot
+            # fix is the last pack standing being clamped by a ceiling of its
+            # own - the fuse limit most often, a nearly-full pack otherwise.
+            # Then one pack is left holding, say, 60 W, and 60 W is not a
+            # smaller version of the job: it is a number the pack's firmware
+            # rejects as below its operating range. Off is the honest answer.
+            if floor > 0 and not self.fast_charge:
+                alloc = {n: (v if abs(v) >= floor else 0) for n, v in alloc.items()}
 
             for name, s in online.items():
                 cfg = cfg_by_name[name]
