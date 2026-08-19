@@ -469,24 +469,58 @@ class BatteryManagementCard extends HTMLElement {
     const c = this._config;
     if (c[key]) return c[key];
     if (!c.setpoint || !this._hass) return undefined;
+    // A plain string, not a template literal, and `[0-9]` rather than `\d`:
+    // the backslash did not survive being written into a source file, twice,
+    // and a template literal ate it silently rather than complaining.
+    const tail = new RegExp(suffix + "(_[0-9]+)?$");
+
+    // First choice: whatever is on the same device as the setpoint sensor.
+    // The registry knows that outright, and it is the only route that
+    // survives a device rename. A name is a snapshot of what the device was
+    // called when that particular entity was created, so entities from before
+    // a rename keep the old slug while later ones get the new - one install,
+    // two prefixes, and half of it unreachable by name. That is what put
+    // "laadtelling niet gevonden" on a dashboard whose counters were working.
+    const onDevice = this._sameDevice(c.setpoint, domain, tail);
+    if (onDevice) return onDevice;
+
+    // Otherwise fall back to the name. Older frontends expose no registry at
+    // all, and an install that has never been renamed resolves here fine.
     const prefix = c.setpoint.slice("sensor.".length, -"_setpoint".length);
     const exact = `${domain}.${prefix}${suffix}`;
     if (this._hass.states[exact]) return exact;
-    // Home Assistant appends _2 when the id it wants is already taken, and an
-    // entity created before a device was renamed keeps its old slug. Either
-    // way the result is still recognisably ours, so look for it rather than
-    // reporting nothing found - guessing the exact slug is what put "gezocht:
-    // ..._charged" on a dashboard whose counter was working perfectly.
+    // Home Assistant appends _2 when the id it wants is already taken.
     const head = `${domain}.${prefix}`;
-    // a plain string, not a template literal: a template literal eats the
-    // backslash and leaves the regex matching a literal d
-    // `[0-9]` rather than `\d`, so no backslash has to survive being written
-    // into a string inside a source file - it did not, twice
-    const tail = new RegExp(suffix + "(_[0-9]+)?$");
-    const found = Object.keys(this._hass.states)
+    return Object.keys(this._hass.states)
       .filter((id) => id.startsWith(head) && tail.test(id))
-      .sort((a, b) => a.length - b.length);
-    return found[0];
+      .sort((a, b) => a.length - b.length)[0];
+  }
+
+  /**
+   * The one entity on this integration's own device that ends the right way.
+   *
+   * Asking the entity registry instead of reading a name off another entity:
+   * the device id is what these actually have in common, and unlike a slug it
+   * does not change when somebody renames the device.
+   *
+   * Requires the entity to have a state as well as a registry entry, so a
+   * disabled one is never returned as if it were readable. Older frontends
+   * expose no `hass.entities`, and there this declines and the caller falls
+   * back to matching on the name.
+   */
+  _sameDevice(anchor, domain, tail) {
+    const reg = this._hass && this._hass.entities;
+    const device = reg && reg[anchor] && reg[anchor].device_id;
+    if (!device) return undefined;
+    return Object.keys(reg)
+      .filter(
+        (id) =>
+          id.startsWith(domain + ".") &&
+          reg[id].device_id === device &&
+          tail.test(id) &&
+          this._hass.states[id]
+      )
+      .sort((a, b) => a.length - b.length)[0];
   }
 
   _build() {

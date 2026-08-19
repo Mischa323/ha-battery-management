@@ -61,7 +61,7 @@ const DUTCH = {
 };
 
 /** A card whose querySelector hands back a stub per selector. */
-function build(config, states) {
+function build(config, states, entities) {
   const els = new Map();
   const card = new Manage();
   card.querySelector = (sel) => {
@@ -74,6 +74,8 @@ function build(config, states) {
   card.calls = [];
   card.hass = {
     states,
+    // the frontend's entity registry: entity_id -> { device_id, ... }
+    entities: entities || {},
     callService: (domain, service, data) => card.calls.push([domain, service, data]),
     formatEntityState: (st, value) => DUTCH[value === undefined ? st.state : value],
   };
@@ -331,6 +333,47 @@ const nothing = build({ setpoint: SP }, { [SP]: { state: "51", attributes: {} } 
 check("and says so when there is nothing at all",
   nothing._els.get("cnote").textContent.includes("niets met"),
   nothing._els.get("cnote").textContent);
+
+// The case that cost four rounds: one device, two prefixes.
+//
+// A slug is a snapshot of what the device was called when that entity was
+// created. Rename the device and everything made afterwards gets the new name
+// while the old entities keep theirs - so half the integration becomes
+// unreachable by name, on an install where every counter is working.
+const renamedDevice = build(
+  { setpoint: SP },
+  {
+    [SP]: { state: "51", attributes: {} },
+    "sensor.thuisaccu_charged": { state: "12.5", attributes: {} },
+    "sensor.thuisaccu_charged_from_grid": { state: "2.5", attributes: {} },
+    // somebody else's counter, on another device, must never be picked up
+    "sensor.buurmans_charged": { state: "999", attributes: {} },
+  },
+  {
+    [SP]: { device_id: "dev1" },
+    "sensor.thuisaccu_charged": { device_id: "dev1" },
+    "sensor.thuisaccu_charged_from_grid": { device_id: "dev1" },
+    "sensor.buurmans_charged": { device_id: "dev2" },
+  }
+);
+check("the counters are found on the device, whatever they are called",
+  el(renamedDevice, "ctotal").textContent === "12.5 kWh" &&
+  el(renamedDevice, "csunt").textContent === "zon 10.0 kWh",
+  [el(renamedDevice, "ctotal").textContent, el(renamedDevice, "csunt").textContent]);
+check("and another device's counter is not borrowed",
+  el(renamedDevice, "ctotal").textContent !== "999.0 kWh",
+  el(renamedDevice, "ctotal").textContent);
+
+// a registry entry without a state is a disabled entity: never hand one back
+// as though it could be read
+const disabled = build(
+  { setpoint: SP },
+  { [SP]: { state: "51", attributes: {} } },
+  { [SP]: { device_id: "dev1" }, "sensor.x_charged": { device_id: "dev1" } }
+);
+check("a disabled entity is not treated as readable",
+  disabled._els.get("cnote").style.display === "block",
+  disabled._els.get("cnote").style.display);
 
 console.log(fails ? "\n" + fails + " FAILED" : "\nmode / policy / charge checks pass");
 process.exit(fails ? 1 : 0);
