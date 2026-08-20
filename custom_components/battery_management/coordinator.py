@@ -36,8 +36,8 @@ from .phases import (
 from .suppliers import FETCHERS, SOURCE_ENTITY, SOURCE_NONE
 from .trace import Trace
 from .prices import (
+    cheapest_slots,
     dearest_slots,
-    is_dear_now,
     parse_forecast,
     slot_at,
     slots_to_buy,
@@ -79,7 +79,6 @@ from .const import (
     CONF_CHARGE_BELOW_SOC,
     CONF_CHEAP_HOURS,
     CONF_PRICE_MARGIN,
-    CONF_DISCHARGE_ANYWAY_SOC,
     CONF_EXPENSIVE_HOURS,
     CONF_EXTERNAL_TIMEOUT,
     CONF_FULL_CHARGE_MINUTES,
@@ -104,7 +103,6 @@ from .const import (
     DEFAULT_PRICE_MARGIN,
     DEFAULT_BUY_CEILING_MAX,
     DEFAULT_BUY_CEILING_MIN,
-    DEFAULT_DISCHARGE_ANYWAY_SOC,
     DEFAULT_DISCHARGE_RECOVERY,
     DEFAULT_EXPENSIVE_HOURS,
     DEFAULT_FULL_CHARGE_MINUTES,
@@ -154,7 +152,6 @@ from .const import (
     POLICY_MIN_OUTPUT,
     POLICY_DISABLED,
     POLICY_DYNAMIC_CHARGE,
-    POLICY_DYNAMIC_HOLD,
     POLICY_SOLAR_HEADROOM,
     POLICY_DYNAMIC_NO_PRICES,
     POLICY_EXTERNAL,
@@ -364,9 +361,6 @@ class BatteryCoordinator:
         )
         self._expensive_hours: float = float(
             data.get(CONF_EXPENSIVE_HOURS, DEFAULT_EXPENSIVE_HOURS)
-        )
-        self._discharge_anyway_soc: float = float(
-            data.get(CONF_DISCHARGE_ANYWAY_SOC, DEFAULT_DISCHARGE_ANYWAY_SOC)
         )
         self._solar_forecast_max: float = float(
             data.get(CONF_SOLAR_FORECAST_MAX, DEFAULT_SOLAR_FORECAST_MAX)
@@ -1081,6 +1075,7 @@ class BatteryCoordinator:
         return {
             "price": round(current.price, 4),
             "role": self._price_role(current, now),
+            "buy": self._price_buys(current, now),
             "until": current.end.isoformat(),
             "next_price": round(nxt.price, 4) if nxt else None,
         }
@@ -1103,16 +1098,23 @@ class BatteryCoordinator:
         return None if current is None else round(current.price, 4)
 
     def _price_role(self, slot, now) -> str:
-        """Which decision this slot belongs to - the same one the chart draws.
+        """Which band this slot falls in - the ranking, not the plan.
 
-        "Cheap" is the narrowed set, not every hour that clears the margin: the
-        card is asked "when does the battery charge", and answering with four
-        candidate hours when only one will be spent is not that answer.
+        "Cheap" means `cheap_hours` worth of the cheapest hours ahead that clear
+        the margin: the hours this *would* buy on. For a while it meant the
+        narrowed set instead, on the reasoning that the card is asked "when does
+        the battery charge" and four candidates is not that answer. It made the
+        chart unreadable the other way - one lone green bar, and no way to see
+        the cheap stretch it was picked out of, which is what somebody plans
+        their washing around.
+
+        Both facts are now drawn, because they are genuinely two facts. This is
+        the band; `_price_buys` is the plan.
         """
         forecast = self._price_forecast() or []
-        if slot in slots_to_buy(
+        if slot in cheapest_slots(
             forecast, now, self._cheap_hours, PRICE_WINDOW_HOURS,
-            self._price_margin, self.hours_of_charge_needed(),
+            self._price_margin,
         ):
             return "cheap"
         if slot in dearest_slots(
@@ -1120,6 +1122,21 @@ class BatteryCoordinator:
         ):
             return "dear"
         return "normal"
+
+    def _price_buys(self, slot, now) -> bool:
+        """Whether this is one of the cheap hours the charging actually needs.
+
+        The narrower of the two: `cheapest_slots` says which hours are cheap
+        enough, this says which of them the packs have room for. Still an
+        intention and not a promise - the pack has to be low enough when the
+        hour arrives, and the sun may have made it moot - so the card marks it
+        and does not claim it.
+        """
+        forecast = self._price_forecast() or []
+        return slot in slots_to_buy(
+            forecast, now, self._cheap_hours, PRICE_WINDOW_HOURS,
+            self._price_margin, self.hours_of_charge_needed(),
+        )
 
     def remember_price_verdict(self, bought: bool = False) -> None:
         """Record what this hour was judged to be, while it still is this hour.
@@ -1140,9 +1157,10 @@ class BatteryCoordinator:
         if current is None:
             return
         entry = self.price_history.setdefault(
-            _slot_key(current), {"role": "normal", "bought": False}
+            _slot_key(current), {"role": "normal", "buy": False, "bought": False}
         )
         entry["role"] = self._price_role(current, now)
+        entry["buy"] = self._price_buys(current, now)
         entry["bought"] = entry["bought"] or bought
         cutoff = (now - timedelta(hours=PRICE_HISTORY_HOURS)).astimezone(
             timezone.utc
@@ -1171,7 +1189,14 @@ class BatteryCoordinator:
                 for slot in chosen
             ]
 
-        cheapest = slots_to_buy(
+        # Two sets, deliberately. `cheapest` is the band - the hours cheap
+        # enough to be worth buying on. `buying` is the plan - the few of them
+        # the packs still have room for. The chart draws the band as colour and
+        # the plan as an outline, so neither has to stand in for the other.
+        cheapest = cheapest_slots(
+            slots, now, self._cheap_hours, PRICE_WINDOW_HOURS, self._price_margin,
+        ) if slots else []
+        buying = slots_to_buy(
             slots, now, self._cheap_hours, PRICE_WINDOW_HOURS, self._price_margin,
             self.hours_of_charge_needed(),
         ) if slots else []
@@ -1194,6 +1219,7 @@ class BatteryCoordinator:
         # nothing recorded (the integration was not running) stays plain
         # "past", which is the honest answer for it.
         cheap_at = {_slot_key(slot) for slot in cheapest}
+        buy_at = {_slot_key(slot) for slot in buying}
         dear_at = {_slot_key(slot) for slot in dearest}
         day_start = dt_util.as_local(now).replace(
             hour=0, minute=0, second=0, microsecond=0
@@ -1208,6 +1234,15 @@ class BatteryCoordinator:
                 return "dear"
             return "normal"
 
+        def buys(slot, key):
+            # A past hour gets back what it was marked at the time, never a
+            # re-plan: the need shrinks as the packs fill, so recomputing would
+            # quietly un-mark hours the charging was actually aimed at. An hour
+            # recorded before this field existed has no answer and says no.
+            if slot.end <= now:
+                return bool(self.price_history.get(key, {}).get("buy"))
+            return key in buy_at
+
         hours = [
             {
                 "start": slot.start.isoformat(),
@@ -1215,6 +1250,7 @@ class BatteryCoordinator:
                 "price": round(slot.price, 4),
                 "past": slot.end <= now,
                 "role": role_of(slot, _slot_key(slot)),
+                "buy": buys(slot, _slot_key(slot)),
                 "bought": bool(
                     self.price_history.get(_slot_key(slot), {}).get("bought")
                 ),
@@ -1227,6 +1263,7 @@ class BatteryCoordinator:
             "has_prices": slots is not None,
             "hours": hours,
             "cheap_hours": describe(cheapest),
+            "buy_hours": describe(buying),
             "dear_hours": describe(dearest),
             "solar_remaining_kwh": self.solar_remaining(),
             "usable_capacity_kwh": self.usable_capacity_kwh(),
@@ -1383,29 +1420,6 @@ class BatteryCoordinator:
             return False, POLICY_SOLAR_HEADROOM if blame_the_sun else None
         self._buying_slot = _slot_key(current)
         return True, POLICY_DYNAMIC_CHARGE
-
-    def _dynamic_should_hold(self, online: dict) -> bool:
-        """Refuse to discharge now, to spend the charge on a dearer hour.
-
-        The packs hold less than a day's consumption, so the question is not
-        whether they can be filled but where the stored kWh are spent. Covering
-        a cheap midday hour from the battery and then buying at the evening peak
-        is the expensive way round.
-
-        Two exceptions, both about not wasting what is free: a nearly full pack
-        discharges anyway - refusing leaves nowhere for the sun still coming -
-        and without prices there is nothing to be clever with.
-        """
-        if self._expensive_hours <= 0:
-            return False
-        slots = self._price_forecast()
-        if slots is None:
-            return False
-        if is_dear_now(slots, dt_util.utcnow(), self._expensive_hours, PRICE_WINDOW_HOURS):
-            return False
-        if any(s.soc >= self._discharge_anyway_soc for s in online.values()):
-            return False
-        return True
 
     def minutes_to_full(self) -> int | None:
         """How long a fast charge would take from right now, in minutes.
@@ -1756,7 +1770,6 @@ class BatteryCoordinator:
                 "solar_produced_sensor": self._solar_produced_sensor,
                 "solar_forecast_max": self._solar_forecast_max,
                 "expensive_hours": self._expensive_hours,
-                "discharge_anyway_soc": self._discharge_anyway_soc,
                 "discharge_recovery": self._discharge_recovery,
                 "phase_sensors": self._phase_sensors,
                 "phase_limit_amps": self._phase_amps,
@@ -2961,12 +2974,6 @@ class BatteryCoordinator:
                     # hour looked cheap" but "the grid was paid during it"
                     self.remember_price_verdict(bought=True)
 
-            hold_policy = None
-            if self.mode == MODE_DYNAMIC and not dynamic_charge:
-                if self._dynamic_should_hold(online):
-                    upper = min(upper, 0.0)
-                    hold_policy = POLICY_DYNAMIC_HOLD
-
             external_sp, external_policy = (None, None)
             if self.mode == MODE_EXTERNAL:
                 external_sp, external_policy = self._external_target()
@@ -3006,7 +3013,6 @@ class BatteryCoordinator:
 
             self.active_policy = (
                 dynamic_policy
-                or hold_policy
                 or external_policy
                 or phase_policy
                 or self._classify(error, sp, online, maxdis, maxchg)

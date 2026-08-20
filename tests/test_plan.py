@@ -13,6 +13,7 @@ import pytest
 
 from custom_components.battery_management import coordinator as coordinator_module
 from custom_components.battery_management.const import (
+    CONF_CHARGE_BELOW_SOC,
     CONF_CHEAP_HOURS,
     CONF_EXPENSIVE_HOURS,
     CONF_FULL_CHARGE_MINUTES,
@@ -319,3 +320,115 @@ def test_the_hours_still_to_come_keep_their_roles(planned):
     ahead = [h for h in system.coordinator.plan()["hours"] if not h["past"]]
 
     assert {h["role"] for h in ahead} >= {"cheap", "dear"}
+
+
+# --- the band and the plan are two different facts, 2026-08-20 -------------
+#
+# Reported from the primary site: the chart showed one green bar where four
+# were expected. It was not a bug in the ranking - `slots_to_buy` had narrowed
+# correctly to the single hour the packs still had room for - but the chart had
+# only one channel to say it in, so the cheap *stretch* the hour was picked out
+# of had vanished. Both are now drawn: `role` is the band, `buy` is the plan.
+
+
+def cheap_day(cheap_hours: tuple[int, ...], dear_hour: int) -> dict:
+    """A day with several genuinely cheap hours, not just one bargain.
+
+    The existing fixture has a single 0.02 hour on an otherwise flat day, which
+    cannot tell the two sets apart: the margin filters everything else out, so
+    the band and the plan are both exactly that hour. Distinguishing them needs
+    a day where several hours clear the margin and the packs only need one.
+    """
+    midnight = NOW.replace(hour=0, minute=0, second=0, microsecond=0)
+    slots = []
+    for i in range(48):
+        start = midnight + timedelta(hours=i)
+        price = 0.40
+        if start.day == NOW.day and start.hour in cheap_hours:
+            # each a little cheaper than the last, so "which one first" is
+            # unambiguous and the plan has an obvious right answer
+            price = 0.05 + 0.01 * cheap_hours.index(start.hour)
+        elif start.day == NOW.day and start.hour == dear_hour:
+            price = 0.90
+        slots.append(
+            {
+                "start": start.isoformat(),
+                "end": (start + timedelta(hours=1)).isoformat(),
+                "value": price,
+            }
+        )
+    return {"raw_today": slots}
+
+
+@pytest.fixture
+def banded(build_system, monkeypatch):
+    """Four cheap hours ahead, and packs with room for roughly one of them.
+
+    `charge_below_soc` is raised to 90 on purpose. At the default of 40 an hour
+    of charging is 50 points of state of charge, so every pack below the
+    ceiling needs exactly one slot and every pack above it needs none - the
+    need is a step, and a step cannot show that the plan tracks the packs while
+    the band does not.
+    """
+
+    def _build(*, soc=(80.0, 80.0), **options):
+        monkeypatch.setattr(coordinator_module.dt_util, "utcnow", lambda: NOW)
+        system = build_system(
+            grid=300,
+            units=(("093", soc[0]), ("052", soc[1])),
+            **{
+                CONF_PRICE_SENSOR: PRICES,
+                CONF_FULL_CHARGE_MINUTES: 120,
+                CONF_CHEAP_HOURS: 4,
+                CONF_EXPENSIVE_HOURS: 3,
+                CONF_CHARGE_BELOW_SOC: 90,
+                **options,
+            },
+        )
+        # 13:00 through 16:00, all ahead of the 12:00 clock
+        system.hass.states.set(PRICES, 0.40, cheap_day((13, 14, 15, 16), 20))
+        system.coordinator.mode = MODE_DYNAMIC
+        return system
+
+    return _build
+
+
+def test_the_band_keeps_all_four_cheap_hours(banded):
+    """The regression: four asked for, four coloured, however few get bought."""
+    system = banded()
+
+    hours = system.coordinator.plan()["hours"]
+    cheap = [h for h in hours if h["role"] == "cheap"]
+
+    assert len(cheap) == 4
+    assert {h["start"][11:16] for h in cheap} == {"13:00", "14:00", "15:00", "16:00"}
+
+
+def test_the_plan_marks_only_the_hours_it_needs(banded):
+    """Packs at 80 % need about one hour, so one bar gets the outline."""
+    system = banded()
+
+    hours = system.coordinator.plan()["hours"]
+    buying = [h for h in hours if h["buy"]]
+
+    assert len(buying) == 1
+    # the cheapest of the band, not the one that happens to come first
+    assert buying[0]["start"][11:16] == "13:00"
+    assert buying[0]["role"] == "cheap"
+
+
+def test_every_planned_hour_is_also_in_the_band(banded):
+    """The outline can only ever sit on a green bar - it is a subset."""
+    for soc in ((10.0, 10.0), (50.0, 50.0), (80.0, 80.0), (99.0, 99.0)):
+        hours = banded(soc=soc).coordinator.plan()["hours"]
+
+        assert all(h["role"] == "cheap" for h in hours if h["buy"]), soc
+
+
+def test_emptier_packs_plan_more_of_the_band(banded):
+    """The band does not move with the state of charge; the plan does."""
+    full = banded(soc=(90.0, 90.0)).coordinator.plan()
+    empty = banded(soc=(10.0, 10.0)).coordinator.plan()
+
+    assert len(full["cheap_hours"]) == len(empty["cheap_hours"]) == 4
+    assert len(empty["buy_hours"]) > len(full["buy_hours"])

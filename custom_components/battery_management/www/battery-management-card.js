@@ -54,13 +54,26 @@ const PRICE_COLOUR = {
   // not running during it, or it comes from the recorder rather than the plan
   past: "var(--disabled-text-color, #8a8a8a)",
 };
+// The hours the charging is actually aimed at, drawn as a ring around the bar
+// rather than a fourth fill colour. Two reasons. The plan is a *subset* of the
+// cheap band, so it has to sit on top of green rather than replace it - a bar
+// cannot be two fills at once. And green/red already carries the band, which
+// is the worst pair for deuteranopia; blue is the one hue that stays distinct
+// from both under every common CVD, so the third channel does not need hue to
+// be told apart in the first place - it is a ring, and nothing else is.
+const PRICE_BUY_RING = "#3b82f6";
 // Deliberately "mag" and not "wordt". Being a cheap hour is one of three
 // conditions - the pack also has to be empty enough, and there must not be
 // more sun coming - so promising that charging happens here is a claim the
 // card cannot back up. A dashboard must not overstate what it knows.
+//
+// "dear" says nothing about what the packs will do, and that is the whole
+// point of it since 2026-08-20: the charge is no longer held back for these
+// hours. It is a price, drawn as a price. The card used to say "hiervoor wordt
+// bewaard", which was true of the old hold and is a lie about this one.
 const PRICE_SAYS = {
   cheap: "goedkoop genoeg om te kopen",
-  dear: "duur, hiervoor wordt bewaard",
+  dear: "duur uur",
   normal: "gewoon de meter volgen",
   past: "geweest",
 };
@@ -70,20 +83,30 @@ const PRICE_SAYS = {
 // "goedkoop genoeg om te kopen" about 09:00 at teatime reads as an offer.
 const PRICE_WAS = {
   cheap: "was goedkoop genoeg om te kopen",
-  dear: "was duur — bewaard voor dit uur",
+  dear: "was een duur uur",
   normal: "gewoon de meter gevolgd",
   past: "geweest",
 };
 
-/** What one bar says: its hour, its price, its verdict, and whether we bought. */
+/** What one bar says: its hour, its price, its verdict, and whether we bought.
+ *
+ * Three facts, strongest last and only one of them shown. "bought" is the grid
+ * actually being paid and only ever appears on an hour that has happened, so
+ * it can never read as a promise. "buy" is an intention and is worded as one -
+ * the pack still has to be low enough when the hour comes round, and the sun
+ * may have made it moot by then.
+ */
+function planSays(item, past) {
+  if (item.bought) return " — toen geladen";
+  if (!item.buy) return "";
+  return past ? " — hier zou hij laden" : " — hier gaat hij laden";
+}
+
 function slotLabel(bar) {
   const says = (bar.past ? PRICE_WAS : PRICE_SAYS)[bar.role] || "";
-  // "bought" is the stronger fact of the two: the role is what was intended,
-  // this is the grid actually being paid. Only ever set on hours that have
-  // happened, so it never reads as a promise.
   return (
     `${hhmm(bar.start)} — ${bar.price.toFixed(3)} €/kWh — ${says}` +
-    (bar.bought ? " — toen geladen" : "")
+    planSays(bar, bar.past)
   );
 }
 
@@ -102,6 +125,10 @@ const PRICE_CSS = `
   .slot.now .pbar { outline:2px solid var(--primary-text-color); outline-offset:1px; }
   /* dashed, so a tapped bar never gets mistaken for the current one */
   .slot.picked .pbar { outline:2px dashed var(--primary-text-color); outline-offset:1px; }
+  /* box-shadow and not outline: "now" and "picked" have both already claimed
+     the outline, and a planned hour can be either of those at the same time.
+     A ring drawn this way sits inside theirs instead of overwriting it. */
+  .pbar.buy { box-shadow:0 0 0 2px ${PRICE_BUY_RING}; }
           .paxis { display:flex; gap:2px; margin-top:4px; font-size:.72em;
                    color: var(--secondary-text-color); }
           .paxis span { flex:1 1 0; text-align:center; min-width:0; }
@@ -132,7 +159,8 @@ const PRICE_NAV = `
 const PRICE_LEGEND = `
             <div class="legend">
               <span><i style="background:${PRICE_COLOUR.cheap}"></i>Goedkoop genoeg om te kopen</span>
-              <span><i style="background:${PRICE_COLOUR.dear}"></i>Duur — hiervoor wordt bewaard</span>
+              <span><i style="background:transparent;box-shadow:inset 0 0 0 2px ${PRICE_BUY_RING}"></i>Hier gaat hij laden</span>
+              <span><i style="background:${PRICE_COLOUR.dear}"></i>Duur uur</span>
               <span><i style="background:${PRICE_COLOUR.normal}"></i>Verder de meter volgen</span>
               <span><i style="background:${PRICE_COLOUR.cheap};opacity:.35"></i>Geweest (vervaagd, kleur blijft)</span>
             </div>`;
@@ -399,6 +427,7 @@ function priceBars(hours) {
       const bar = {
         role,
         past,
+        buy: h.buy === true,
         bought: h.bought === true,
         start: h.start,
         price,
@@ -426,7 +455,8 @@ function drawPrices(plot, axis, hours, picked) {
         (b, i) =>
           `<div class="slot${b.current ? " now" : ""}` +
           `${i === picked ? " picked" : ""}" data-i="${i}" title="${esc(b.label)}">` +
-          `<div class="pbar ${b.down ? "down" : "up"}${b.past ? " past" : ""}" ` +
+          `<div class="pbar ${b.down ? "down" : "up"}${b.past ? " past" : ""}` +
+          `${b.buy ? " buy" : ""}" ` +
           `style="bottom:${b.bottom}%;height:${b.height}%;` +
           `background:${PRICE_COLOUR[b.role]}"></div></div>`
       )
@@ -1247,7 +1277,7 @@ ${PRICE_LEGEND}
     const gone = s.current && (s.current.past === true || at(s.current.end) <= Date.now());
     const says = s.current
       ? ((gone ? PRICE_WAS : PRICE_SAYS)[s.current.role] || "") +
-        (s.current.bought ? " — toen geladen" : "")
+        planSays(s.current, gone)
       : "";
     sub.textContent = s.current
       ? (live ? "nu" : `${hhmm(s.current.start)}–${hhmm(s.current.end)}`) +

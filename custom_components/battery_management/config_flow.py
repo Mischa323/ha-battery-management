@@ -33,7 +33,6 @@ from .const import (
     CONF_PRICE_SOURCE,
     CONF_SOLAR_FORECAST_MAX,
     CONF_SHADOW_SIMULATE,
-    CONF_DISCHARGE_ANYWAY_SOC,
     CONF_EXPENSIVE_HOURS,
     CONF_SOLAR_FORECAST_SENSORS,
     CONF_SOLAR_PRODUCED_SENSOR,
@@ -77,7 +76,6 @@ from .const import (
     DEFAULT_EXTERNAL_TIMEOUT,
     DEFAULT_FULL_CHARGE_MINUTES,
     DEFAULT_SHADOW_SIMULATE,
-    DEFAULT_DISCHARGE_ANYWAY_SOC,
     DEFAULT_EXPENSIVE_HOURS,
     DEFAULT_SOLAR_FORECAST_MAX,
     DEFAULT_INTERVAL,
@@ -288,12 +286,6 @@ def _dynamic_schema(defaults: dict) -> vol.Schema:
                 CONF_EXPENSIVE_HOURS,
                 default=defaults.get(CONF_EXPENSIVE_HOURS, DEFAULT_EXPENSIVE_HOURS),
             ): vol.Coerce(float),
-            vol.Optional(
-                CONF_DISCHARGE_ANYWAY_SOC,
-                default=defaults.get(
-                    CONF_DISCHARGE_ANYWAY_SOC, DEFAULT_DISCHARGE_ANYWAY_SOC
-                ),
-            ): int,
             # several: Forecast.Solar publishes one sensor per roof plane
             vol.Optional(
                 CONF_SOLAR_FORECAST_SENSORS,

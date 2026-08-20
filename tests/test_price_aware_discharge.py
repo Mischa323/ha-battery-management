@@ -1,9 +1,21 @@
-"""Spending the stored kWh where they save the most.
+"""Grid-zero is the floor, including outside the expensive hours.
 
-The packs hold less than a day's consumption at the primary site, so the useful
-question is not whether they can be filled but where their charge goes. Covering
-a cheap midday hour from the battery and then buying at the evening peak is the
-expensive way round.
+Dynamic mode used to refuse to discharge unless the current hour was one of the
+dearest ahead, so the stored kWh would go to the peak instead of to a cheap
+hour. It read well and it was wrong, and the night of 2026-08-19/20 at the
+primary site is why.
+
+The ranking runs over a rolling 24 h window, so at midnight that window already
+contains the coming evening peak. No night or morning hour can ever win it. The
+hold was therefore not occasional - it was guaranteed to last from midnight
+until the evening, every single day. That night it held 7.3 kWh untouched
+through 5.62 kWh of imports, at prices the same forecast said were not the
+cheapest ahead.
+
+The owner's ruling: after the cheap hours the packs simply hold the grid at
+zero. Running empty is an answer about how big the batteries are, not a reason
+to stop discharging. So `expensive_hours` now only colours the chart, and
+nothing bounds discharge but the packs' own limits.
 """
 from __future__ import annotations
 
@@ -13,13 +25,11 @@ import pytest
 
 from custom_components.battery_management import coordinator as coordinator_module
 from custom_components.battery_management.const import (
-    CONF_DISCHARGE_ANYWAY_SOC,
     CONF_EXPENSIVE_HOURS,
     CONF_PRICE_SENSOR,
     FLOW_DISCHARGE,
     MODE_DYNAMIC,
     MODE_GRID_ZERO,
-    POLICY_DYNAMIC_HOLD,
     POLICY_GRID_ZERO,
 )
 
@@ -66,15 +76,20 @@ def dynamic(build_system, monkeypatch):
     return _build
 
 
-async def test_holds_the_charge_during_a_cheap_hour(dynamic):
-    """Buy this hour from the grid instead, and keep the kWh for the peak."""
-    system = dynamic(dear_now=False)
+async def test_discharges_outside_the_dearest_hours(dynamic):
+    """The night of 2026-08-19: 57 % in the packs, the house on the grid.
+
+    This is the regression. The hour is not one of the dearest ahead and the
+    packs are nowhere near full, which is exactly the state that used to park
+    the setpoint at 0 and leave the house importing.
+    """
+    system = dynamic(dear_now=False, soc=(58.0, 57.0))
 
     await system.coordinator._async_tick(None)
 
-    assert system.coordinator.setpoint == 0
-    assert system.allocation() == {"Batterij 1": 0, "Batterij 2": 0}
-    assert system.coordinator.active_policy == POLICY_DYNAMIC_HOLD
+    assert system.coordinator.setpoint == 800
+    assert system.flows() == [FLOW_DISCHARGE, FLOW_DISCHARGE]
+    assert system.coordinator.active_policy == POLICY_GRID_ZERO
 
 
 async def test_discharges_during_the_dear_hour(dynamic):
@@ -87,10 +102,14 @@ async def test_discharges_during_the_dear_hour(dynamic):
     assert system.coordinator.active_policy == POLICY_GRID_ZERO
 
 
-async def test_a_nearly_full_pack_discharges_anyway(dynamic):
-    """Refusing would leave nowhere for the sun still to come. Spilling free
-    energy to save a few cents is a bad trade."""
-    system = dynamic(dear_now=False, soc=(95.0, 60.0))
+async def test_a_nearly_empty_pack_still_discharges(dynamic):
+    """Running out is a fact about the capacity, not a reason to stop.
+
+    The old escape hatch worked the other way round - only a *nearly full* pack
+    was allowed to discharge outside the peak. Low packs were precisely the ones
+    held back, which is how a 57 % pack sat out a whole night.
+    """
+    system = dynamic(dear_now=False, soc=(12.0, 10.0))
 
     await system.coordinator._async_tick(None)
 
@@ -98,18 +117,18 @@ async def test_a_nearly_full_pack_discharges_anyway(dynamic):
     assert system.coordinator.active_policy == POLICY_GRID_ZERO
 
 
-async def test_the_full_enough_threshold_is_configurable(dynamic):
-    system = dynamic(
-        dear_now=False, soc=(70.0, 60.0), **{CONF_DISCHARGE_ANYWAY_SOC: 65}
-    )
+async def test_expensive_hours_no_longer_bounds_anything(dynamic):
+    """It survives as the chart's colouring, so it must not touch the setpoint."""
+    for hours in (0, 1, 6, 12):
+        system = dynamic(dear_now=False, **{CONF_EXPENSIVE_HOURS: hours})
 
-    await system.coordinator._async_tick(None)
+        await system.coordinator._async_tick(None)
 
-    assert system.coordinator.setpoint == 800
+        assert system.coordinator.setpoint == 800, hours
 
 
-async def test_charging_is_never_blocked_by_holding(dynamic):
-    """Holding is a ceiling on discharge, not a freeze: surplus still goes in."""
+async def test_charging_is_still_never_blocked(dynamic):
+    """Surplus goes in whatever the hour costs."""
     system = dynamic(dear_now=False, grid=-1500)
 
     await system.coordinator._async_tick(None)
@@ -127,32 +146,10 @@ async def test_no_prices_means_no_cleverness(dynamic):
     assert system.coordinator.setpoint == 800
 
 
-async def test_it_only_applies_to_the_dynamic_mode(dynamic):
+async def test_grid_zero_mode_is_unchanged(dynamic):
     system = dynamic(dear_now=False)
     system.coordinator.mode = MODE_GRID_ZERO
 
     await system.coordinator._async_tick(None)
 
     assert system.coordinator.setpoint == 800
-
-
-async def test_setting_expensive_hours_to_zero_switches_it_off(dynamic):
-    system = dynamic(dear_now=False, **{CONF_EXPENSIVE_HOURS: 0})
-
-    await system.coordinator._async_tick(None)
-
-    assert system.coordinator.setpoint == 800
-
-
-async def test_holding_does_not_wind_the_integrator_up(dynamic):
-    """It reuses the existing clamp, so releasing cannot unleash stored error."""
-    system = dynamic(dear_now=False, grid=200)
-
-    for _ in range(10):
-        await system.coordinator._async_tick(None)
-    assert system.coordinator.setpoint == 0
-
-    system.coordinator.mode = MODE_GRID_ZERO
-    await system.coordinator._async_tick(None)
-
-    assert system.coordinator.setpoint == 200

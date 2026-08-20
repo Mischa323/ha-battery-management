@@ -178,3 +178,46 @@ async def test_hours_older_than_the_chart_are_dropped(site):
 
     assert "2026-08-01T10:00:00+00:00" not in system.coordinator.price_history
     assert system.coordinator.price_history  # today's is still there
+
+
+# --- the plan is remembered alongside the band, 2026-08-20 -----------------
+
+
+async def test_a_past_hour_remembers_whether_it_was_planned_for(site):
+    """`buy` is recorded like `role`, and read back rather than re-planned.
+
+    Re-planning a past hour would be worse than re-ranking it: the need shrinks
+    as the packs fill, so by evening the morning's charging hours would quietly
+    lose their outline - the chart would un-mark exactly the hours the charging
+    was aimed at.
+    """
+    system = site(soc=(5.0, 5.0))
+
+    await system.coordinator._async_tick(None)
+    assert hour_at(system, 10)["buy"] is True
+
+    # fill the packs right up, so nothing would be planned for now
+    move_to(system, START + timedelta(hours=2))
+    for prefix in ("093", "052"):
+        system.hass.states.set(f"sensor.{prefix}_soc", 100.0)
+    await system.coordinator._async_tick(None)
+
+    gone = hour_at(system, 10)
+    assert gone["past"] is True
+    assert gone["buy"] is True  # remembered, not re-planned
+
+
+async def test_an_hour_recorded_before_buy_existed_says_no(site):
+    """Persisted history from an older version has no `buy` field at all, and
+    guessing one from today's ranking is the thing this file exists to refuse."""
+    system = site()
+    key = START.replace(hour=10).isoformat()
+    system.coordinator.price_history[key] = {"role": "cheap", "bought": True}
+
+    move_to(system, START + timedelta(hours=2))
+    await system.coordinator._async_tick(None)
+
+    gone = hour_at(system, 10)
+    assert gone["role"] == "cheap"
+    assert gone["bought"] is True
+    assert gone["buy"] is False

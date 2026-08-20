@@ -263,16 +263,6 @@ def dearest_slots(
     return sorted(ranked[:wanted], key=lambda slot: slot.start)
 
 
-def is_dear_now(
-    slots: list[Slot], now: datetime, hours: float, window_hours: float = 24.0
-) -> bool:
-    """Is the slot we are in one of the dearest ahead?"""
-    current = slot_at(slots, now)
-    if current is None:
-        return False
-    return current in dearest_slots(slots, now, hours, window_hours)
-
-
 def is_cheap_now(
     slots: list[Slot],
     now: datetime,

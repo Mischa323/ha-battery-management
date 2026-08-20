@@ -115,13 +115,12 @@ CONF_SOLAR_FORECAST_MAX = "solar_forecast_max"  # fallback when capacity is unkn
 # How many of the day's dearest hours to keep the packs' charge for. A pack
 # smaller than a day's consumption is not short of cheap hours to fill on - the
 # question is where the stored kWh are spent.
+#
+# This no longer gates discharging - see the 2026-08-20 entry in CLAUDE.md. It
+# names the hours the chart colours as dear, and nothing else. Grid-zero is the
+# floor in every mode, so the packs cover the house whatever the hour costs.
 CONF_EXPENSIVE_HOURS = "expensive_hours"
 DEFAULT_EXPENSIVE_HOURS = 4
-# Above this state of charge, discharge anyway: refusing would leave no room for
-# the sun that is still coming, and spilling free energy to save a few cents is
-# a bad trade.
-CONF_DISCHARGE_ANYWAY_SOC = "discharge_anyway_soc"
-DEFAULT_DISCHARGE_ANYWAY_SOC = 90
 
 # Bounds the user puts around the computed buy-up-to ceiling. The calculation is
 # only as good as the solar forecast behind it - the primary site's under-reads
@@ -271,7 +270,6 @@ POLICY_MODE_CHARGE_ONLY = "mode_charge_only"        # mode forbids discharging
 POLICY_MODE_DISCHARGE_ONLY = "mode_discharge_only"  # mode forbids charging
 POLICY_MODE_PAUSE = "mode_pause"                    # mode holds everything at 0
 POLICY_DYNAMIC_CHARGE = "dynamic_charge"      # buying now because it is cheap
-POLICY_DYNAMIC_HOLD = "dynamic_hold"          # holding the charge for dearer hours
 POLICY_SOLAR_HEADROOM = "solar_headroom"      # not buying, the sun still fits
 POLICY_EXTERNAL = "external_plan"             # following someone else's plan
 POLICY_EXTERNAL_STALE = "external_stale"      # plan went quiet, regulating ourselves
@@ -292,7 +290,6 @@ POLICIES = [
     POLICY_MODE_DISCHARGE_ONLY,
     POLICY_MODE_PAUSE,
     POLICY_DYNAMIC_CHARGE,
-    POLICY_DYNAMIC_HOLD,
     POLICY_SOLAR_HEADROOM,
     POLICY_EXTERNAL,
     POLICY_EXTERNAL_STALE,

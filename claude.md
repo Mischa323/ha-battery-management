@@ -281,14 +281,15 @@ Build order, and why:
       production the threshold can be set against the site's own measured bias.
     Optional like everything else: no sensor, no change.
 
-15. ~~**Price-aware discharge, and solar headroom**~~ — **done.** Two halves of
-    one idea, both from the owner.
-    *Discharge:* the packs hold less than a day's consumption, so the question is
-    where the stored kWh are spent. In dynamic mode the setpoint's upper bound
-    goes to 0 outside the dearest `expensive_hours`, so a cheap midday hour is
-    bought from the grid and the charge is kept for the peak. Two escapes, both
-    about not wasting free energy: a pack above `discharge_anyway_soc` (90 %)
-    discharges regardless, and without prices there is nothing to be clever with.
+15. ~~**Price-aware discharge, and solar headroom**~~ — **the charging half is
+    done; the discharge half was built, ran, and was removed on 2026-08-20.**
+    *Discharge:* **gone. Do not rebuild it without reading the 2026-08-20 entry
+    in section H.** It bounded the setpoint's upper end to 0 outside the dearest
+    `expensive_hours`, to spend the stored kWh on the peak instead of on a cheap
+    hour. The reasoning was sound and the behaviour was not: the ranking runs
+    over a rolling 24 h window, so from midnight that window always already
+    contains the coming evening peak and no night or morning hour can ever win
+    it. `expensive_hours` survives, but only as the price chart's colouring.
     *Charging:* a whole-day solar forecast is right at 02:00 and wrong at 17:00,
     when most of it is already produced — the old veto read that as "lots of sun
     coming, do not buy" exactly when topping up for the evening was right. So it
@@ -541,6 +542,101 @@ possible, and they gate section A.
 
 ### H. Done
 
+- **The band and the plan are two facts, 2026-08-20.** Reported from the
+  primary site: the price chart showed one green bar where four were expected.
+  Nothing was miscalculating - `slots_to_buy` had correctly narrowed to the
+  single hour the packs still had room for - but the card had one channel to
+  say it in, so `_price_role` had been narrowed to match and the cheap
+  *stretch* the hour was picked out of vanished with it.
+
+  That stretch is what somebody actually plans a washing machine around, and it
+  is also the only way to see *why* a given hour was chosen. So both are drawn
+  now: `role` is the band (`cheapest_slots`, `cheap_hours` of them, margin
+  applied) and a new per-hour `buy` is the plan (`slots_to_buy`, narrowed by
+  the need). Green fill, blue ring.
+
+  - **The ring is a `box-shadow`, not an `outline`, and that is not a style
+    preference.** `.slot.now` and `.slot.picked` had both already claimed the
+    outline, and a planned hour can be the current hour or the tapped one at
+    the same moment - an outline would have silently replaced the "now" marker
+    on exactly the bar the reader is looking at. Pinned in `buy_ring.mjs`, and
+    verified by putting the outline back.
+  - **Blue because green and red are already spoken for.** The band uses the
+    worst possible pair for deuteranopia, which the steps were chosen against;
+    a third *fill* would have had to fight both. A ring does not need hue to be
+    told apart at all - it is the only ringed bar on the chart - and blue stays
+    distinct from both under every common CVD anyway.
+  - **`buy` is remembered, never re-planned.** The same rule the role already
+    followed, and for a sharper reason: the need *shrinks as the packs fill*,
+    so recomputing a past hour would un-mark precisely the hours the charging
+    had been aimed at. An hour recorded before the field existed has no answer
+    and says no rather than guessing.
+  - The tooltip clause is shared between the chart and the summary line
+    (`planSays`). The card has been bitten once already by giving one chart
+    everything and the other everything except the wiring.
+  - **No existing test could have caught the original narrowing**, which is why
+    it shipped. `test_plan.py`'s day has a single 0.02 hour on an otherwise flat
+    day, so the margin filters everything else out and the band and the plan are
+    the same one hour under either definition. The new fixture needs several
+    hours clearing the margin *and* packs with room for one - and it needs
+    `charge_below_soc` raised to 90, because at the default of 40 an hour of
+    charging is 50 SoC points and the need is a step function that cannot show
+    the plan tracking the packs while the band holds still.
+
+- **The hold went, 2026-08-20. Grid-zero is the floor, and it has to mean it.**
+  Reported from the primary site: the packs did not discharge overnight while
+  they were full enough, because they were already waiting for the expensive
+  hours. Two traces, 7517 ticks, and the fault is exactly as described.
+
+  *What the trace shows.* 19 Aug 18:00–00:00 local the packs discharged
+  normally, 93 % → 57 %, importing 0.11–0.19 kWh/h. At **00:00:02 local, on the
+  second**, the policy flipped to `dynamic_hold` with `upper_w = 0` and stayed
+  there for every one of the next 2263 ticks, to the end of the trace at 09:25.
+  Import over that stretch: **5.62 kWh**. SoC 57 % → 55 %, and those two points
+  are standby loss, not delivery. Available in the packs above their own floor:
+  ~7.3 kWh — enough to cover the whole night with 1.7 kWh to spare. Every tick
+  recorded `sp_reason = clamped_upper`: the integrator asked to discharge each
+  time and was refused each time.
+
+  *Why the hold was structural, not unlucky.* `is_dear_now` ranked over a
+  rolling 24 h window. At midnight that window is 00:00 → 24:00, which already
+  contains today's evening peak, so no night or morning hour can ever place in
+  the dearest few. The hold was therefore guaranteed to run from midnight to
+  the evening **every day**, not occasionally. The sharp break at 00:00:02 is
+  tomorrow's peak entering the window and outranking 23:00.
+
+  *And it was losing money, provably, without needing a forecast.* The policy
+  was `dynamic_hold` for all 2263 ticks and **never once** `dynamic_charge`.
+  So the same price feed that ordered the hold also said the night hours were
+  not among the cheapest — cheaper hours were still ahead, before the peak the
+  charge was being saved for. It paid the night rate for 5.62 kWh while sitting
+  on 7.3 kWh it refused to touch. The day before it had done exactly the
+  refilling it was refusing to count on: 8.7 kWh bought at 12:00–14:00, 93 % by
+  18:00.
+
+  *The owner's ruling, and it is broader than the bug.* Not "bound the hold
+  better" — remove it. After the cheap hours the packs simply hold the grid at
+  zero, always. Running empty is an answer about how big the batteries are, not
+  a reason to stop discharging. That is the section B rule (*grid-zero is not a
+  mode, it is the floor*) applied honestly: the hold was the one thing in here
+  that let the packs sit idle while the house imported.
+
+  *What went.* `_dynamic_should_hold`, its call site, `POLICY_DYNAMIC_HOLD`,
+  `discharge_anyway_soc` (it existed only as the hold's escape hatch), and
+  `is_dear_now` (nothing called it any more). `expensive_hours` stays, demoted
+  to colouring the chart — and the card's wording had to move with it. It said
+  *"duur — hiervoor wordt bewaard"*, which was true of the old hold and is a
+  lie about this one; a dashboard must not lie. It now reads *"duur uur"*,
+  a price drawn as a price.
+
+  *A tempting fix that was not taken.* The buy side already computes
+  `100 % − remaining sun / capacity` (`_solar_headroom_ceiling`), and mirroring
+  it as a discharge *floor* would have bounded the hold correctly — hold only
+  what the sun will not replace. It is a good mechanism and it was the
+  recommendation. The owner overruled it on the stronger ground that a battery
+  which will not cover the house is not doing its job at all, whatever the
+  arithmetic says. Recorded because the mirror will look clever again later.
+
 - **Spending the cheap hours in the right order, 2026-08-19.** Reported from
   the primary site: dynamic mode was switched on at 12:20 with `cheap_hours`
   at 4, the packs went 4 % → 50 % in the hour that followed, and the day's
@@ -563,12 +659,12 @@ possible, and they gate section A.
     it; without the latch the packs stop mid-charge and the rest of a cheap
     hour is thrown away. Latched on the slot's own key, so it cannot bleed
     into the next hour - a plain "we started buying" boolean would.
-  - Consequence on the card, and it is the answer to "why did a bar later in
-    the day suddenly go green": green now means *the hours this will spend*,
-    not *the hours that clear the ranking*. Fewer bars, and they stop moving
-    about as the rolling 24 h window slides. When the packs are full enough
-    that nothing will be bought there is **no green at all**, which is the
-    honest picture and not a broken chart.
+  - Consequence on the card - **and this half was reversed on 2026-08-20, see
+    below.** Green was narrowed to mean *the hours this will spend* rather than
+    *the hours that clear the ranking*. Fewer bars, and they stop moving about
+    as the rolling 24 h window slides. What it also did was hide the cheap
+    stretch entirely, so green is the band again and the plan is drawn as a
+    ring on top of it.
 
 - **Hours that have gone keep their verdict, 2026-08-19.** Also from the
   owner: the whole left half of the chart was flat grey by teatime, so it
