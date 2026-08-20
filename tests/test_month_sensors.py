@@ -142,3 +142,94 @@ def test_no_month_yet_means_no_reset_to_declare(build_system):
     system.coordinator.month_key = None
 
     assert ChargedThisMonthSensor(system.coordinator, system.entry).last_reset is None
+
+
+# --- day and week read the same accumulation, 2026-08-20 -------------------
+
+ChargedTodaySensor = sensor.ChargedTodaySensor
+ChargedFromGridTodaySensor = sensor.ChargedFromGridTodaySensor
+ChargedThisWeekSensor = sensor.ChargedThisWeekSensor
+ChargedFromGridThisWeekSensor = sensor.ChargedFromGridThisWeekSensor
+
+
+@pytest.fixture
+def three_periods(build_system, monkeypatch):
+    """Distinct figures per period, so a sensor reading the wrong one shows."""
+    monkeypatch.setattr(
+        coordinator_module.dt_util,
+        "now",
+        lambda: datetime(2026, 8, 20, 12, 0, tzinfo=timezone.utc),
+    )
+    system = build_system(grid=1000, charge_power=True)
+    c = system.coordinator
+    c.periods["day"].update(
+        key="2026-08-20", charged_wh=1000.0, grid_wh=250.0,
+        history={"2026-08-19": {"charged_kwh": 9.0, "grid_kwh": 3.0}},
+    )
+    c.periods["week"].update(
+        key="2026-W34", charged_wh=10000.0, grid_wh=2500.0, history={},
+    )
+    c.periods["month"].update(
+        key="2026-08", charged_wh=100000.0, grid_wh=25000.0, history={},
+    )
+    return system, c
+
+
+def test_each_sensor_reads_its_own_period(three_periods):
+    system, c = three_periods
+
+    assert ChargedTodaySensor(c, system.entry).native_value == 1.0
+    assert ChargedThisWeekSensor(c, system.entry).native_value == 10.0
+    assert ChargedThisMonthSensor(c, system.entry).native_value == 100.0
+    assert ChargedFromGridTodaySensor(c, system.entry).native_value == 0.25
+    assert ChargedFromGridThisWeekSensor(c, system.entry).native_value == 2.5
+    assert ChargedFromGridThisMonthSensor(c, system.entry).native_value == 25.0
+
+
+def test_every_period_declares_its_own_reset(three_periods):
+    """All six are TOTAL, and each resets at its own boundary. Getting this
+    wrong makes the statistics read every Monday as a replaced meter."""
+    system, c = three_periods
+
+    resets = {}
+    for cls in (
+        ChargedTodaySensor, ChargedFromGridTodaySensor,
+        ChargedThisWeekSensor, ChargedFromGridThisWeekSensor,
+        ChargedThisMonthSensor, ChargedFromGridThisMonthSensor,
+    ):
+        entity = cls(c, system.entry)
+        assert entity.state_class == "total", cls.__name__
+        assert entity.last_reset is not None, cls.__name__
+        resets[cls.__name__] = entity.last_reset.day
+
+    assert resets["ChargedTodaySensor"] == 20
+    assert resets["ChargedThisWeekSensor"] == 17     # the Monday
+    assert resets["ChargedThisMonthSensor"] == 1
+
+
+def test_the_unique_ids_do_not_collide(three_periods):
+    """Six sensors off one entry - a repeated id would silently drop five."""
+    system, c = three_periods
+
+    ids = {
+        cls(c, system.entry).unique_id
+        for cls in (
+            ChargedTodaySensor, ChargedFromGridTodaySensor,
+            ChargedThisWeekSensor, ChargedFromGridThisWeekSensor,
+            ChargedThisMonthSensor, ChargedFromGridThisMonthSensor,
+            ChargedTotalSensor,
+        )
+    }
+
+    assert len(ids) == 7
+
+
+def test_each_period_carries_its_own_history(three_periods):
+    system, c = three_periods
+
+    today = ChargedTodaySensor(c, system.entry).extra_state_attributes
+
+    assert today["period"] == "day"
+    assert today["key"] == "2026-08-20"
+    assert list(today["history"]) == ["2026-08-19"]
+    assert today["history"]["2026-08-19"]["solar_kwh"] == 6.0

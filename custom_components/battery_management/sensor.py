@@ -15,7 +15,14 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import DOMAIN, PHASE_DETECT_STATES, POLICIES
+from .const import (
+    DOMAIN,
+    PERIOD_DAY,
+    PERIOD_MONTH,
+    PERIOD_WEEK,
+    PHASE_DETECT_STATES,
+    POLICIES,
+)
 from .coordinator import BatteryCoordinator, UnitConfig
 
 
@@ -41,6 +48,10 @@ async def async_setup_entry(
             PhaseDetectionSensor(coordinator, entry),
             ChargedTotalSensor(coordinator, entry),
             ChargedFromGridSensor(coordinator, entry),
+            ChargedTodaySensor(coordinator, entry),
+            ChargedFromGridTodaySensor(coordinator, entry),
+            ChargedThisWeekSensor(coordinator, entry),
+            ChargedFromGridThisWeekSensor(coordinator, entry),
             ChargedThisMonthSensor(coordinator, entry),
             ChargedFromGridThisMonthSensor(coordinator, entry),
         ]
@@ -451,86 +462,136 @@ class ChargedFromGridSensor(_ChargedSensor):
         return {"charged_from_solar_kwh": round(solar / 1000.0, 3)}
 
 
-class _MonthlyChargedSensor(_ChargedSensor):
-    """The same measurement, over the calendar month in progress.
+class _PeriodChargedSensor(_ChargedSensor):
+    """The same measurement, over one calendar period.
 
     `TOTAL` rather than `TOTAL_INCREASING`, paired with `last_reset`. That pair
     is how Home Assistant is told "a drop to nought here is a new period, not a
     broken sensor" - without it the statistics engine would read every 1st of
-    the month as a meter that had been replaced, and the long-term sums would
-    be wrong in a way that only shows up a month later.
+    the month, and every Monday, and every midnight, as a meter that had been
+    replaced, and the long-term sums would be wrong in a way that only shows up
+    much later on a figure nobody can check by eye.
 
-    The lifetime counters stay exactly as they were. They are the ones the
-    Energy dashboard wants, and this is a second reading of the same meter, not
-    a replacement for it.
+    Three lengths of the *same* accumulation, not three measurements - the
+    coordinator counts once and these read it at day, week and month. The
+    lifetime counters stay exactly as they were; they are the ones the Energy
+    dashboard wants, and none of this replaces them.
     """
 
     _attr_state_class = SensorStateClass.TOTAL
+    #: which period this one reads, from `const.PERIODS`
+    _period: str
 
     @property
     def last_reset(self):
-        return self.coordinator.month_started_at
+        return self.coordinator.period_started_at(self._period)
 
 
-class ChargedThisMonthSensor(_MonthlyChargedSensor):
-    """This month's total, carrying the months before it as attributes.
+class _PeriodTotalSensor(_PeriodChargedSensor):
+    """A period's total, carrying the periods before it as attributes.
 
-    The history rides on this sensor rather than being published as a state,
-    because it is a record and not a measurement: it changes once a month, and
-    Home Assistant stores an unchanged attribute set once however many state
-    rows point at it. Both halves of every closed month are in the one dict, so
-    a month can never be read with its total from one place and its grid share
-    from another.
+    The history rides on the total rather than being published as its own
+    state, because it is a record and not a measurement: it changes once per
+    period, and Home Assistant stores an unchanged attribute set once however
+    many state rows point at it. All three figures of every closed period are
+    in the one dict, so a period can never be read with its total from one
+    place and its grid share from another.
     """
 
-    _attr_name = "Charged this month"
     _attr_icon = "mdi:battery-plus-variant"
+
+    @property
+    def native_value(self) -> float:
+        return self.coordinator.period_charged_kwh(self._period)
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        return {
+            "period": self._period,
+            "key": self.coordinator.periods[self._period]["key"],
+            "history": self.coordinator.period_history(self._period),
+        }
+
+
+class _PeriodGridSensor(_PeriodChargedSensor):
+    """The bought half of a period. The remainder came off the roof."""
+
+    _attr_icon = "mdi:transmission-tower-import"
+
+    @property
+    def native_value(self) -> float:
+        return self.coordinator.period_charged_kwh(self._period, grid=True)
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        # the remainder, never a second count: two independent counters would
+        # drift apart within a day and then the split would be a split of
+        # something that is not the whole
+        solar = max(
+            self.coordinator.period_charged_kwh(self._period)
+            - self.coordinator.period_charged_kwh(self._period, grid=True),
+            0.0,
+        )
+        return {"charged_from_solar_kwh": round(solar, 3)}
+
+
+# Written out rather than generated in a loop. Six short classes are greppable
+# from an entity id, which is what somebody staring at a dashboard actually
+# has to work backwards from; a factory would leave nothing to search for.
+
+
+class ChargedTodaySensor(_PeriodTotalSensor):
+    _attr_name = "Charged today"
+    _period = PERIOD_DAY
+
+    def __init__(self, coordinator, entry) -> None:
+        super().__init__(coordinator, entry)
+        self._attr_unique_id = f"{entry.entry_id}_charged_today"
+
+
+class ChargedFromGridTodaySensor(_PeriodGridSensor):
+    _attr_name = "Charged from grid today"
+    _period = PERIOD_DAY
+
+    def __init__(self, coordinator, entry) -> None:
+        super().__init__(coordinator, entry)
+        self._attr_unique_id = f"{entry.entry_id}_charged_from_grid_today"
+
+
+class ChargedThisWeekSensor(_PeriodTotalSensor):
+    _attr_name = "Charged this week"
+    _period = PERIOD_WEEK
+
+    def __init__(self, coordinator, entry) -> None:
+        super().__init__(coordinator, entry)
+        self._attr_unique_id = f"{entry.entry_id}_charged_this_week"
+
+
+class ChargedFromGridThisWeekSensor(_PeriodGridSensor):
+    _attr_name = "Charged from grid this week"
+    _period = PERIOD_WEEK
+
+    def __init__(self, coordinator, entry) -> None:
+        super().__init__(coordinator, entry)
+        self._attr_unique_id = f"{entry.entry_id}_charged_from_grid_this_week"
+
+
+class ChargedThisMonthSensor(_PeriodTotalSensor):
+    _attr_name = "Charged this month"
+    _period = PERIOD_MONTH
 
     def __init__(self, coordinator, entry) -> None:
         super().__init__(coordinator, entry)
         self._attr_unique_id = f"{entry.entry_id}_charged_this_month"
 
-    @property
-    def native_value(self) -> float:
-        return round(self.coordinator.month_charged_wh / 1000.0, 3)
 
-    @property
-    def extra_state_attributes(self) -> dict:
-        history = {
-            month: {
-                **figures,
-                # published rather than left to be subtracted, because the
-                # subtraction is the one thing a reader gets backwards
-                "solar_kwh": round(
-                    max(figures["charged_kwh"] - figures["grid_kwh"], 0.0), 3
-                ),
-            }
-            for month, figures in sorted(self.coordinator.month_history.items())
-        }
-        return {"month": self.coordinator.month_key, "history": history}
-
-
-class ChargedFromGridThisMonthSensor(_MonthlyChargedSensor):
-    """The bought half of this month. The remainder came off the roof."""
-
+class ChargedFromGridThisMonthSensor(_PeriodGridSensor):
     _attr_name = "Charged from grid this month"
-    _attr_icon = "mdi:transmission-tower-import"
+    _period = PERIOD_MONTH
 
     def __init__(self, coordinator, entry) -> None:
         super().__init__(coordinator, entry)
         self._attr_unique_id = f"{entry.entry_id}_charged_from_grid_this_month"
-
-    @property
-    def native_value(self) -> float:
-        return round(self.coordinator.month_charged_grid_wh / 1000.0, 3)
-
-    @property
-    def extra_state_attributes(self) -> dict:
-        solar = max(
-            self.coordinator.month_charged_wh - self.coordinator.month_charged_grid_wh,
-            0.0,
-        )
-        return {"charged_from_solar_kwh": round(solar / 1000.0, 3)}
 
 
 class UnitTargetSensor(_BaseSensor):

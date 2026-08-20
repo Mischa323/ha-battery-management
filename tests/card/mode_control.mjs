@@ -69,6 +69,10 @@ function build(config, states, entities) {
     if (!els.has(key)) els.set(key, new FakeEl());
     return els.get(key);
   };
+  // The period pills are addressed as a group, so the stub needs the plural
+  // too. Keyed by the whole selector, so `#cper .pill` is its own bucket and
+  // the test can hand back as many pills as it wants to look at.
+  card.querySelectorAll = (sel) => els.get(String(sel)) || [];
   card.setConfig(config);
   card._els = els;
   card.calls = [];

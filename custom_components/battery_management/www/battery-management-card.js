@@ -210,6 +210,21 @@ function stateLabel(hass, stateObj, value) {
 }
 
 /**
+ * The entity-id suffixes for each length of the charge split.
+ *
+ * Written out rather than built from the period name, so the ids the card
+ * looks for cannot move if the period keys are ever reworded - and so this
+ * file and `const.py` can be diffed against each other by eye. Mirrors
+ * `PERIOD_SUFFIX` there.
+ */
+const CHARGE_SUFFIX = {
+  day: ["_charged_today", "_charged_from_grid_today"],
+  week: ["_charged_this_week", "_charged_from_grid_this_week"],
+  month: ["_charged_this_month", "_charged_from_grid_this_month"],
+};
+const DEFAULT_PERIOD = "month";
+
+/**
  * How much of the charge came off the roof rather than off the meter.
  *
  * The sun is the *remainder*, not a third measurement, so the two halves add
@@ -632,6 +647,15 @@ class BatteryManagementCard extends HTMLElement {
     if (!config) throw new Error("Invalid configuration");
     this._config = config;
     this._built = false;
+    // Which length of the charge split to show. The month by default - a day
+    // says little on its own and the lifetime total stops moving in any useful
+    // way after a few months. `charge_period` sets what it opens on; tapping
+    // changes it for the session, and deliberately does not write itself back
+    // into the config, because a card cannot edit its own YAML and pretending
+    // otherwise would lose the choice on the next reload without saying why.
+    this._period = CHARGE_SUFFIX[config.charge_period]
+      ? config.charge_period
+      : DEFAULT_PERIOD;
   }
 
   set hass(hass) {
@@ -819,6 +843,14 @@ class BatteryManagementCard extends HTMLElement {
           /* the swatches repeat the bar's colours, but the words carry the
              meaning on their own - nobody should have to match a hue */
           .cnote { font-size:.82em; margin-top:4px; }
+          .pergroup { display:flex; gap:6px; margin:6px 0 8px; }
+          .pergroup .pill { font-size:.78em; padding:2px 10px; border-radius:10px;
+                            cursor:pointer; touch-action:manipulation;
+                            color: var(--secondary-text-color);
+                            border:1px solid var(--divider-color); }
+          .pergroup .pill.on { background: var(--primary-color);
+                               border-color: var(--primary-color);
+                               color: var(--text-primary-color, #fff); }
           .cleg i { display:inline-block; width:9px; height:9px; border-radius:3px;
                     margin-right:5px; vertical-align:middle; font-style:normal; }
           .prices { margin-top:12px; padding:10px 10px 6px; border-radius:10px;
@@ -846,7 +878,12 @@ ${PRICE_CSS}
           </div>
           <div id="units"></div>
           <div class="charge" id="charge" style="display:none">
-            <div class="uhead"><span id="chead">Geladen deze maand</span><span class="muted" id="ctotal">—</span></div>
+            <div class="uhead"><span>Geladen</span><span class="muted" id="ctotal">—</span></div>
+            <div class="pergroup" id="cper">
+              <span class="pill" data-period="day">Dag</span>
+              <span class="pill" data-period="week">Week</span>
+              <span class="pill" data-period="month">Maand</span>
+            </div>
             <div class="bar split" id="cbar"><div class="fill sun" id="csun"></div><div class="fill net" id="cnet"></div></div>
             <div class="muted cnote" id="cnote" style="display:none"></div>
             <div class="uhead muted cleg">
@@ -870,6 +907,15 @@ ${PRICE_LEGEND}
     });
     wirePlot(this);
     wireNav(this);
+    // Delegated to the group rather than bound per pill, so the handler
+    // survives `_update` rewriting the pills' classes - and so adding a period
+    // later is a markup change and nothing else.
+    this.querySelector("#cper").addEventListener("click", (event) => {
+      const pill = event.target.closest(".pill");
+      if (!pill) return;
+      this._period = pill.dataset.period;
+      this._renderCharge();
+    });
     // Changing the mode is the one control here that is not a toggle, so it is
     // a plain <select>: it is what every phone already knows how to open.
     this.querySelector("#mode").addEventListener("change", (event) => {
@@ -1006,9 +1052,19 @@ ${PRICE_LEGEND}
     const wrap = this.querySelector("#charge");
     const note = this.querySelector("#cnote");
     const bar = this.querySelector("#cbar");
-    const total = this._entity("charged_total", "_charged_this_month");
-    const grid = this._entity("charged_grid", "_charged_from_grid_this_month");
+    const period = CHARGE_SUFFIX[this._period] ? this._period : DEFAULT_PERIOD;
+    const [totalSuffix, gridSuffix] = CHARGE_SUFFIX[period];
+    // `charged_total` / `charged_grid` pin the **month** pair only. They are
+    // what `getStubConfig` writes and what older configs carry, so honouring
+    // them for every period would show the month under all three labels.
+    const explicit = period === DEFAULT_PERIOD;
+    const total = this._entity(explicit ? "charged_total" : null, totalSuffix);
+    const grid = this._entity(explicit ? "charged_grid" : null, gridSuffix);
     const split = chargeSplit(this._num(total), this._num(grid));
+
+    for (const pill of this.querySelectorAll("#cper .pill")) {
+      pill.classList.toggle("on", pill.dataset.period === period);
+    }
 
     if (!split) {
       // Says why, rather than vanishing. A block that hides itself when it

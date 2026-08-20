@@ -140,7 +140,11 @@ from .const import (
     FLOW_DISCHARGE,
     MAX_PRICE_AGE,
     MAX_ENERGY_GAP_INTERVALS,
-    MONTH_HISTORY_MONTHS,
+    PERIOD_DAY,
+    PERIOD_HISTORY,
+    PERIOD_MONTH,
+    PERIOD_WEEK,
+    PERIODS,
     MIN_OUTPUT_RELEASE,
     MAX_SETPOINT_AGE,
     MODE_CHARGE_ONLY,
@@ -203,6 +207,23 @@ _LOGGER = logging.getLogger(__name__)
 #: how long a slot's recorded verdict is kept. Two days covers the chart, which
 #: pages back one day, plus the restart that happens in the middle of it.
 PRICE_HISTORY_HOURS = 48
+
+
+def _period_key(name: str, local) -> str:
+    """The calendar period a local moment falls in, as a sortable string.
+
+    Sortable matters: the history is pruned with `sorted(...)[:-N]`, so the
+    format has to order the way the calendar does. ISO weeks carry their own
+    year, which is not always the calendar one - the last days of December can
+    belong to week 1 of the next year - so the ISO year is written, and
+    `period_started_at` parses it back the same way rather than by hand.
+    """
+    if name == PERIOD_DAY:
+        return local.strftime("%Y-%m-%d")
+    if name == PERIOD_WEEK:
+        iso = local.isocalendar()
+        return "%04d-W%02d" % (iso[0], iso[1])
+    return local.strftime("%Y-%m")
 
 
 def _slot_key(slot) -> str:
@@ -474,11 +495,14 @@ class BatteryCoordinator:
         #: closing figures of the months before it. The running totals answer
         #: "what have these packs ever done"; these answer "what did they do in
         #: March", which is the question actually asked of a battery.
-        #: `month_key` is a local "YYYY-MM" - see `_roll_month` for why local.
-        self.month_key: str | None = None
-        self.month_charged_wh: float = 0.0
-        self.month_charged_grid_wh: float = 0.0
-        self.month_history: dict[str, dict] = {}
+        #: One accumulation, read at three lengths. The keys are local
+        #: calendar periods - see `_roll_periods` for why local - and each
+        #: carries the periods that have already closed, so the packs can be
+        #: looked back on without a per-site helper.
+        self.periods: dict[str, dict] = {
+            name: {"key": None, "charged_wh": 0.0, "grid_wh": 0.0, "history": {}}
+            for name in PERIODS
+        }
         #: when the counters were last advanced, so the elapsed time is
         #: measured rather than assumed - a tick can be late
         self._charged_at: float | None = None
@@ -581,12 +605,17 @@ class BatteryCoordinator:
             # whatever their age - an old figure is the whole point of a total
             "charged_wh": self.charged_wh,
             "charged_grid_wh": self.charged_grid_wh,
-            # the month in progress and the ones that closed. Without the key
-            # a restart would look like a fresh month and quietly zero it.
-            "month_key": self.month_key,
-            "month_charged_wh": self.month_charged_wh,
-            "month_charged_grid_wh": self.month_charged_grid_wh,
-            "month_history": dict(self.month_history),
+            # the periods in progress and the ones that closed. Without the
+            # keys a restart would look like a fresh period and quietly zero it.
+            "periods": {
+                name: {
+                    "key": state["key"],
+                    "charged_wh": state["charged_wh"],
+                    "grid_wh": state["grid_wh"],
+                    "history": dict(state["history"]),
+                }
+                for name, state in self.periods.items()
+            },
             # a record of hours that have gone, so a restart at noon does not
             # grey out the morning the chart is being consulted about
             "price_history": dict(self.price_history),
@@ -639,29 +668,13 @@ class BatteryCoordinator:
                     "buy": bool(entry.get("buy")),
                     "bought": bool(entry.get("bought")),
                 }
-        for key in (
-            "charged_wh",
-            "charged_grid_wh",
-            "month_charged_wh",
-            "month_charged_grid_wh",
-        ):
+        for key in ("charged_wh", "charged_grid_wh"):
             # a meter reading, not runtime state: restored regardless of age
             # and regardless of whether the coordinator was even switched on.
             # A total that resets on restart is not a total.
             if stored and stored.get(key) is not None:
                 setattr(self, key, float(stored[key]))
-        if stored and stored.get("month_key"):
-            # Restored *before* the first tick, so `_roll_month` has something
-            # to compare against. Come back inside the same month and the
-            # figure carries on; come back after the 1st and that first tick
-            # closes the old month properly instead of losing it.
-            self.month_key = str(stored["month_key"])
-        for key, entry in (stored or {}).get("month_history", {}).items():
-            if isinstance(entry, dict):
-                self.month_history[key] = {
-                    "charged_kwh": float(entry.get("charged_kwh") or 0.0),
-                    "grid_kwh": float(entry.get("grid_kwh") or 0.0),
-                }
+        self._restore_periods(stored)
         if stored and stored.get("soc_reserve") is not None:
             # a user setting, not runtime state: restore it even when the
             # coordinator was switched off, and regardless of age
@@ -1989,12 +2002,15 @@ class BatteryCoordinator:
                 "write_stalled": self.write_stalled,
                 "charged_kwh": round(self.charged_wh / 1000.0, 3),
                 "charged_from_grid_kwh": round(self.charged_grid_wh / 1000.0, 3),
-                "month": self.month_key,
-                "charged_this_month_kwh": round(self.month_charged_wh / 1000.0, 3),
-                "charged_from_grid_this_month_kwh": round(
-                    self.month_charged_grid_wh / 1000.0, 3
-                ),
-                "month_history": dict(self.month_history),
+                "periods": {
+                    name: {
+                        "key": self.periods[name]["key"],
+                        "charged_kwh": self.period_charged_kwh(name),
+                        "from_grid_kwh": self.period_charged_kwh(name, grid=True),
+                        "history": self.period_history(name),
+                    }
+                    for name in PERIODS
+                },
                 "counts_charge_energy": self.counts_charge_energy,
                 # the fuse protection, including the evidence behind each
                 # placement - a probe that guessed wrong is only findable here
@@ -2199,53 +2215,165 @@ class BatteryCoordinator:
         """
         return any(u.charge_power_sensor for u in self._units)
 
-    def _roll_month(self) -> None:
-        """Close the month that has ended and start the next one at nought.
+    def _restore_periods(self, stored) -> None:
+        """Bring the running periods back, keys and all.
+
+        The keys are restored **before the first tick**, so `_roll_periods` has
+        something to compare against. Without them that tick finds no period,
+        treats the current one as brand new and silently starts it again - on a
+        site that reboots weekly the monthly figure would never cover more than
+        a few days.
+
+        An entry written before the split into three carries a flat month at
+        the top level. It is read as the month here, so an install that has
+        been counting does not lose what it had.
+        """
+        saved = (stored or {}).get("periods") or {}
+        if not saved and stored and stored.get("month_key"):
+            saved = {
+                PERIOD_MONTH: {
+                    "key": stored.get("month_key"),
+                    "charged_wh": stored.get("month_charged_wh") or 0.0,
+                    "grid_wh": stored.get("month_charged_grid_wh") or 0.0,
+                    "history": stored.get("month_history") or {},
+                }
+            }
+        for name, state in self.periods.items():
+            entry = saved.get(name)
+            if not isinstance(entry, dict):
+                continue
+            if entry.get("key"):
+                state["key"] = str(entry["key"])
+            for field in ("charged_wh", "grid_wh"):
+                if entry.get(field) is not None:
+                    state[field] = float(entry[field])
+            for key, figures in (entry.get("history") or {}).items():
+                if isinstance(figures, dict):
+                    state["history"][key] = {
+                        "charged_kwh": float(figures.get("charged_kwh") or 0.0),
+                        "grid_kwh": float(figures.get("grid_kwh") or 0.0),
+                    }
+
+    def _roll_periods(self) -> None:
+        """Close whichever periods have ended and start the next ones at nought.
 
         Checked against the clock every tick rather than scheduled. A boundary
         crossed while Home Assistant was down is then still honoured on the
-        first tick back, which a timer firing at midnight on the 1st cannot
-        promise - and a monthly figure that quietly keeps running because
-        nobody was awake for the changeover is worse than no figure at all.
+        first tick back, which a timer firing at midnight cannot promise - and a
+        figure that quietly keeps running because nobody was awake for the
+        changeover is worse than no figure at all. A week of downtime closes the
+        day, the week and the month in one go, each with what it had.
 
-        **Local months.** "The start of the month" is midnight where the house
+        **Local periods.** "The start of the day" is midnight where the house
         is, not in UTC, and for half of Europe those are different days. This
         repo has been caught by exactly that once already: the price chart
         sliced ISO strings instead of parsing them and labelled midnight 22:00.
 
-        The tick straddling the boundary is credited whole to the new month.
-        Splitting fifteen seconds of energy across two months would be arithmetic
-        nobody will ever read, and the error is bounded by one tick.
+        The tick straddling a boundary is credited whole to the new period.
+        Splitting fifteen seconds of energy across two months would be
+        arithmetic nobody will ever read, and the error is bounded by one tick.
         """
-        key = dt_util.now().strftime("%Y-%m")
-        if key == self.month_key:
-            return
-        if self.month_key is not None:
-            # what the month closed on, kept as kWh because that is what it
-            # will be read as - nothing downstream needs watt-hour resolution
-            # on a figure that no longer moves
-            self.month_history[self.month_key] = {
-                "charged_kwh": round(self.month_charged_wh / 1000.0, 3),
-                "grid_kwh": round(self.month_charged_grid_wh / 1000.0, 3),
-            }
-            for old in sorted(self.month_history)[:-MONTH_HISTORY_MONTHS]:
-                del self.month_history[old]
-        self.month_key = key
-        self.month_charged_wh = 0.0
-        self.month_charged_grid_wh = 0.0
+        local = dt_util.now()
+        for name, state in self.periods.items():
+            key = _period_key(name, local)
+            if key == state["key"]:
+                continue
+            if state["key"] is not None:
+                # what the period closed on, kept as kWh because that is what
+                # it will be read as - nothing downstream needs watt-hour
+                # resolution on a figure that no longer moves
+                state["history"][state["key"]] = {
+                    "charged_kwh": round(state["charged_wh"] / 1000.0, 3),
+                    "grid_kwh": round(state["grid_wh"] / 1000.0, 3),
+                }
+                for old in sorted(state["history"])[: -PERIOD_HISTORY[name]]:
+                    del state["history"][old]
+            state["key"] = key
+            state["charged_wh"] = 0.0
+            state["grid_wh"] = 0.0
 
-    @property
-    def month_started_at(self):
-        """Local midnight on the 1st of the month in progress.
+    def period_started_at(self, name: str):
+        """When the period in progress began, as local midnight.
 
         Home Assistant needs this to record a resetting total correctly: it is
         what tells the statistics engine that a drop to nought is a new period
-        and not a broken sensor.
+        and not a meter that has been replaced.
         """
-        if not self.month_key:
+        key = self.periods[name]["key"]
+        if not key:
             return None
-        year, month = (int(part) for part in self.month_key.split("-"))
-        return dt_util.start_of_local_day(date(year, month, 1))
+        if name == PERIOD_DAY:
+            start = date.fromisoformat(key)
+        elif name == PERIOD_WEEK:
+            # ISO weeks, so the year in the key is the ISO year and can differ
+            # from the calendar one across New Year - which is exactly why it
+            # is parsed back the same way it was written rather than by hand
+            iso_year, iso_week = key.split("-W")
+            start = date.fromisocalendar(int(iso_year), int(iso_week), 1)
+        else:
+            year, month = (int(part) for part in key.split("-"))
+            start = date(year, month, 1)
+        return dt_util.start_of_local_day(start)
+
+    def period_charged_kwh(self, name: str, grid: bool = False) -> float:
+        """What went into the packs this period, or the bought half of it."""
+        state = self.periods[name]
+        return round(state["grid_wh" if grid else "charged_wh"] / 1000.0, 3)
+
+    def period_history(self, name: str) -> dict:
+        """The periods that have closed, oldest first, with all three figures.
+
+        The sun share is published rather than left to be subtracted, because
+        the subtraction is the one thing a reader gets backwards.
+        """
+        return {
+            key: {
+                **figures,
+                "solar_kwh": round(
+                    max(figures["charged_kwh"] - figures["grid_kwh"], 0.0), 3
+                ),
+            }
+            for key, figures in sorted(self.periods[name]["history"].items())
+        }
+
+    # The month keeps named accessors because the diagnostics, the tests and
+    # the older sensors all speak of it directly. They are views on `periods`,
+    # not a second copy - two copies of a running total drift within a day.
+    @property
+    def month_key(self):
+        return self.periods[PERIOD_MONTH]["key"]
+
+    @month_key.setter
+    def month_key(self, value):
+        self.periods[PERIOD_MONTH]["key"] = value
+
+    @property
+    def month_charged_wh(self) -> float:
+        return self.periods[PERIOD_MONTH]["charged_wh"]
+
+    @month_charged_wh.setter
+    def month_charged_wh(self, value: float) -> None:
+        self.periods[PERIOD_MONTH]["charged_wh"] = value
+
+    @property
+    def month_charged_grid_wh(self) -> float:
+        return self.periods[PERIOD_MONTH]["grid_wh"]
+
+    @month_charged_grid_wh.setter
+    def month_charged_grid_wh(self, value: float) -> None:
+        self.periods[PERIOD_MONTH]["grid_wh"] = value
+
+    @property
+    def month_history(self) -> dict:
+        return self.periods[PERIOD_MONTH]["history"]
+
+    @month_history.setter
+    def month_history(self, value: dict) -> None:
+        self.periods[PERIOD_MONTH]["history"] = value
+
+    @property
+    def month_started_at(self):
+        return self.period_started_at(PERIOD_MONTH)
 
     def _accumulate_charge(self, grid: float | None) -> None:
         """Advance the two energy counters by one tick.
@@ -2278,7 +2406,7 @@ class BatteryCoordinator:
         # Before the early returns below, not after: a month must turn over on
         # its own boundary even across a tick that counts nothing - an outage,
         # an unreadable meter, or simply no charging power sensor configured.
-        self._roll_month()
+        self._roll_periods()
 
         now = time.time()
         previous, self._charged_at = self._charged_at, now
@@ -2308,8 +2436,9 @@ class BatteryCoordinator:
         bought = min(charging, max(grid, 0.0)) * hours
         self.charged_wh += total
         self.charged_grid_wh += bought
-        self.month_charged_wh += total
-        self.month_charged_grid_wh += bought
+        for state in self.periods.values():
+            state["charged_wh"] += total
+            state["grid_wh"] += bought
 
     def _grid_age(self) -> float | None:
         """How long since the meter last reported anything at all.

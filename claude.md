@@ -542,6 +542,49 @@ possible, and they gate section A.
 
 ### H. Done
 
+- **Per day and per week too, 2026-08-20.** Asked for by the owner right after
+  the monthly figure landed: let the reader choose day, week or month, and open
+  on the month.
+
+  - **One accumulation read at three lengths, not three counters.** The tick
+    adds to all of them from the same pair of numbers, so they cannot drift -
+    two independent totals of the same measurement disagree within a day, and
+    then the split is a split of something that is not the whole. A test asserts
+    all three hold the identical figure after an hour of charging.
+  - `_roll_month` became `_roll_periods` over a `periods` dict. A week of
+    downtime closes the day, the week *and* the month on the first tick back,
+    each with what it had. The month keeps named accessors because the
+    diagnostics and the tests speak of it directly - views on `periods`, never
+    a second copy.
+  - **ISO weeks, so the changeover is Monday**, and the key carries the *ISO*
+    year rather than the calendar one. Those differ across New Year: 31 Dec 2026
+    and 1 Jan 2027 are both week 53 of 2026, and writing the calendar year would
+    file them under different years and sort the history wrongly at every New
+    Year. `period_started_at` parses it back with `date.fromisocalendar` for the
+    same reason. Verified by reintroducing the calendar year.
+  - **The old flat month in the store is migrated**, so an install that has been
+    counting does not start again at nought. The day and week simply begin now -
+    there is nothing on record for them and deriving one from the month would
+    put up a figure nobody measured.
+  - Six sensors, written out rather than generated in a loop: an entity id is
+    what somebody staring at a dashboard has to work backwards from, and a
+    factory leaves nothing to grep for. Each is `TOTAL` with its own
+    `last_reset`, which is what stops the statistics reading every Monday and
+    every midnight as a replaced meter.
+  - Retention differs per period - 62 days, 53 weeks, 24 months - so each covers
+    a comparable stretch of calendar and any period can be put beside the same
+    one last year.
+  - *On the card:* three pills, delegated click on the group so the handler
+    survives `_update` rewriting their classes. `charged_total` / `charged_grid`
+    still pin the **month** pair only; honouring them for every period would
+    show the month under all three labels, which reads as the switch being
+    broken rather than as the config winning. The choice is session-local and
+    deliberately not written back - a card cannot edit its own YAML, and
+    pretending otherwise loses the choice on the next reload without saying why.
+  - `tests/card/mode_control.mjs` had a fake DOM with `querySelector` and not
+    the plural, so the pills took every management-card check down with them.
+    The stub was too thin rather than the card being wrong.
+
 - **The band holds still, and a cheap hour does not sell, 2026-08-20.** Two
   reports from the primary site off one screenshot, with two unrelated causes.
 

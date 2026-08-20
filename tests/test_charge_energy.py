@@ -395,7 +395,7 @@ async def test_the_month_survives_a_restart(build_system, clock, wall_clock):
     charging(system, 1000, 0)
     await run(system, 60, advance=clock, seconds=60)
     saved = system.coordinator._state_to_save()
-    assert saved["month_key"] == "2026-08"
+    assert saved["periods"]["month"]["key"] == "2026-08"
 
     revived = build_system(grid=5000, charge_power=True)
     charging(revived, 1000, 0)
@@ -487,3 +487,132 @@ async def test_no_month_yet_has_no_reset_moment(build_system):
 
     assert system.coordinator.month_key is None
     assert system.coordinator.month_started_at is None
+
+
+# --- day and week, off the same accumulation, 2026-08-20 -------------------
+#
+# Asked for by the owner: the split per day and per week as well, chooseable,
+# with the month as the default. One accumulation read at three lengths - not
+# three counters, which would drift apart within a day.
+
+
+async def test_all_three_periods_count_the_same_energy(build_system, clock, wall_clock):
+    system = build_system(grid=5000, charge_power=True)
+    charging(system, 800, 400)
+
+    await run(system, 60, advance=clock, seconds=60)
+
+    totals = {n: s["charged_wh"] for n, s in system.coordinator.periods.items()}
+    assert set(totals) == {"day", "week", "month"}
+    assert len(set(totals.values())) == 1          # one accumulation, three views
+    assert totals["day"] == pytest.approx(1200, rel=0.02)
+
+
+async def test_a_new_day_resets_the_day_and_leaves_the_month(build_system, clock, wall_clock):
+    """The point of having three: they end at different moments."""
+    system = build_system(grid=5000, charge_power=True)
+    charging(system, 1000, 0)
+    await run(system, 60, advance=clock, seconds=60)
+    before = system.coordinator.periods["month"]["charged_wh"]
+
+    wall_clock(2026, 8, 21)          # a Friday, so the ISO week does not turn
+    await run(system, 1, advance=clock, seconds=60)
+
+    periods = system.coordinator.periods
+    assert periods["day"]["key"] == "2026-08-21"
+    assert periods["day"]["charged_wh"] == pytest.approx(16.7, rel=0.02)
+    # the week and the month carry straight on through a mere day boundary
+    assert periods["week"]["charged_wh"] > before
+    assert periods["month"]["charged_wh"] > before
+    assert "2026-08-20" in periods["day"]["history"]
+
+
+async def test_monday_ends_the_week(build_system, clock, wall_clock):
+    """ISO weeks, so Monday is the changeover - not Sunday."""
+    system = build_system(grid=5000, charge_power=True)
+    charging(system, 1000, 0)
+    wall_clock(2026, 8, 23)          # a Sunday
+    await run(system, 30, advance=clock, seconds=60)
+    sunday_week = system.coordinator.periods["week"]["key"]
+
+    wall_clock(2026, 8, 24)          # the Monday after
+    await run(system, 1, advance=clock, seconds=60)
+
+    assert system.coordinator.periods["week"]["key"] != sunday_week
+    assert sunday_week in system.coordinator.periods["week"]["history"]
+
+
+async def test_the_week_key_uses_the_iso_year(build_system, clock, wall_clock):
+    """31 December 2026 falls in ISO week 53 of 2026; 1 January 2027 is still
+    in it. Writing the calendar year would file those two days under different
+    years and sort the history wrongly across every New Year."""
+    system = build_system(grid=5000, charge_power=True)
+    charging(system, 1000, 0)
+
+    wall_clock(2026, 12, 31)
+    await run(system, 1, advance=clock, seconds=60)
+    old_year = system.coordinator.periods["week"]["key"]
+
+    wall_clock(2027, 1, 1)
+    await run(system, 1, advance=clock, seconds=60)
+
+    assert system.coordinator.periods["week"]["key"] == old_year
+
+
+async def test_each_period_starts_where_it_should(build_system, clock, wall_clock):
+    """What Home Assistant is handed as `last_reset`, for all three."""
+    system = build_system(grid=5000, charge_power=True)
+    wall_clock(2026, 8, 20)          # a Thursday
+    await run(system, 1, advance=clock, seconds=60)
+
+    starts = {
+        name: system.coordinator.period_started_at(name)
+        for name in ("day", "week", "month")
+    }
+
+    assert starts["day"].day == 20
+    assert starts["week"].day == 17          # the Monday of that week
+    assert starts["month"].day == 1
+    assert all(s.hour == 0 and s.tzinfo is not None for s in starts.values())
+
+
+async def test_each_period_keeps_its_own_depth(build_system, clock, wall_clock):
+    """Two months of days, a year of weeks, two years of months."""
+    from custom_components.battery_management.const import PERIOD_HISTORY
+
+    system = build_system(grid=5000, charge_power=True)
+    charging(system, 1000, 0)
+    for day in range(1, 29):
+        for month in (1, 2, 3, 4, 5, 6):
+            wall_clock(2027, month, day)
+            await run(system, 1, advance=clock, seconds=60)
+
+    for name in ("day", "week", "month"):
+        assert len(system.coordinator.periods[name]["history"]) <= PERIOD_HISTORY[name]
+    # and the days really did fill up, so the cap above is doing work
+    assert len(system.coordinator.periods["day"]["history"]) == PERIOD_HISTORY["day"]
+
+
+async def test_a_store_from_before_the_split_keeps_its_month(build_system, clock, wall_clock):
+    """An install that has been counting must not lose what it had.
+
+    The old shape was a flat month at the top level of the store. Read as the
+    month, so upgrading carries the figure over instead of starting again.
+    """
+    system = build_system(grid=5000, charge_power=True)
+    system.coordinator._store.data = {
+        "month_key": "2026-08",
+        "month_charged_wh": 4321.0,
+        "month_charged_grid_wh": 1000.0,
+        "month_history": {"2026-07": {"charged_kwh": 180.0, "grid_kwh": 12.0}},
+    }
+
+    await system.coordinator._async_restore()
+
+    assert system.coordinator.month_key == "2026-08"
+    assert system.coordinator.month_charged_wh == 4321.0
+    assert system.coordinator.month_history["2026-07"]["charged_kwh"] == 180.0
+    # the day and week simply start now - there is nothing on record for them,
+    # and inventing one from the month would be a figure nobody measured
+    assert system.coordinator.periods["day"]["key"] is None
+    assert system.coordinator.periods["day"]["charged_wh"] == 0.0

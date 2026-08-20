@@ -457,6 +457,33 @@ MAX_ENERGY_GAP_INTERVALS = 4
 # swing is the whole point of the figure and a 12-month buffer would only ever
 # show one of each. Stored, so it costs a few hundred bytes and nothing else.
 MONTH_HISTORY_MONTHS = 24
+
+# The periods the charge split is counted over. One accumulation feeds all
+# three: they are the same measurement read at three lengths, not three
+# measurements. Local calendar periods throughout - "today" starts at midnight
+# where the house is, and weeks start on Monday because these are ISO weeks.
+PERIOD_DAY = "day"
+PERIOD_WEEK = "week"
+PERIOD_MONTH = "month"
+PERIODS = (PERIOD_DAY, PERIOD_WEEK, PERIOD_MONTH)
+#: what the card shows until the reader picks something else
+DEFAULT_PERIOD = PERIOD_MONTH
+#: How many completed periods of each to remember. Chosen so each covers a
+#: comparable stretch of calendar: two months of days, a year of weeks, two
+#: years of months - enough to put any period beside the same one last year.
+PERIOD_HISTORY = {
+    PERIOD_DAY: 62,
+    PERIOD_WEEK: 53,
+    PERIOD_MONTH: MONTH_HISTORY_MONTHS,
+}
+#: Entity-id suffixes. Fixed here rather than derived, because the card looks
+#: entities up by them and a generated name would silently move if the period
+#: keys were ever reworded.
+PERIOD_SUFFIX = {
+    PERIOD_DAY: "today",
+    PERIOD_WEEK: "this_week",
+    PERIOD_MONTH: "this_month",
+}
 # Debounce for writing runtime state to disk; the setpoint changes every tick.
 SAVE_DELAY = 30  # seconds
 
