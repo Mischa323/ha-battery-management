@@ -100,15 +100,24 @@ async def test_a_watched_hour_keeps_its_verdict_once_it_is_over(site):
     assert gone["role"] == "cheap"  # not re-ranked, remembered
 
 
-async def test_an_hour_nobody_watched_stays_plain_past(site):
-    """The integration was not running, so there is no verdict to report and
-    inventing one from today's ranking is exactly what this must not do."""
+async def test_an_hour_nobody_watched_claims_no_decision(site):
+    """The integration was not running during it, so nothing was decided.
+
+    Its *price* is still its price - the colour is ranked over the calendar
+    day and is recomputed, not remembered. What must stay empty is the pair
+    that cannot be recomputed: whether this hour was earmarked for the grid,
+    and whether the grid was actually paid. Inventing either from today's
+    ranking is what this file exists to refuse.
+    """
     system = site()
 
     move_to(system, START + timedelta(hours=2))
     await system.coordinator._async_tick(None)
 
-    assert hour_at(system, 9)["role"] == "past"
+    unwatched = hour_at(system, 9)
+    assert unwatched["past"] is True
+    assert unwatched["buy"] is False
+    assert unwatched["bought"] is False
 
 
 async def test_it_records_that_the_grid_was_actually_paid(site):

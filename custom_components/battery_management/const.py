@@ -270,6 +270,7 @@ POLICY_MODE_CHARGE_ONLY = "mode_charge_only"        # mode forbids discharging
 POLICY_MODE_DISCHARGE_ONLY = "mode_discharge_only"  # mode forbids charging
 POLICY_MODE_PAUSE = "mode_pause"                    # mode holds everything at 0
 POLICY_DYNAMIC_CHARGE = "dynamic_charge"      # buying now because it is cheap
+POLICY_BUY_WINDOW = "buy_window"              # a cheap hour: not selling what we came to buy
 POLICY_SOLAR_HEADROOM = "solar_headroom"      # not buying, the sun still fits
 POLICY_EXTERNAL = "external_plan"             # following someone else's plan
 POLICY_EXTERNAL_STALE = "external_stale"      # plan went quiet, regulating ourselves
@@ -290,6 +291,7 @@ POLICIES = [
     POLICY_MODE_DISCHARGE_ONLY,
     POLICY_MODE_PAUSE,
     POLICY_DYNAMIC_CHARGE,
+    POLICY_BUY_WINDOW,
     POLICY_SOLAR_HEADROOM,
     POLICY_EXTERNAL,
     POLICY_EXTERNAL_STALE,

@@ -71,12 +71,19 @@ check("the hour we are in is not faded",
 check("nor is one still to come",
   bars[3].past === false, bars[3].past);
 
-// The wording has to move with the tense. "goedkoop genoeg om te kopen" about
-// an hour this morning reads as an offer that is still open.
+// The wording has to move with the tense. Naming an hour this morning among
+// "de goedkoopste uren van vandaag" reads as something still on offer.
+//
+// Matched on the tense marker rather than on the phrase, so rewording the band
+// does not fail this for the wrong reason - what is being checked is that the
+// two tenses differ, not what either one says.
 check("a past hour is described in the past tense",
-  /^was goedkoop/.test(bars[0].label.split("—")[2].trim()), bars[0].label);
+  /^was /.test(bars[0].label.split("—")[2].trim()), bars[0].label);
 check("and the current one is not",
-  /^goedkoop/.test(bars[2].label.split("—")[2].trim()), bars[2].label);
+  !/^was /.test(bars[2].label.split("—")[2].trim()), bars[2].label);
+check("the two tenses really are different wording",
+  bars[0].label.split("—")[2].trim() !== bars[2].label.split("—")[2].trim(),
+  [bars[0].label, bars[2].label]);
 check("an hour the grid was actually paid for says so",
   /toen geladen/.test(bars[0].label), bars[0].label);
 check("and one that merely looked cheap does not",

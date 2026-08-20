@@ -38,6 +38,8 @@ from .trace import Trace
 from .prices import (
     cheapest_slots,
     dearest_slots,
+    pick_cheapest,
+    pick_dearest,
     parse_forecast,
     slot_at,
     slots_to_buy,
@@ -152,6 +154,7 @@ from .const import (
     POLICY_DEADBAND,
     POLICY_MIN_OUTPUT,
     POLICY_DISABLED,
+    POLICY_BUY_WINDOW,
     POLICY_DYNAMIC_CHARGE,
     POLICY_SOLAR_HEADROOM,
     POLICY_DYNAMIC_NO_PRICES,
@@ -633,7 +636,7 @@ class BatteryCoordinator:
             # first tick, so a long outage cannot leave a stale week behind.
             if isinstance(entry, dict):
                 self.price_history[key] = {
-                    "role": entry.get("role") or "normal",
+                    "buy": bool(entry.get("buy")),
                     "bought": bool(entry.get("bought")),
                 }
         for key in (
@@ -1130,29 +1133,55 @@ class BatteryCoordinator:
         current = slot_at(slots, dt_util.utcnow()) if slots else None
         return None if current is None else round(current.price, 4)
 
-    def _price_role(self, slot, now) -> str:
-        """Which band this slot falls in - the ranking, not the plan.
+    def _day_bands(self, slots) -> tuple[set, set]:
+        """Which slots are the cheapest and dearest few *of their own day*.
 
-        "Cheap" means `cheap_hours` worth of the cheapest hours ahead that clear
-        the margin: the hours this *would* buy on. For a while it meant the
-        narrowed set instead, on the reasoning that the card is asked "when does
-        the battery charge" and four candidates is not that answer. It made the
-        chart unreadable the other way - one lone green bar, and no way to see
-        the cheap stretch it was picked out of, which is what somebody plans
-        their washing around.
+        Grouped by local calendar day and ranked inside each, so every day the
+        chart can show carries exactly `cheap_hours` green bars and
+        `expensive_hours` red ones - today and tomorrow alike.
 
-        Both facts are now drawn, because they are genuinely two facts. This is
-        the band; `_price_buys` is the plan.
+        This is the *chart's* ranking and not the coordinator's. Buying still
+        decides over a rolling 24 h window, which is right for deciding and
+        wrong for drawing: the window slides, so the band creeps rightwards
+        through the day and hours keep the green they were given earlier.
+        Reported from the primary site on 2026-08-20 as six green bars where
+        four were configured.
+
+        Ranking a whole day is only allowed because green stopped being a
+        decision. It is a statement about prices - "the four cheapest hours of
+        today" - and prices for a day that has started are entirely known. The
+        decisions are the blue ring, and those are still recorded as they are
+        taken and never recomputed.
         """
-        forecast = self._price_forecast() or []
-        if slot in cheapest_slots(
-            forecast, now, self._cheap_hours, PRICE_WINDOW_HOURS,
-            self._price_margin,
-        ):
+        by_day: dict = {}
+        for slot in slots or []:
+            by_day.setdefault(dt_util.as_local(slot.start).date(), []).append(slot)
+        cheap: set = set()
+        dear: set = set()
+        for day in by_day.values():
+            cheap |= {
+                _slot_key(s)
+                for s in pick_cheapest(day, self._cheap_hours, self._price_margin)
+            }
+            dear |= {_slot_key(s) for s in pick_dearest(day, self._expensive_hours)}
+        return cheap, dear
+
+    def _price_role(self, slot, now) -> str:
+        """Which band this slot falls in - a price fact, not the plan.
+
+        "Cheap" means one of the `cheap_hours` cheapest hours of that slot's own
+        calendar day, margin applied. It has meant two other things before now:
+        the narrowed buy set (one lone green bar, and no way to see the stretch
+        it came out of) and the rolling-window band (green that crept across the
+        chart all day). Both were attempts to make one channel carry the band
+        and the plan at once. There are two channels now - `_price_buys` is the
+        plan - so this one can simply be about prices.
+        """
+        cheap, dear = self._day_bands(self._price_forecast() or [])
+        key = _slot_key(slot)
+        if key in cheap:
             return "cheap"
-        if slot in dearest_slots(
-            forecast, now, self._expensive_hours, PRICE_WINDOW_HOURS
-        ):
+        if key in dear:
             return "dear"
         return "normal"
 
@@ -1172,17 +1201,19 @@ class BatteryCoordinator:
         )
 
     def remember_price_verdict(self, bought: bool = False) -> None:
-        """Record what this hour was judged to be, while it still is this hour.
+        """Record what this hour was *decided* to be, while it still is this hour.
 
-        The ranking is forward-looking, so an hour that has gone cannot be
-        re-ranked - `cheapest_slots` only ever looks at what is ahead. But the
-        hour did have a verdict at the time, and a chart that greys out the
-        whole morning cannot show which hours the packs were filled on, which
-        is the one thing somebody consults a price chart on this card for.
+        Only the decisions. The band used to be recorded here too, because it
+        was ranked over a rolling window and so could not be recovered once the
+        hour had gone. It is ranked over the calendar day now, which is known
+        in full, so the chart recomputes the colour and this is left with the
+        two things that genuinely cannot be recomputed:
 
-        So the verdict is written down as it is taken. `bought` is the stronger
-        fact of the two: the role says what we intended, `bought` says the grid
-        was actually paid.
+        * `buy` - whether this hour was earmarked for the grid. The need shrinks
+          as the packs fill, so re-planning a past hour would quietly un-mark
+          exactly the hours the charging was aimed at.
+        * `bought` - the stronger fact of the two, and the only one that is not
+          an intention: the grid was actually paid during this hour.
         """
         slots = self._price_forecast()
         now = dt_util.utcnow()
@@ -1190,9 +1221,8 @@ class BatteryCoordinator:
         if current is None:
             return
         entry = self.price_history.setdefault(
-            _slot_key(current), {"role": "normal", "buy": False, "bought": False}
+            _slot_key(current), {"buy": False, "bought": False}
         )
-        entry["role"] = self._price_role(current, now)
         entry["buy"] = self._price_buys(current, now)
         entry["bought"] = entry["bought"] or bought
         cutoff = (now - timedelta(hours=PRICE_HISTORY_HOURS)).astimezone(
@@ -1289,45 +1319,49 @@ class BatteryCoordinator:
                 for slot in chosen
             ]
 
-        # Two sets, deliberately. `cheapest` is the band - the hours cheap
-        # enough to be worth buying on. `buying` is the plan - the few of them
-        # the packs still have room for. The chart draws the band as colour and
-        # the plan as an outline, so neither has to stand in for the other.
-        cheapest = cheapest_slots(
-            slots, now, self._cheap_hours, PRICE_WINDOW_HOURS, self._price_margin,
-        ) if slots else []
+        # `buying` is the plan - the few cheap hours the packs still have room
+        # for, ranked over the rolling window the coordinator decides on.
         buying = slots_to_buy(
             slots, now, self._cheap_hours, PRICE_WINDOW_HOURS, self._price_margin,
             self.hours_of_charge_needed(),
         ) if slots else []
-        dearest = dearest_slots(
-            slots, now, self._expensive_hours, PRICE_WINDOW_HOURS
-        ) if slots else []
+
+        # The band is ranked per calendar day instead, so it holds still. See
+        # `_day_bands`: the rolling window slides, which made green creep across
+        # the chart until there were more green bars than `cheap_hours`.
+        cheap_at, dear_at = self._day_bands(slots or [])
+
+        # The *sets* colour every day the chart can page to; the *lists* below
+        # are today's only. They answer "how does today look" - the Plan
+        # sensor's state, and the plan card's "was anything cheap at all" - and
+        # counting tomorrow's band into that would double the figure the moment
+        # a supplier publishes the next day at 13:00.
+        today = dt_util.as_local(now).date()
+
+        def on_today(key_set):
+            return [
+                s
+                for s in sorted(slots or [], key=lambda s: s.start)
+                if _slot_key(s) in key_set and dt_util.as_local(s.start).date() == today
+            ]
+
+        cheapest = on_today(cheap_at)
+        dearest = on_today(dear_at)
 
         # The whole day, not just what is left of it. A chart that starts at
         # "now" shows nothing of today by the evening, which is the opposite of
         # what somebody asking for today's prices wants.
         #
-        # The roles are computed here rather than left to a dashboard picking a
-        # threshold: "cheap" has to mean the hours this will actually buy on.
-        #
-        # An hour that has already passed is **not** re-ranked. The ranking
-        # looks forward, so today's ranking has nothing to say about this
-        # morning. It gets back the verdict it was given while it was the
-        # current hour - a record rather than a recomputation - and `bought`
-        # says whether the grid was actually paid during it. An hour with
-        # nothing recorded (the integration was not running) stays plain
-        # "past", which is the honest answer for it.
-        cheap_at = {_slot_key(slot) for slot in cheapest}
+        # A past hour keeps its colour because the colour is a price and prices
+        # do not change once a day has started - so it is recomputed, not
+        # remembered. Its *decisions* are the opposite and are read back from
+        # the record: see `buys` below.
         buy_at = {_slot_key(slot) for slot in buying}
-        dear_at = {_slot_key(slot) for slot in dearest}
         day_start = dt_util.as_local(now).replace(
             hour=0, minute=0, second=0, microsecond=0
         )
 
         def role_of(slot, key):
-            if slot.end <= now:
-                return self.price_history.get(key, {}).get("role") or "past"
             if key in cheap_at:
                 return "cheap"
             if key in dear_at:
@@ -1482,6 +1516,42 @@ class BatteryCoordinator:
             longest = max(longest, missing / 100.0 * self._full_charge_minutes)
         return longest / 60.0
 
+    def _in_a_buying_hour(self, online: dict) -> bool:
+        """Is the hour we are in one we mean to spend on the grid?
+
+        Deliberately separate from `_dynamic_should_charge`, because the two
+        questions are different. This one asks whether the *hour* is earmarked;
+        that one asks whether to draw power this very tick, and it says no once
+        the packs reach the ceiling or the sun turns out to be enough.
+
+        The gap between them is what the owner reported on 2026-08-20: inside a
+        cheap hour the packs hit the ceiling, buying stopped, grid-zero resumed
+        and the packs discharged into the house - so the same hour both bought
+        and sold, paying the round trip for nothing. So the earmark also bounds
+        discharge, and the two must come from one definition or they will drift.
+
+        It is self-limiting, which is what keeps it from becoming the discharge
+        hold that was removed the same day: the need shrinks as the packs fill,
+        so an hour drops out of `slots_to_buy` once there is nothing left to buy
+        and normal grid-zero resumes. The latch holds only the hour a purchase
+        actually started in.
+        """
+        slots = self._price_forecast()
+        if slots is None:
+            return False
+        now = dt_util.utcnow()
+        current = slot_at(slots, now)
+        if current is None:
+            return False
+        # a purchase already under way finishes its hour, whatever the
+        # shrinking need now says about that hour
+        if self._buying_slot == _slot_key(current):
+            return True
+        return current in slots_to_buy(
+            slots, now, self._cheap_hours, PRICE_WINDOW_HOURS, self._price_margin,
+            self.hours_of_charge_needed(online),
+        )
+
     def _dynamic_should_charge(self, online: dict) -> tuple[bool, str | None]:
         """Buy from the grid right now? Returns (yes/no, policy when it matters).
 
@@ -1498,18 +1568,10 @@ class BatteryCoordinator:
         slots = self._price_forecast()
         if slots is None:
             return False, POLICY_DYNAMIC_NO_PRICES
+        if not self._in_a_buying_hour(online):
+            return False, None
         now = dt_util.utcnow()
         current = slot_at(slots, now)
-        buying = current is not None and current in slots_to_buy(
-            slots, now, self._cheap_hours, PRICE_WINDOW_HOURS, self._price_margin,
-            self.hours_of_charge_needed(online),
-        )
-        # a purchase already under way finishes its hour, whatever the
-        # shrinking need now says about that hour
-        if current is not None and self._buying_slot == _slot_key(current):
-            buying = True
-        if not buying:
-            return False, None
 
         ceiling, blame_the_sun = self._buy_ceiling()
         if not blame_the_sun and self._sun_is_enough():
@@ -3131,12 +3193,25 @@ class BatteryCoordinator:
             # a bound: there is no surplus to regulate against, so this forces a
             # value. Everything else stays a bound on grid-zero.
             dynamic_charge, dynamic_policy = (False, None)
+            buy_window_policy = None
             if self.mode == MODE_DYNAMIC:
                 dynamic_charge, dynamic_policy = self._dynamic_should_charge(online)
                 if dynamic_charge:
                     # the stronger of the two facts the chart keeps: not "this
                     # hour looked cheap" but "the grid was paid during it"
                     self.remember_price_verdict(bought=True)
+                elif self._in_a_buying_hour(online):
+                    # Not buying this tick - the packs reached the ceiling, or
+                    # the sun turned out to be enough - but this is still an
+                    # hour we came to buy in, so do not turn round and sell.
+                    # Reported from the primary site: inside one cheap hour the
+                    # packs charged, filled, then discharged into the house,
+                    # paying the round trip for nothing.
+                    #
+                    # A bound and not a forced value, so grid-zero keeps
+                    # regulating underneath it and surplus still goes in.
+                    upper = min(upper, 0.0)
+                    buy_window_policy = POLICY_BUY_WINDOW
 
             external_sp, external_policy = (None, None)
             if self.mode == MODE_EXTERNAL:
@@ -3177,6 +3252,7 @@ class BatteryCoordinator:
 
             self.active_policy = (
                 dynamic_policy
+                or buy_window_policy
                 or external_policy
                 or phase_policy
                 or self._classify(error, sp, online, maxdis, maxchg)

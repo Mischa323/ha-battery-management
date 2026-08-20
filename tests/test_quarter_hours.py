@@ -108,8 +108,19 @@ def test_nothing_to_fold_is_not_a_crash():
 
 
 def live_series(minutes: int) -> list[dict]:
-    """The same series, anchored to now - the plan only looks 24 h ahead."""
-    start = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+    """The same series, anchored to today's midnight - one whole calendar day.
+
+    It used to start at the current hour, on the reasoning that the plan only
+    looks 24 h ahead. That is still true of the *decisions*, but the chart's
+    band is ranked per calendar day now, and a series anchored to now falls
+    across two half-days. Each half then has half the spread, which the price
+    margin quite correctly refuses to call cheap - so the fixture measured an
+    artefact of its own anchoring rather than anything a real feed does.
+    Suppliers publish whole days.
+    """
+    start = datetime.now(timezone.utc).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
     count = 24 * 60 // minutes
     return [
         {

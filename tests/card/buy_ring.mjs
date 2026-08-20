@@ -127,7 +127,7 @@ check("an ordinary hour says nothing extra",
 
 // a bar's tooltip must carry both the band and the plan
 check("the tooltip names the band and the plan together",
-  bars[3].label.includes("goedkoop genoeg om te kopen") &&
+  bars[3].label.includes("goedkoopste uren") &&
     bars[3].label.includes("hier gaat hij laden"),
   bars[3].label);
 

@@ -270,6 +270,7 @@
           "mode_discharge_only": "Modus: alleen ontladen, laadt niet",
           "mode_pause": "Modus: gepauzeerd",
           "dynamic_charge": "Koopt nu in, prijzen zijn laag",
+          "buy_window": "Goedkoop uur, ontlaadt daarom niet",
           "dynamic_no_prices": "Dynamisch, maar geen prijzen beschikbaar",
           "external_plan": "Volgt een extern plan",
           "external_stale": "Extern plan is stilgevallen, regelt zelf",

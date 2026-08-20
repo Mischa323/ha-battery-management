@@ -542,6 +542,67 @@ possible, and they gate section A.
 
 ### H. Done
 
+- **The band holds still, and a cheap hour does not sell, 2026-08-20.** Two
+  reports from the primary site off one screenshot, with two unrelated causes.
+
+  **Six green bars where four were configured, and climbing.** Nothing was
+  miscounting: the band was ranked over a rolling 24 h window, so it slid
+  rightwards through the day, and every hour it had passed over kept the green
+  it had been given while new ones joined ahead. By teatime there were six.
+  Now ranked **per calendar day** (`_day_bands`, `cheapest_on_day`), so it is
+  exactly `cheap_hours` wide, the same hours all day, and each published day
+  gets its own.
+
+  - **This is only allowed because green stopped being a decision.** The rule
+    in the 2026-08-19 entry - never re-rank a past hour - was about decisions,
+    and it stands. A colour is a *price*, and a day that has started has all
+    its prices known, so recomputing it invents nothing. The decisions are the
+    blue ring, still recorded as taken and still never recomputed.
+  - Consequence: `price_history` no longer stores `role`. It keeps `buy` and
+    `bought`, which genuinely cannot be recovered - the need shrinks as the
+    packs fill, so re-planning this morning against this evening would un-mark
+    the very hours the charging was aimed at.
+  - The `plan()` *lists* (`cheap_hours`, `dear_hours`) are **today's only**,
+    while the colouring covers every day the chart can page to. Counting
+    tomorrow's band into the Plan sensor would double its figure every
+    afternoon, the moment a supplier publishes the next day.
+  - Wording moved with the meaning: "goedkoop genoeg om te kopen" was an offer,
+    and the band no longer offers anything. It reads "bij de goedkoopste uren
+    van vandaag" now. `past_colours.mjs` used to match the phrase; it matches
+    the *tense marker* instead, so rewording cannot fail it for the wrong reason.
+  - **A fixture was measuring its own anchoring.** `test_quarter_hours`
+    anchored its series to *now*, which under a per-day ranking falls across
+    two half-days - each with half the spread, which the margin quite correctly
+    refuses to call cheap. Suppliers publish whole days; the fixture does now too.
+
+  **Charging and then discharging inside the same cheap hour.** While a
+  purchase is running the setpoint is forced negative and cannot discharge. The
+  gap is the rest of the hour: `_dynamic_should_charge` says no once the packs
+  reach the ceiling, plain grid-zero resumes, and the packs cover the house from
+  the charge just bought - paying the round trip for nothing.
+
+  - `_in_a_buying_hour` is now its own question, split out of
+    `_dynamic_should_charge`, and both use it. "Is this hour earmarked" and "do
+    we draw power this tick" are different, and if they were written twice they
+    would drift.
+  - The earmark bounds the upper end at 0. A bound, not a forced value, so
+    surplus still goes in and the anti-windup clamp covers it.
+  - **It is not the discharge hold that went the same day**, and the difference
+    is structural, not a matter of degree. That one blocked discharge from
+    midnight to the evening, every day, by construction. This one covers the
+    hours actually earmarked for buying and **lets go by itself**: the need
+    shrinks as the packs fill, so an hour drops out of `slots_to_buy` and normal
+    grid-zero resumes. `test_an_hour_it_never_buys_in_is_not_bound` is the
+    assertion that keeps it that way.
+  - The latch is load-bearing here, more than it was for buying: the packs fill
+    part-way through the hour, so the hour stops being earmarked exactly when
+    the bound is most needed. Verified by removing it.
+  - **The first test assertions were wrong twice, both times because the
+    setpoint does not snap.** It comes back from the buying value the
+    integrator left it at, so "== 0 on the next tick" fails while the loop is
+    doing precisely the right thing. What has to hold is that it never crosses
+    into discharge on the way, which is a property of the whole stretch.
+
 - **A card for the plan, 2026-08-20.** Asked for by the owner: "zodat ik kan
   controleren wat hij doet", and then specifically *how much from the sun, how
   much from the grid, and at what times*. A third card,

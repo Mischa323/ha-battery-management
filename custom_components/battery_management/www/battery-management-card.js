@@ -62,27 +62,23 @@ const PRICE_COLOUR = {
 // from both under every common CVD, so the third channel does not need hue to
 // be told apart in the first place - it is a ring, and nothing else is.
 const PRICE_BUY_RING = "#3b82f6";
-// Deliberately "mag" and not "wordt". Being a cheap hour is one of three
-// conditions - the pack also has to be empty enough, and there must not be
-// more sun coming - so promising that charging happens here is a claim the
-// card cannot back up. A dashboard must not overstate what it knows.
-//
-// "dear" says nothing about what the packs will do, and that is the whole
-// point of it since 2026-08-20: the charge is no longer held back for these
-// hours. It is a price, drawn as a price. The card used to say "hiervoor wordt
-// bewaard", which was true of the old hold and is a lie about this one.
+// Both bands are prices now, and neither says what the packs will do - that is
+// the ring's job. "cheap" said "goedkoop genoeg om te kopen" while it was
+// ranked over a rolling window and meant "an hour we would buy on"; ranked over
+// the calendar day it simply names the cheapest hours of today, and wording it
+// as an offer would promise something three other conditions still gate.
+// "dear" lost its claim earlier the same day, when the discharge hold went.
 const PRICE_SAYS = {
-  cheap: "goedkoop genoeg om te kopen",
+  cheap: "bij de goedkoopste uren van vandaag",
   dear: "duur uur",
   normal: "gewoon de meter volgen",
   past: "geweest",
 };
-// The same verdicts in the past tense. An hour that has gone keeps the colour
-// it was given at the time - that is what makes the charging hours visible on
-// a chart of a day that is mostly over - but it must not keep the wording:
-// "goedkoop genoeg om te kopen" about 09:00 at teatime reads as an offer.
+// The same in the past tense. The colour survives the hour because a price
+// does, but the wording must not: "de goedkoopste uren van vandaag" reads as
+// something still on offer when it is said about 09:00 at teatime.
 const PRICE_WAS = {
-  cheap: "was goedkoop genoeg om te kopen",
+  cheap: "was een van de goedkoopste uren",
   dear: "was een duur uur",
   normal: "gewoon de meter gevolgd",
   past: "geweest",
@@ -158,7 +154,7 @@ const PRICE_NAV = `
 
 const PRICE_LEGEND = `
             <div class="legend">
-              <span><i style="background:${PRICE_COLOUR.cheap}"></i>Goedkoop genoeg om te kopen</span>
+              <span><i style="background:${PRICE_COLOUR.cheap}"></i>Goedkoopste uren van vandaag</span>
               <span><i style="background:transparent;box-shadow:inset 0 0 0 2px ${PRICE_BUY_RING}"></i>Hier gaat hij laden</span>
               <span><i style="background:${PRICE_COLOUR.dear}"></i>Duur uur</span>
               <span><i style="background:${PRICE_COLOUR.normal}"></i>Verder de meter volgen</span>
