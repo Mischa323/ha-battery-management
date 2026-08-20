@@ -584,6 +584,18 @@ possible, and they gate section A.
   - `tests/card/mode_control.mjs` had a fake DOM with `querySelector` and not
     the plural, so the pills took every management-card check down with them.
     The stub was too thin rather than the card being wrong.
+  - **CI caught a renamed attribute key that every local run had passed**, and
+    the gap is structural rather than careless. The month sensor published
+    `{"month": ...}`; generalising it to three periods made that `{"period":
+    ..., "key": ...}`, and the test asserting the old name lives in
+    `test_month_sensors.py` - which needs a real Home Assistant and therefore
+    **skips on the maintainer's machine**, where HA cannot be installed at all.
+    Anything asserted only there is checked on push and nowhere else.
+    So the *shape* moved to `coordinator.period_attributes`, which the stubbed
+    run does reach, and is pinned there by name. Verified by renaming the key
+    back: the local suite now fails where before it passed. Same reasoning as
+    pinning the reset date twice - if a fact can only be checked in CI, check
+    it somewhere else as well.
 
 - **The band holds still, and a cheap hour does not sell, 2026-08-20.** Two
   reports from the primary site off one screenshot, with two unrelated causes.

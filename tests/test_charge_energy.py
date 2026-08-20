@@ -616,3 +616,56 @@ async def test_a_store_from_before_the_split_keeps_its_month(build_system, clock
     # and inventing one from the month would be a figure nobody measured
     assert system.coordinator.periods["day"]["key"] is None
     assert system.coordinator.periods["day"]["charged_wh"] == 0.0
+
+
+# --- the published shape, pinned where this run can reach it ---------------
+#
+# CI caught a renamed attribute key that every local run had passed: the
+# entity platforms need a real Home Assistant, which cannot be installed on
+# Windows/3.14, so `test_month_sensors.py` skips here and anything asserted
+# only there is checked on push and nowhere else. The *shape* now lives on the
+# coordinator, which this run does reach.
+
+
+async def test_the_period_attributes_keep_their_names(build_system, clock, wall_clock):
+    """A renamed key is invisible to the arithmetic and breaks every card and
+    template that reads it. Named explicitly, so renaming one is a decision."""
+    system = build_system(grid=5000, charge_power=True)
+    charging(system, 1000, 0)
+    await run(system, 2, advance=clock, seconds=60)
+
+    for name in ("day", "week", "month"):
+        attributes = system.coordinator.period_attributes(name)
+        assert set(attributes) == {"period", "key", "history"}, name
+        assert attributes["period"] == name
+        assert attributes["key"] == system.coordinator.periods[name]["key"]
+        assert isinstance(attributes["history"], dict)
+
+
+async def test_a_closed_period_carries_all_three_figures(build_system, clock, wall_clock):
+    system = build_system(grid=2000, charge_power=True)
+    charging(system, 1500, 500)
+    await run(system, 60, advance=clock, seconds=60)
+    wall_clock(2026, 9, 1)
+    await run(system, 1, advance=clock, seconds=60)
+
+    closed = system.coordinator.period_attributes("month")["history"]["2026-08"]
+
+    assert set(closed) == {"charged_kwh", "grid_kwh", "solar_kwh"}
+
+
+async def test_the_sun_share_is_the_remainder(build_system, clock, wall_clock):
+    """Published rather than left to be subtracted - the subtraction is the one
+    thing a reader gets backwards."""
+    system = build_system(grid=600, charge_power=True)
+    charging(system, 1000, 0)
+    await run(system, 60, advance=clock, seconds=60)
+
+    c = system.coordinator
+    for name in ("day", "week", "month"):
+        assert c.period_solar_kwh(name) == pytest.approx(
+            c.period_charged_kwh(name) - c.period_charged_kwh(name, grid=True), abs=0.002
+        )
+    # and it really is a split of something, not two zeroes agreeing
+    assert c.period_solar_kwh("day") > 0
+    assert c.period_charged_kwh("day", grid=True) > 0

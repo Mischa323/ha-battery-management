@@ -506,11 +506,9 @@ class _PeriodTotalSensor(_PeriodChargedSensor):
 
     @property
     def extra_state_attributes(self) -> dict:
-        return {
-            "period": self._period,
-            "key": self.coordinator.periods[self._period]["key"],
-            "history": self.coordinator.period_history(self._period),
-        }
+        # shape owned by the coordinator, so the stubbed test run can pin it -
+        # see `period_attributes` for why that matters here in particular
+        return self.coordinator.period_attributes(self._period)
 
 
 class _PeriodGridSensor(_PeriodChargedSensor):
@@ -524,15 +522,9 @@ class _PeriodGridSensor(_PeriodChargedSensor):
 
     @property
     def extra_state_attributes(self) -> dict:
-        # the remainder, never a second count: two independent counters would
-        # drift apart within a day and then the split would be a split of
-        # something that is not the whole
-        solar = max(
-            self.coordinator.period_charged_kwh(self._period)
-            - self.coordinator.period_charged_kwh(self._period, grid=True),
-            0.0,
-        )
-        return {"charged_from_solar_kwh": round(solar, 3)}
+        return {
+            "charged_from_solar_kwh": self.coordinator.period_solar_kwh(self._period)
+        }
 
 
 # Written out rather than generated in a loop. Six short classes are greppable

@@ -100,12 +100,18 @@ def test_the_reset_moves_with_the_month(sensors):
 
 
 def test_the_closed_months_ride_along(sensors):
-    """Where the history is actually read from."""
+    """Where the history is actually read from.
+
+    The period is named in `period` and the current one in `key`. It used to be
+    a bare `month`, which stopped being a sensible name the moment the same
+    sensor class started serving days and weeks as well.
+    """
     system, coordinator = sensors
 
     attributes = ChargedThisMonthSensor(coordinator, system.entry).extra_state_attributes
 
-    assert attributes["month"] == "2026-08"
+    assert attributes["period"] == "month"
+    assert attributes["key"] == "2026-08"
     assert list(attributes["history"]) == ["2026-06", "2026-07"]
     assert attributes["history"]["2026-06"]["charged_kwh"] == 210.5
     # published rather than left to be subtracted: 210.5 - 60.25

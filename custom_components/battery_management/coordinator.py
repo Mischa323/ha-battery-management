@@ -2336,6 +2336,36 @@ class BatteryCoordinator:
             for key, figures in sorted(self.periods[name]["history"].items())
         }
 
+    def period_solar_kwh(self, name: str) -> float:
+        """The sun's share of this period: the remainder, never a second count.
+
+        Two independent counters would drift apart within a day, and then the
+        split would be a split of something that is not the whole.
+        """
+        return round(
+            max(
+                self.period_charged_kwh(name) - self.period_charged_kwh(name, grid=True),
+                0.0,
+            ),
+            3,
+        )
+
+    def period_attributes(self, name: str) -> dict:
+        """What the period's total sensor publishes alongside its state.
+
+        Built here rather than in `sensor.py` so the *shape* can be pinned by
+        the stubbed test run. The entity platforms need a real Home Assistant,
+        which cannot be installed on the maintainer's machine, so anything
+        living only in `sensor.py` is checked in CI and nowhere else - and a
+        renamed key then passes locally and fails on push. That is exactly how
+        `month` survived being renamed to `period`/`key`.
+        """
+        return {
+            "period": name,
+            "key": self.periods[name]["key"],
+            "history": self.period_history(name),
+        }
+
     # The month keeps named accessors because the diagnostics, the tests and
     # the older sensors all speak of it directly. They are views on `periods`,
     # not a second copy - two copies of a running total drift within a day.
