@@ -449,6 +449,12 @@ MAX_SETPOINT_AGE = 300  # seconds
 # which under-reports rather than inventing. The mirror image of Home
 # Assistant's own `max_sub_interval`, and needed for the opposite reason.
 MAX_ENERGY_GAP_INTERVALS = 4
+
+# How many completed months of the charge split to keep. Two years, so a full
+# year can always be compared against the one before it - the summer/winter
+# swing is the whole point of the figure and a 12-month buffer would only ever
+# show one of each. Stored, so it costs a few hundred bytes and nothing else.
+MONTH_HISTORY_MONTHS = 24
 # Debounce for writing runtime state to disk; the setpoint changes every tick.
 SAVE_DELAY = 30  # seconds
 

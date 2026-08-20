@@ -223,8 +223,8 @@ const derived = build(
       state: "packs_empty",
       attributes: {},
     },
-    "sensor.battery_management_charged": { state: "12.5", attributes: {} },
-    "sensor.battery_management_charged_from_grid": { state: "2.5", attributes: {} },
+    "sensor.battery_management_charged_this_month": { state: "12.5", attributes: {} },
+    "sensor.battery_management_charged_from_grid_this_month": { state: "2.5", attributes: {} },
   }
 );
 
@@ -261,7 +261,7 @@ check("nothing is invented for a site that has none",
 // a one-line answer.
 check("it says what it looked for instead of vanishing",
   el(sparse, "charge").style.display === "block" &&
-  el(sparse, "cnote").textContent.includes("sensor.battery_management_charged"),
+  el(sparse, "cnote").textContent.includes("sensor.battery_management_charged_this_month"),
   el(sparse, "cnote").textContent);
 check("and the bar is not drawn on nothing",
   el(sparse, "cbar").style.display === "none", el(sparse, "cbar").style.display);
@@ -273,7 +273,7 @@ const pinned = build(
     [SP]: { state: "51", attributes: {} },
     "sensor.elders": { state: "8", attributes: {} },
     [GRID]: { state: "2", attributes: {} },
-    "sensor.battery_management_charged": { state: "999", attributes: {} },
+    "sensor.battery_management_charged_this_month": { state: "999", attributes: {} },
   }
 );
 check("an explicit entity is not overridden",
@@ -286,8 +286,8 @@ const suffixed = build(
   { setpoint: SP },
   {
     [SP]: { state: "51", attributes: {} },
-    "sensor.battery_management_charged_2": { state: "12.5", attributes: {} },
-    "sensor.battery_management_charged_from_grid_2": { state: "2.5", attributes: {} },
+    "sensor.battery_management_charged_this_month_2": { state: "12.5", attributes: {} },
+    "sensor.battery_management_charged_from_grid_this_month_2": { state: "2.5", attributes: {} },
   }
 );
 check("a _2 suffix is still recognised as ours",
@@ -295,7 +295,7 @@ check("a _2 suffix is still recognised as ours",
   el(suffixed, "csunt").textContent === "zon 10.0 kWh",
   [el(suffixed, "ctotal").textContent, el(suffixed, "csunt").textContent]);
 
-// "..._charged" must not swallow "..._charged_from_grid", or the total and the
+// "..._charged_this_month" must not swallow "..._charged_from_grid_this_month", or the total and the
 // grid half become the same number and the sun silently reads zero
 check("the two counters are not confused for each other",
   el(suffixed, "cnett").textContent === "net 2.5 kWh", el(suffixed, "cnett").textContent);
@@ -306,7 +306,7 @@ const empty = build(
   { setpoint: SP },
   {
     [SP]: { state: "51", attributes: {} },
-    "sensor.battery_management_charged": { state: "unknown", attributes: {} },
+    "sensor.battery_management_charged_this_month": { state: "unknown", attributes: {} },
   }
 );
 check("an unreadable counter is named, not called missing",
@@ -344,16 +344,16 @@ const renamedDevice = build(
   { setpoint: SP },
   {
     [SP]: { state: "51", attributes: {} },
-    "sensor.thuisaccu_charged": { state: "12.5", attributes: {} },
-    "sensor.thuisaccu_charged_from_grid": { state: "2.5", attributes: {} },
+    "sensor.thuisaccu_charged_this_month": { state: "12.5", attributes: {} },
+    "sensor.thuisaccu_charged_from_grid_this_month": { state: "2.5", attributes: {} },
     // somebody else's counter, on another device, must never be picked up
-    "sensor.buurmans_charged": { state: "999", attributes: {} },
+    "sensor.buurmans_charged_this_month": { state: "999", attributes: {} },
   },
   {
     [SP]: { device_id: "dev1" },
-    "sensor.thuisaccu_charged": { device_id: "dev1" },
-    "sensor.thuisaccu_charged_from_grid": { device_id: "dev1" },
-    "sensor.buurmans_charged": { device_id: "dev2" },
+    "sensor.thuisaccu_charged_this_month": { device_id: "dev1" },
+    "sensor.thuisaccu_charged_from_grid_this_month": { device_id: "dev1" },
+    "sensor.buurmans_charged_this_month": { device_id: "dev2" },
   }
 );
 check("the counters are found on the device, whatever they are called",
@@ -369,7 +369,7 @@ check("and another device's counter is not borrowed",
 const disabled = build(
   { setpoint: SP },
   { [SP]: { state: "51", attributes: {} } },
-  { [SP]: { device_id: "dev1" }, "sensor.x_charged": { device_id: "dev1" } }
+  { [SP]: { device_id: "dev1" }, "sensor.x_charged_this_month": { device_id: "dev1" } }
 );
 check("a disabled entity is not treated as readable",
   disabled._els.get("cnote").style.display === "block",

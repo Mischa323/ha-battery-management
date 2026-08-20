@@ -21,7 +21,7 @@ const entities = [
   `${P}batterij_01_target`, `${P}batterij_02_target`,
   `${P}batterij_01_phase`, `${P}current_price`,
   `${P}active_policy`, "select.battery_management_mode",
-  `${P}charged`, `${P}charged_from_grid`,
+  `${P}charged_this_month`, `${P}charged_from_grid_this_month`,
   "binary_sensor.battery_management_batterij_01_online",
   "binary_sensor.battery_management_batterij_02_online",
   "switch.battery_management_coordinator_enabled",
@@ -53,17 +53,17 @@ check("the policy sensor is wired up", cfg.policy === `${P}active_policy`, cfg.p
 // the energy counters are the integration's own, so they resolve off the same
 // prefix as everything else
 check("the charge counters are found",
-  cfg.charged_total === `${P}charged` &&
-  cfg.charged_grid === `${P}charged_from_grid`, cfg);
+  cfg.charged_total === `${P}charged_this_month` &&
+  cfg.charged_grid === `${P}charged_from_grid_this_month`, cfg);
 // no pack has a charge-power sensor -> the entities do not exist -> the card
 // must not name them, or it renders a split of nothing
 const noCounters = Manage.getStubConfig({ states: {} }, [`${P}setpoint`, `${P}plan`]);
 check("no counters, nothing claimed",
   !noCounters.charged_total && !noCounters.charged_grid, noCounters);
-// "charged" must not be mistaken for "charged_from_grid" or the reverse
-const onlyTotal = Manage.getStubConfig({ states: {} }, [`${P}setpoint`, `${P}charged`]);
+// "charged_this_month" must not be mistaken for "charged_from_grid_this_month" or the reverse
+const onlyTotal = Manage.getStubConfig({ states: {} }, [`${P}setpoint`, `${P}charged_this_month`]);
 check("the two counters are told apart",
-  onlyTotal.charged_total === `${P}charged` && !onlyTotal.charged_grid, onlyTotal);
+  onlyTotal.charged_total === `${P}charged_this_month` && !onlyTotal.charged_grid, onlyTotal);
 
 // a site whose device was renamed, and one with nothing installed
 const renamed = Manage.getStubConfig({ states: {} }, ["sensor.accus_setpoint", "sensor.accus_plan"]);

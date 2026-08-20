@@ -721,8 +721,13 @@ class BatteryManagementCard extends HTMLElement {
     // charging power. Only present once a pack has that sensor configured, and
     // `has` already refuses to write an entity that does not exist - so a site
     // that never picked one simply gets a card without the split.
-    put("charged_total", has(`sensor.${prefix}_charged`));
-    put("charged_grid", has(`sensor.${prefix}_charged_from_grid`));
+    // The month in progress, not the lifetime totals. "How much have these
+    // packs ever charged" is a number that stops moving in any useful way
+    // after a few months; "what did they do this month" is the one somebody
+    // reads a battery card for. The lifetime pair is still published and is
+    // what the Energy dashboard should be pointed at.
+    put("charged_total", has(`sensor.${prefix}_charged_this_month`));
+    put("charged_grid", has(`sensor.${prefix}_charged_from_grid_this_month`));
 
     // one row per pack, found by its target sensor - the state of charge comes
     // out of that sensor's own attributes, so no Anker entity has to be guessed
@@ -845,7 +850,7 @@ ${PRICE_CSS}
           </div>
           <div id="units"></div>
           <div class="charge" id="charge" style="display:none">
-            <div class="uhead"><span>Geladen</span><span class="muted" id="ctotal">—</span></div>
+            <div class="uhead"><span id="chead">Geladen deze maand</span><span class="muted" id="ctotal">—</span></div>
             <div class="bar split" id="cbar"><div class="fill sun" id="csun"></div><div class="fill net" id="cnet"></div></div>
             <div class="muted cnote" id="cnote" style="display:none"></div>
             <div class="uhead muted cleg">
@@ -987,10 +992,16 @@ ${PRICE_LEGEND}
   }
 
   /**
-   * How much went into the packs, and how much of it was bought.
+   * How much went into the packs this month, and how much of it was bought.
+   *
+   * The *monthly* pair, which starts again on the 1st. The lifetime totals are
+   * still published under `_charged` / `_charged_from_grid` and are the ones
+   * to point the Energy dashboard at; a card is read for "how are we doing",
+   * and an all-time figure stops answering that after a few months.
    *
    * Both numbers are counted by the integration from the packs' own charging
-   * power - `sensor.…_charged` and `sensor.…_charged_from_grid`. Deliberately
+   * power - `sensor.…_charged_this_month` and `…_charged_from_grid_this_month`.
+   * Deliberately
    * *not* derived from its own commands: those are the plan, and the packs
    * answer 10-30 s later, so integrating them would put an authoritative-
    * looking number on the dashboard that is not what happened.
@@ -999,8 +1010,8 @@ ${PRICE_LEGEND}
     const wrap = this.querySelector("#charge");
     const note = this.querySelector("#cnote");
     const bar = this.querySelector("#cbar");
-    const total = this._entity("charged_total", "_charged");
-    const grid = this._entity("charged_grid", "_charged_from_grid");
+    const total = this._entity("charged_total", "_charged_this_month");
+    const grid = this._entity("charged_grid", "_charged_from_grid_this_month");
     const split = chargeSplit(this._num(total), this._num(grid));
 
     if (!split) {
@@ -1029,7 +1040,7 @@ ${PRICE_LEGEND}
           "accu de laadvermogen-sensor in bij de integratie."
         : "Laadtelling niet gevonden - gezocht naar sensor." +
           this._config.setpoint.slice("sensor.".length, -"_setpoint".length) +
-          "_charged. " + this._nearby("charg");
+          "_charged_this_month. " + this._nearby("charg");
       this.querySelector("#ctotal").textContent = "";
       this.querySelector("#csunt").textContent = "";
       this.querySelector("#cnett").textContent = "";

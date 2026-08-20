@@ -17,7 +17,7 @@ import logging
 import time
 from collections import deque
 from dataclasses import dataclass
-from datetime import timedelta, timezone
+from datetime import date, timedelta, timezone
 
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
@@ -138,6 +138,7 @@ from .const import (
     FLOW_DISCHARGE,
     MAX_PRICE_AGE,
     MAX_ENERGY_GAP_INTERVALS,
+    MONTH_HISTORY_MONTHS,
     MIN_OUTPUT_RELEASE,
     MAX_SETPOINT_AGE,
     MODE_CHARGE_ONLY,
@@ -466,6 +467,15 @@ class BatteryCoordinator:
         # kWh, and rounding to kWh every tick would lose most of the small ones.
         self.charged_wh: float = 0.0
         self.charged_grid_wh: float = 0.0
+        #: the same two figures for the calendar month in progress, and the
+        #: closing figures of the months before it. The running totals answer
+        #: "what have these packs ever done"; these answer "what did they do in
+        #: March", which is the question actually asked of a battery.
+        #: `month_key` is a local "YYYY-MM" - see `_roll_month` for why local.
+        self.month_key: str | None = None
+        self.month_charged_wh: float = 0.0
+        self.month_charged_grid_wh: float = 0.0
+        self.month_history: dict[str, dict] = {}
         #: when the counters were last advanced, so the elapsed time is
         #: measured rather than assumed - a tick can be late
         self._charged_at: float | None = None
@@ -568,6 +578,12 @@ class BatteryCoordinator:
             # whatever their age - an old figure is the whole point of a total
             "charged_wh": self.charged_wh,
             "charged_grid_wh": self.charged_grid_wh,
+            # the month in progress and the ones that closed. Without the key
+            # a restart would look like a fresh month and quietly zero it.
+            "month_key": self.month_key,
+            "month_charged_wh": self.month_charged_wh,
+            "month_charged_grid_wh": self.month_charged_grid_wh,
+            "month_history": dict(self.month_history),
             # a record of hours that have gone, so a restart at noon does not
             # grey out the morning the chart is being consulted about
             "price_history": dict(self.price_history),
@@ -620,12 +636,29 @@ class BatteryCoordinator:
                     "role": entry.get("role") or "normal",
                     "bought": bool(entry.get("bought")),
                 }
-        for key in ("charged_wh", "charged_grid_wh"):
+        for key in (
+            "charged_wh",
+            "charged_grid_wh",
+            "month_charged_wh",
+            "month_charged_grid_wh",
+        ):
             # a meter reading, not runtime state: restored regardless of age
             # and regardless of whether the coordinator was even switched on.
             # A total that resets on restart is not a total.
             if stored and stored.get(key) is not None:
                 setattr(self, key, float(stored[key]))
+        if stored and stored.get("month_key"):
+            # Restored *before* the first tick, so `_roll_month` has something
+            # to compare against. Come back inside the same month and the
+            # figure carries on; come back after the 1st and that first tick
+            # closes the old month properly instead of losing it.
+            self.month_key = str(stored["month_key"])
+        for key, entry in (stored or {}).get("month_history", {}).items():
+            if isinstance(entry, dict):
+                self.month_history[key] = {
+                    "charged_kwh": float(entry.get("charged_kwh") or 0.0),
+                    "grid_kwh": float(entry.get("grid_kwh") or 0.0),
+                }
         if stored and stored.get("soc_reserve") is not None:
             # a user setting, not runtime state: restore it even when the
             # coordinator was switched off, and regardless of age
@@ -1826,6 +1859,12 @@ class BatteryCoordinator:
                 "write_stalled": self.write_stalled,
                 "charged_kwh": round(self.charged_wh / 1000.0, 3),
                 "charged_from_grid_kwh": round(self.charged_grid_wh / 1000.0, 3),
+                "month": self.month_key,
+                "charged_this_month_kwh": round(self.month_charged_wh / 1000.0, 3),
+                "charged_from_grid_this_month_kwh": round(
+                    self.month_charged_grid_wh / 1000.0, 3
+                ),
+                "month_history": dict(self.month_history),
                 "counts_charge_energy": self.counts_charge_energy,
                 # the fuse protection, including the evidence behind each
                 # placement - a probe that guessed wrong is only findable here
@@ -2030,6 +2069,54 @@ class BatteryCoordinator:
         """
         return any(u.charge_power_sensor for u in self._units)
 
+    def _roll_month(self) -> None:
+        """Close the month that has ended and start the next one at nought.
+
+        Checked against the clock every tick rather than scheduled. A boundary
+        crossed while Home Assistant was down is then still honoured on the
+        first tick back, which a timer firing at midnight on the 1st cannot
+        promise - and a monthly figure that quietly keeps running because
+        nobody was awake for the changeover is worse than no figure at all.
+
+        **Local months.** "The start of the month" is midnight where the house
+        is, not in UTC, and for half of Europe those are different days. This
+        repo has been caught by exactly that once already: the price chart
+        sliced ISO strings instead of parsing them and labelled midnight 22:00.
+
+        The tick straddling the boundary is credited whole to the new month.
+        Splitting fifteen seconds of energy across two months would be arithmetic
+        nobody will ever read, and the error is bounded by one tick.
+        """
+        key = dt_util.now().strftime("%Y-%m")
+        if key == self.month_key:
+            return
+        if self.month_key is not None:
+            # what the month closed on, kept as kWh because that is what it
+            # will be read as - nothing downstream needs watt-hour resolution
+            # on a figure that no longer moves
+            self.month_history[self.month_key] = {
+                "charged_kwh": round(self.month_charged_wh / 1000.0, 3),
+                "grid_kwh": round(self.month_charged_grid_wh / 1000.0, 3),
+            }
+            for old in sorted(self.month_history)[:-MONTH_HISTORY_MONTHS]:
+                del self.month_history[old]
+        self.month_key = key
+        self.month_charged_wh = 0.0
+        self.month_charged_grid_wh = 0.0
+
+    @property
+    def month_started_at(self):
+        """Local midnight on the 1st of the month in progress.
+
+        Home Assistant needs this to record a resetting total correctly: it is
+        what tells the statistics engine that a drop to nought is a new period
+        and not a broken sensor.
+        """
+        if not self.month_key:
+            return None
+        year, month = (int(part) for part in self.month_key.split("-"))
+        return dt_util.start_of_local_day(date(year, month, 1))
+
     def _accumulate_charge(self, grid: float | None) -> None:
         """Advance the two energy counters by one tick.
 
@@ -2058,6 +2145,11 @@ class BatteryCoordinator:
           manufacture energy, so past MAX_ENERGY_GAP_INTERVALS we admit we do
           not know and count nothing.
         """
+        # Before the early returns below, not after: a month must turn over on
+        # its own boundary even across a tick that counts nothing - an outage,
+        # an unreadable meter, or simply no charging power sensor configured.
+        self._roll_month()
+
         now = time.time()
         previous, self._charged_at = self._charged_at, now
         if previous is None or grid is None:
@@ -2082,8 +2174,12 @@ class BatteryCoordinator:
             return
 
         hours = elapsed / 3600.0
-        self.charged_wh += charging * hours
-        self.charged_grid_wh += min(charging, max(grid, 0.0)) * hours
+        total = charging * hours
+        bought = min(charging, max(grid, 0.0)) * hours
+        self.charged_wh += total
+        self.charged_grid_wh += bought
+        self.month_charged_wh += total
+        self.month_charged_grid_wh += bought
 
     def _grid_age(self) -> float | None:
         """How long since the meter last reported anything at all.

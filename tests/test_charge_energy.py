@@ -248,3 +248,242 @@ def _returning(value):
         return value
 
     return _load
+
+
+# --- per month, and the months that have gone, 2026-08-20 ------------------
+#
+# Asked for by the owner: a monthly figure that starts again on the 1st, and
+# the months before it kept so the packs can be looked back on. The lifetime
+# counters stay - they are what the Energy dashboard wants - and these ride
+# alongside them off the same measurement.
+
+
+@pytest.fixture
+def wall_clock(monkeypatch):
+    """The calendar, separate from the elapsed-time clock.
+
+    The month boundary is a *local calendar* question and the energy arithmetic
+    is an elapsed-seconds one, so they are two different clocks and the tests
+    need to move them independently - a month has to be able to turn over
+    between two ticks fifteen seconds apart.
+    """
+    from datetime import datetime, timezone
+
+    at = [datetime(2026, 8, 20, 12, 0, tzinfo=timezone.utc)]
+    monkeypatch.setattr(coordinator_module.dt_util, "now", lambda: at[0])
+
+    def set_to(year, month, day=1, hour=0):
+        at[0] = datetime(year, month, day, hour, tzinfo=timezone.utc)
+
+    return set_to
+
+
+async def test_the_month_counts_alongside_the_lifetime_total(build_system, clock, wall_clock):
+    system = build_system(grid=5000, charge_power=True)
+    charging(system, 800, 400)
+
+    await run(system, 60, advance=clock, seconds=60)
+
+    assert system.coordinator.month_charged_wh == pytest.approx(1200, rel=0.02)
+    assert system.coordinator.month_charged_grid_wh == pytest.approx(1200, rel=0.02)
+    assert system.coordinator.charged_wh == system.coordinator.month_charged_wh
+
+
+async def test_the_first_of_the_month_starts_again_at_nought(build_system, clock, wall_clock):
+    """August's hour must not follow the counter into September."""
+    system = build_system(grid=5000, charge_power=True)
+    charging(system, 800, 400)
+    await run(system, 60, advance=clock, seconds=60)
+    august = system.coordinator.month_charged_wh
+    assert august > 0
+
+    wall_clock(2026, 9, 1)
+    await run(system, 1, advance=clock, seconds=60)
+
+    assert system.coordinator.month_key == "2026-09"
+    # September holds this one tick and nothing of August's hour: 1200 W for a
+    # minute is 20 Wh. The tick that straddles the boundary is credited whole
+    # to the new month by design - splitting fifteen seconds of energy across
+    # two months is arithmetic nobody would ever read.
+    assert system.coordinator.month_charged_wh == pytest.approx(20, rel=0.02)
+    assert system.coordinator.month_charged_grid_wh == pytest.approx(20, rel=0.02)
+    assert system.coordinator.month_charged_wh < august / 50
+    # and the lifetime total is untouched by the changeover
+    assert system.coordinator.charged_wh == pytest.approx(august + 20, rel=0.02)
+
+
+async def test_the_month_that_ended_is_kept(build_system, clock, wall_clock):
+    """The whole point: it has to still be there afterwards."""
+    system = build_system(grid=2000, charge_power=True)
+    charging(system, 1500, 500)
+    await run(system, 60, advance=clock, seconds=60)
+
+    wall_clock(2026, 9, 1)
+    await run(system, 1, advance=clock, seconds=60)
+
+    closed = system.coordinator.month_history["2026-08"]
+    assert closed["charged_kwh"] == pytest.approx(2.0, rel=0.02)
+    # the meter read 2000 W against 2000 W of charging: all of it bought
+    assert closed["grid_kwh"] == pytest.approx(2.0, rel=0.02)
+
+
+async def test_a_month_missed_entirely_still_closes_the_one_before(build_system, clock, wall_clock):
+    """Home Assistant was off for six weeks. The August figure must survive it.
+
+    This is why the changeover is checked against the clock every tick instead
+    of being scheduled: nothing fires at midnight on the 1st if nothing is
+    running, and the figure would then quietly keep accumulating into October.
+    """
+    system = build_system(grid=5000, charge_power=True)
+    charging(system, 1000, 0)
+    await run(system, 60, advance=clock, seconds=60)
+
+    wall_clock(2026, 10, 3)
+    await run(system, 1, advance=clock, seconds=60)
+
+    assert system.coordinator.month_key == "2026-10"
+    closed = system.coordinator.month_history["2026-08"]
+    assert closed["charged_kwh"] == pytest.approx(1.0, rel=0.02)
+    # October carries this one tick only - 1000 W for a minute - so August's
+    # hour did not leak across the six weeks nothing was running
+    assert system.coordinator.month_charged_wh == pytest.approx(16.7, rel=0.02)
+
+
+async def test_the_month_turns_over_even_when_nothing_can_be_counted(build_system, clock, wall_clock):
+    """No meter reading, so no energy is attributable - but the month still ends.
+
+    The rollover sits before the early returns for exactly this: an unreadable
+    meter on the 1st must not postpone the changeover to whenever the meter
+    comes back, which would file the new month's first hours under the old one.
+    """
+    system = build_system(grid=None, charge_power=True)
+    charging(system, 1000, 1000)
+    await run(system, 5, advance=clock, seconds=60)
+
+    wall_clock(2026, 9, 1)
+    await run(system, 1, advance=clock, seconds=60)
+
+    assert system.coordinator.month_key == "2026-09"
+
+
+async def test_the_history_does_not_grow_without_end(build_system, clock, wall_clock):
+    system = build_system(grid=5000, charge_power=True)
+    charging(system, 1000, 0)
+
+    # three years of changeovers, one tick each
+    for year in (2026, 2027, 2028):
+        for month in range(1, 13):
+            wall_clock(year, month)
+            await run(system, 1, advance=clock, seconds=60)
+
+    from custom_components.battery_management.const import MONTH_HISTORY_MONTHS
+
+    assert len(system.coordinator.month_history) == MONTH_HISTORY_MONTHS
+    # the ones dropped are the oldest, not an arbitrary few
+    assert max(system.coordinator.month_history) == "2028-11"
+
+
+async def test_the_month_survives_a_restart(build_system, clock, wall_clock):
+    """Come back inside the same month and the figure carries on.
+
+    `month_key` has to be restored *before* the first tick, or that tick sees a
+    coordinator with no month at all, treats the current one as brand new and
+    silently starts it again at nought - which on a site that reboots weekly
+    would mean the monthly figure never covered more than a few days.
+    """
+    system = build_system(grid=5000, charge_power=True)
+    charging(system, 1000, 0)
+    await run(system, 60, advance=clock, seconds=60)
+    saved = system.coordinator._state_to_save()
+    assert saved["month_key"] == "2026-08"
+
+    revived = build_system(grid=5000, charge_power=True)
+    charging(revived, 1000, 0)
+    revived.coordinator._store.data = saved
+    await revived.coordinator._async_restore()
+
+    assert revived.coordinator.month_key == "2026-08"
+    restored = revived.coordinator.month_charged_wh
+    assert restored == pytest.approx(983, rel=0.02)
+
+    # The first tick back counts nothing - `_charged_at` is empty, so the
+    # elapsed time is unknown and inventing one would manufacture energy. The
+    # second one carries on from the restored figure rather than from nought,
+    # which is the thing being checked here.
+    await run(revived, 1, advance=clock, seconds=60)
+    assert revived.coordinator.month_charged_wh == restored
+
+    await run(revived, 1, advance=clock, seconds=60)
+    assert revived.coordinator.month_key == "2026-08"
+    assert revived.coordinator.month_charged_wh == pytest.approx(restored + 16.7, rel=0.02)
+
+
+async def test_a_restart_after_the_first_still_closes_the_old_month(build_system, clock, wall_clock):
+    """Down over the changeover: the first tick back has to file August, not
+    lose it and not carry it into September."""
+    system = build_system(grid=5000, charge_power=True)
+    charging(system, 1000, 0)
+    await run(system, 60, advance=clock, seconds=60)
+    saved = system.coordinator._state_to_save()
+
+    wall_clock(2026, 9, 2)
+    revived = build_system(grid=5000, charge_power=True)
+    charging(revived, 1000, 0)
+    revived.coordinator._store.data = saved
+    await revived.coordinator._async_restore()
+    await run(revived, 1, advance=clock, seconds=60)
+
+    assert revived.coordinator.month_key == "2026-09"
+    assert revived.coordinator.month_history["2026-08"]["charged_kwh"] == pytest.approx(
+        1.0, rel=0.02
+    )
+
+
+async def test_closed_months_survive_a_restart(build_system, clock, wall_clock):
+    system = build_system(grid=5000, charge_power=True)
+    charging(system, 1000, 0)
+    await run(system, 60, advance=clock, seconds=60)
+    wall_clock(2026, 9, 1)
+    await run(system, 1, advance=clock, seconds=60)
+    saved = system.coordinator._state_to_save()
+
+    revived = build_system(grid=5000, charge_power=True)
+    revived.coordinator._store.data = saved
+    await revived.coordinator._async_restore()
+
+    assert revived.coordinator.month_history["2026-08"]["charged_kwh"] == pytest.approx(
+        1.0, rel=0.02
+    )
+
+
+async def test_the_reset_moment_is_the_first_of_the_month(build_system, clock, wall_clock):
+    """What Home Assistant is handed as `last_reset`.
+
+    Pinned here as well as in `test_month_sensors.py` because the arithmetic
+    lives on the coordinator and this suite runs without a real Home Assistant
+    - the sensor module needs the entity platform and skips when there is none,
+    so without this the date behind the reset would go unchecked on every
+    stubbed run.
+    """
+    system = build_system(grid=5000, charge_power=True)
+    await run(system, 1, advance=clock, seconds=60)
+
+    started = system.coordinator.month_started_at
+
+    assert (started.year, started.month, started.day) == (2026, 8, 1)
+    assert started.hour == 0
+    assert started.tzinfo is not None
+
+    wall_clock(2027, 1, 15)
+    await run(system, 1, advance=clock, seconds=60)
+
+    started = system.coordinator.month_started_at
+    assert (started.year, started.month, started.day) == (2027, 1, 1)
+
+
+async def test_no_month_yet_has_no_reset_moment(build_system):
+    """Before the first tick, dating the reset to anything would be a guess."""
+    system = build_system(grid=5000, charge_power=True)
+
+    assert system.coordinator.month_key is None
+    assert system.coordinator.month_started_at is None

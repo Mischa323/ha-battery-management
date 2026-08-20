@@ -542,6 +542,57 @@ possible, and they gate section A.
 
 ### H. Done
 
+- **Per month, and the months before it, 2026-08-20.** Asked for by the owner:
+  a charge figure that starts again on the 1st, and the months that have gone
+  kept so the packs can be looked back on.
+
+  **The obvious answer was the wrong one, and it had already been ruled on.**
+  A `utility_meter` helper is exactly what Home Assistant provides for this,
+  and it is what the lifetime sensors' own docstring pointed at. But it is a
+  per-site YAML helper with each house's entity ids typed into it, which is the
+  thing the owner rejected on 2026-08-18 for the charge split itself: *"als ik
+  die entiteiten moet toevoegen dan moet dat hierin staan, niet handmatig."*
+  Several family sites, one repo. So the integration keeps the months itself.
+
+  - **The lifetime counters stay exactly as they were.** They are what the
+    Energy dashboard wants and what `TOTAL_INCREASING` is for; the monthly pair
+    is a second reading of the same measurement, not a replacement. Four
+    sensors now, off one accumulation.
+  - **`TOTAL` + `last_reset`, not `TOTAL_INCREASING`.** This is the whole
+    HA-facing contract and it is the quiet kind of wrong when missed: a total
+    that drops to nought on the 1st without a `last_reset` moving with it reads
+    as a replaced meter, nothing looks broken, and the long-term sums are wrong
+    a month later on a figure nobody can check by eye.
+  - **The changeover is checked against the clock every tick, never scheduled.**
+    Nothing fires at midnight on the 1st if Home Assistant is not running, and
+    the figure would then keep accumulating into the new month unnoticed. A
+    test pins six weeks of downtime: the first tick back still closes August.
+  - **Local months.** "Begin van de maand" is midnight where the house is. This
+    repo has been caught by that once already - the price chart sliced ISO
+    strings and labelled midnight 22:00.
+  - **The rollover sits before the early returns** in `_accumulate_charge`, so
+    an unreadable meter on the 1st cannot postpone the changeover until the
+    meter comes back and file the new month's first hours under the old one.
+  - **`month_key` is restored before the first tick.** Without it a restart
+    finds no month, treats the current one as brand new and silently starts it
+    again - on a site that reboots weekly the monthly figure would never cover
+    more than a few days. All three of these were confirmed by reintroducing
+    the bug.
+  - The boundary tick is credited whole to the new month. Splitting fifteen
+    seconds of energy across two months is arithmetic nobody will read, and the
+    error is bounded by one tick.
+  - The card now shows the month rather than the lifetime, and says so in its
+    heading. Its *fallback* suffixes had to move too - a card configured before
+    this would otherwise have quietly resolved the lifetime totals and labelled
+    them as the month.
+  - **`test_month_sensors.py` does not run on the stubbed pass.** The root
+    conftest's stub is deliberately "just enough for coordinator.py to import"
+    and the entity platforms are well past that, so the module is
+    `importorskip`ed and runs only against a real Home Assistant in CI. The
+    reset *date* is therefore pinned a second time on the coordinator, in
+    `test_charge_energy.py`, where the stubbed suite does reach it - otherwise
+    the arithmetic behind `last_reset` would go unchecked on every local run.
+
 - **The band and the plan are two facts, 2026-08-20.** Reported from the
   primary site: the price chart showed one green bar where four were expected.
   Nothing was miscalculating - `slots_to_buy` had correctly narrowed to the
