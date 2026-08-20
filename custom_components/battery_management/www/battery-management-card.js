@@ -1315,6 +1315,227 @@ defineCard("battery-management-prices-card", BatteryManagementPricesCard, {
   preview: false,
 });
 
+
+/**
+ * Why the split cannot be shown, in the reader's terms rather than as a key.
+ *
+ * Each of these is a fixable configuration gap, so the message names the thing
+ * to go and fix. "Onbekend" would be true and useless.
+ */
+const NO_SPLIT = {
+  no_capacity:
+    "Vul eerst in hoe lang een volle lading duurt (Laadtijd leeg→vol, in de " +
+    "opties). Zonder dat is niet te zeggen hoeveel er nog in kan.",
+  no_forecast:
+    "Geen zonprognose ingesteld. Zonder die kan hij niet bepalen hoeveel hij " +
+    "aan de zon overlaat en hoeveel hij zelf koopt.",
+  no_units: "Geen accu bereikbaar — dit zegt niets over de accu's zelf.",
+};
+
+/**
+ * What an hour of buying became, told in the tense that hour is in.
+ *
+ * Split from the price chart's `planSays` on purpose: this card is a checklist
+ * read down the page, so each row states its own outcome rather than appending
+ * a clause to a price. `bought` outranks `buy` for the same reason it does
+ * there - one is what was intended, the other is the grid actually being paid.
+ */
+function buyRowSays(hour) {
+  if (hour.bought) return { text: "geladen", tone: "done" };
+  if (!hour.past) return { text: "gaat laden", tone: "todo" };
+  return { text: "niet geladen", tone: "miss" };
+}
+
+/**
+ * Today's plan: how much goes in, from where, and at what times.
+ *
+ * Asked for by the owner - "zodat ik kan controleren wat hij doet", and then
+ * specifically how much from the sun, how much from the grid, and when.
+ *
+ * **It deliberately does not draw a predicted setpoint.** That depends on the
+ * house minute by minute, so a curve claiming to know today's would look
+ * authoritative and be wrong - the same reason `plan()` itself refuses to
+ * produce one. What genuinely *is* decided ahead of time is the split: the buy
+ * ceiling is the statement "fill this much from the meter, leave that much for
+ * the roof", and the cheap hours are when the first half happens. So that is
+ * what this shows, and nothing past it.
+ *
+ * The hour list covers the whole of today rather than only what is left, each
+ * row carrying what became of it. A plan card that forgets the morning by
+ * teatime cannot be used to check anything.
+ */
+class BatteryManagementPlanCard extends HTMLElement {
+  setConfig(config) {
+    if (!config) throw new Error("Invalid configuration");
+    this._config = config;
+    this._built = false;
+  }
+
+  set hass(hass) {
+    this._hass = hass;
+    if (!this._built) this._build();
+    this._update();
+  }
+
+  static getStubConfig(hass, entities) {
+    const all = knownEntities(hass, entities);
+    const find = (suffix, domain) =>
+      all.find(
+        (id) => id.startsWith((domain || "sensor") + ".") && id.endsWith(suffix)
+      );
+    const config = { type: "custom:battery-management-plan-card" };
+    const plan = find("_plan");
+    if (plan) config.plan = plan;
+    const policy = find("_active_policy");
+    if (policy) config.policy = policy;
+    const mode = find("_mode", "select");
+    if (mode) config.mode = mode;
+    return config;
+  }
+
+  getCardSize() {
+    return 4;
+  }
+
+  _build() {
+    const c = this._config;
+    this.innerHTML =
+      '<ha-card header="' + esc(c.title || "Plan van vandaag") + '">' +
+      `<style>
+          .plc { padding: 4px 16px 16px; }
+          .plc .muted { color: var(--secondary-text-color); }
+          .plc .row { display:flex; justify-content:space-between; gap:12px;
+                      align-items:baseline; padding:3px 0; }
+          .plc h4 { margin:14px 0 4px; font-size:.8em; font-weight:600;
+                    text-transform:uppercase; letter-spacing:.04em;
+                    color: var(--secondary-text-color); }
+          .split { display:flex; gap:10px; margin:6px 0 2px; }
+          .half { flex:1 1 0; border-radius:10px; padding:10px 12px;
+                  background: var(--secondary-background-color, #f2f2f2); }
+          .half .n { font-size:1.5em; font-weight:600; line-height:1.2; }
+          .half .l { font-size:.8em; }
+          .half.sun { border-left:4px solid var(--success-color,#4caf50); }
+          .half.net { border-left:4px solid var(--info-color,#039be5); }
+          .hr { display:flex; justify-content:space-between; gap:10px;
+                padding:3px 0; font-variant-numeric: tabular-nums; }
+          .hr .when { min-width:6.5em; }
+          .hr .tag { font-size:.82em; padding:1px 8px; border-radius:9px;
+                     white-space:nowrap; }
+          .tag.done { background:var(--success-color,#4caf50); color:#fff; }
+          .tag.todo { background:var(--info-color,#039be5); color:#fff; }
+          .tag.miss { background:var(--divider-color); }
+          .note { font-size:.86em; margin:4px 0 0; }
+        </style>
+        <div class="plc">
+          <div class="row"><b id="plnow">—</b><span class="muted" id="plmode"></span></div>
+          <h4>Wil hij vandaag nog inladen</h4>
+          <div class="split">
+            <div class="half sun"><div class="n" id="plsun">—</div>
+              <div class="l muted">via de zon</div></div>
+            <div class="half net"><div class="n" id="plnet">—</div>
+              <div class="l muted">via het net</div></div>
+          </div>
+          <div class="muted note" id="plwhy"></div>
+          <h4>Wanneer van het net</h4>
+          <div id="plhours"></div>
+          <div class="muted note" id="plnone"></div>
+        </div>
+      </ha-card>`;
+    this._built = true;
+  }
+
+  _state(key) {
+    const id = this._config[key];
+    return id && this._hass && this._hass.states[id];
+  }
+
+  _update() {
+    const el = (id) => this.querySelector("#" + id);
+    const planState = this._state("plan");
+    const plan = (planState && planState.attributes) || {};
+
+    // What is binding right now, which is what makes the rest legible: "Volg
+    // de meter" beside a flat setpoint reads as a broken card until something
+    // underneath says "Accu's leeg".
+    const policy = this._state("policy");
+    el("plnow").textContent = policy
+      ? stateLabel(this._hass, policy)
+      : planState
+        ? "Plan"
+        : "Plan-sensor niet ingesteld op deze kaart";
+    const mode = this._state("mode");
+    el("plmode").textContent = mode
+      ? stateLabel(this._hass, mode)
+      : plan.mode
+        ? String(plan.mode).replace(/_/g, " ")
+        : "";
+
+    // ---- the split ----
+    const expected = plan.expected || {};
+    if (expected.known) {
+      el("plsun").textContent = kwh(expected.solar_kwh);
+      el("plnet").textContent = kwh(expected.grid_kwh);
+      // Only where the two differ. Left alone they are the same number by
+      // construction - the ceiling *is* "100 % minus the sun still coming" -
+      // so saying it every time would be noise that buries the one case worth
+      // seeing, where the owner's own bounds have overridden the calculation.
+      const short =
+        expected.room_for_solar_kwh > expected.solar_kwh + 0.05
+          ? " Er staat " + kwh(expected.room_for_solar_kwh) +
+            " ruimte vrij, maar er komt maar " +
+            kwh(expected.solar_remaining_kwh) + " zon."
+          : "";
+      el("plwhy").textContent =
+        "Koopt bij tot " + Math.round(expected.ceiling) +
+        " % en laat de rest aan de zon." + short;
+    } else {
+      el("plsun").textContent = "—";
+      el("plnet").textContent = "—";
+      el("plwhy").textContent = planState
+        ? NO_SPLIT[expected.reason] || "Nog niet te zeggen."
+        : "";
+    }
+
+    // ---- when, and what became of it ----
+    const today = slotsOnDay(plan.hours || [], dayKey(0));
+    const rows = today.filter((h) => h.buy || h.bought);
+    el("plhours").innerHTML = rows
+      .map((h) => {
+        const says = buyRowSays(h);
+        return (
+          '<div class="hr"><span class="when">' +
+          hhmm(h.start) + "–" + hhmm(h.end) + "</span>" +
+          '<span class="muted">' + Number(h.price).toFixed(3) + " €/kWh</span>" +
+          '<span class="tag ' + says.tone + '">' + says.text + "</span></div>"
+        );
+      })
+      .join("");
+
+    // An empty list has four quite different meanings, and telling them apart
+    // is most of what this card is for: "nothing planned" must never be able
+    // to stand in for "no prices", "wrong mode" or "already full enough".
+    el("plnone").textContent = !planState
+      ? ""
+      : rows.length
+        ? ""
+        : plan.mode !== "dynamic"
+          ? "Koopt niet van het net in deze modus — volgt alleen de meter."
+          : plan.has_prices === false
+            ? "Geen prijzen binnen, dus er wordt niets van het net gekocht."
+            : (plan.cheap_hours || []).length
+              ? "Niets te kopen: de accu's halen het plafond al zonder het net."
+              : "Geen uur is goedkoop genoeg om op te kopen.";
+  }
+}
+
+defineCard("battery-management-plan-card", BatteryManagementPlanCard, {
+  type: "battery-management-plan-card",
+  name: "Battery Management Plan",
+  description:
+    "What it intends today: how much from the sun, how much from the grid, and when.",
+  preview: false,
+});
+
 /**
  * One line that answers "did this arrive in time, and did it work".
  *
@@ -1328,6 +1549,7 @@ window.batteryManagementCardBoot = {
   defined: [
     "battery-management-card",
     "battery-management-prices-card",
+    "battery-management-plan-card",
   ].filter((tag) => !!customElements.get(tag)),
   advertised: (window.customCards || [])
     .map((c) => c.type)

@@ -1201,6 +1201,73 @@ class BatteryCoordinator:
         for key in [k for k in self.price_history if k < cutoff]:
             del self.price_history[key]
 
+    def expected_charge(self) -> dict:
+        """How much is still meant to come off the meter, and how much off the roof.
+
+        Asked for by the owner: "hoeveel wil hij laden via de zon en hoeveel via
+        het net". Both fall out of the buy ceiling, which is where the split is
+        actually decided - `100 % - remaining sun / capacity` is precisely the
+        statement "fill this much from the grid and leave that much for the
+        sun", so this reads the intention back out rather than inventing one.
+
+        * **grid** is the room below the ceiling: what buying would still put in.
+        * **solar** is the room left *above* it, capped by the sun actually
+          forecast - reserving 6 kWh of space means nothing if only 2 kWh are
+          coming.
+
+        Per unit and against each pack's own charge limit, not against a mean:
+        one pack full and one empty is not the same as two half-full ones, and
+        it is exactly the case where a mean would flatter the answer.
+
+        `known` is False when the ceiling cannot be computed - no measured
+        empty-to-full time, or no solar forecast - and then the figures are
+        None rather than a guess. A "we will buy 4 kWh" built on an unmeasured
+        capacity is worse than admitting the split is not knowable, and `reason`
+        says which input is missing so it can be fixed.
+        """
+        minutes = self._full_charge_minutes
+        if minutes <= 0:
+            return {"known": False, "reason": "no_capacity"}
+
+        # Asked before the ceiling, and the order is the point: the capacity is
+        # summed over *online* units, so nothing reachable makes the ceiling
+        # unavailable too - and "no solar forecast" would then be the answer to
+        # a question about the Modbus connection. Same lesson as POLICY_NO_UNITS.
+        snapshots = [
+            snap for cfg in self._units if (snap := self._unit_snapshot(cfg)).online
+        ]
+        if not snapshots:
+            return {"known": False, "reason": "no_units"}
+
+        ceiling = self.charge_ceiling()
+        if ceiling is None:
+            return {"known": False, "reason": "no_forecast"}
+
+        grid_kwh = 0.0
+        room_kwh = 0.0
+        for unit in snapshots:
+            # what this pack holds, from the time it takes to fill it
+            capacity = unit.unit_max * minutes / 60.0 / 1000.0
+            # buying stops at the ceiling, and never above the pack's own limit
+            target = min(ceiling, unit.charge_limit)
+            grid_kwh += max(target - unit.soc, 0.0) / 100.0 * capacity
+            # the space deliberately kept free above it, for the sun
+            room_kwh += (
+                max(unit.charge_limit - max(unit.soc, target), 0.0) / 100.0 * capacity
+            )
+        remaining = self.solar_remaining()
+        solar_kwh = room_kwh if remaining is None else min(remaining, room_kwh)
+        return {
+            "known": True,
+            "grid_kwh": round(grid_kwh, 2),
+            "solar_kwh": round(solar_kwh, 2),
+            # what the sun is short of the room being held for it, so "why is
+            # the solar figure lower than the space" has an answer on the card
+            "room_for_solar_kwh": round(room_kwh, 2),
+            "solar_remaining_kwh": None if remaining is None else round(remaining, 2),
+            "ceiling": round(ceiling, 1),
+        }
+
     def plan(self) -> dict:
         """What it expects and intends today, for the dashboard.
 
@@ -1301,6 +1368,7 @@ class BatteryCoordinator:
             "solar_remaining_kwh": self.solar_remaining(),
             "usable_capacity_kwh": self.usable_capacity_kwh(),
             "charge_ceiling": self.charge_ceiling(),
+            "expected": self.expected_charge(),
             "buy_ceiling_min": self.buy_ceiling_min,
             "buy_ceiling_max": self.buy_ceiling_max,
             "soc_reserve": self.soc_reserve,

@@ -1,4 +1,4 @@
-// The script loaded twice must still leave both cards registered.
+// The script loaded twice must still leave every card registered exactly once.
 import { readFileSync } from "node:fs";
 const src = readFileSync(
   "custom_components/battery_management/www/battery-management-card.js",
@@ -28,10 +28,16 @@ const check = (name, cond, got) => {
 new Function(src)();
 new Function(src)();
 
-check("both elements defined", defined.size === 2, [...defined.keys()]);
+const EXPECTED = [
+  "battery-management-card",
+  "battery-management-prices-card",
+  "battery-management-plan-card",
+];
+check("every element defined",
+  EXPECTED.every((t) => defined.has(t)) && defined.size === EXPECTED.length,
+  [...defined.keys()]);
 const types = window.customCards.map((c) => c.type);
-check("both cards listed", types.includes("battery-management-card") &&
-  types.includes("battery-management-prices-card"), types);
+check("every card listed", EXPECTED.every((t) => types.includes(t)), types);
 check("no duplicate entries", new Set(types).size === types.length, types);
 check("the description is the current one",
   window.customCards.find((c) => c.type === "battery-management-card")

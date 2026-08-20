@@ -542,6 +542,58 @@ possible, and they gate section A.
 
 ### H. Done
 
+- **A card for the plan, 2026-08-20.** Asked for by the owner: "zodat ik kan
+  controleren wat hij doet", and then specifically *how much from the sun, how
+  much from the grid, and at what times*. A third card,
+  `battery-management-plan-card`, in the same module as the other two.
+
+  - **It does not draw a predicted setpoint, and that is the design.** The
+    setpoint depends on the house minute by minute, so a curve claiming to know
+    today's would look authoritative and be wrong - the same reason `plan()`
+    itself refuses to produce one. What *is* settled in advance is the split,
+    so that is what the card shows. `plan_card.mjs` asserts the card never
+    reads a setpoint entity, because the moment it has one somebody will draw
+    it. Asked of the code with comments stripped, not of the prose: a comment
+    does mention the setpoint, and a test that matched the bare word would fail
+    for the wrong reason and get deleted.
+  - **The split is read back out of the buy ceiling rather than invented.**
+    `100 % - remaining sun / capacity` already *is* the statement "fill this
+    much from the meter, leave that much for the roof", so `expected_charge()`
+    just reports both halves of it. Grid is the room below the ceiling; solar
+    is the room above it, capped by the sun actually forecast - reserving 6 kWh
+    of space means nothing if 2 kWh are coming.
+  - Per pack against its own charge limit, never against a mean. One full pack
+    and one empty is not two half-full ones, and a mean would report nothing
+    left to buy when half the storage is empty.
+  - **The two figures are equal by construction** unless the owner's own
+    `buy_ceiling_min/max` override the calculation, which is the only case
+    where the card prints the shortfall clause. A test pins both halves of
+    that, because "why is the sun figure lower than the free space" is exactly
+    the question the card exists to answer.
+  - `known: False` with a `reason` where the ceiling is not computable - no
+    measured empty-to-full time, no forecast, or nothing reachable. Same rule
+    as `minutes_to_full`: a "we will buy 4 kWh" built on a guessed capacity is
+    worse than admitting it is not knowable, and the card turns each reason
+    into the setting to go and fix.
+  - **`no_units` is asked before `no_forecast`**, and the order was a real bug
+    the tests caught. The capacity is summed over *online* units, so nothing
+    reachable makes the ceiling unavailable too - and the card would then have
+    sent somebody hunting through Forecast.Solar over a Modbus outage. Same
+    lesson as `POLICY_NO_UNITS`.
+  - **The hour list covers the whole of today, not what is left of it**, each
+    row carrying what became of it: `geladen`, `gaat laden`, or `niet geladen`.
+    A plan card that forgets the morning by teatime cannot be used to check
+    anything, and plan-versus-outcome is the check being asked for.
+  - **Four distinct empty states, which is most of the point.** "Niets gepland"
+    must never stand in for wrong mode, no prices, or already full enough -
+    those want three different actions from the reader. A test asserts all four
+    messages differ, verified by collapsing two of them.
+  - `module_load.mjs` and `double_load.mjs` counted cards (`=== 2`). Replaced
+    with a named `EXPECTED` list, so adding a card means naming it and the
+    pairing checks keep doing the real work - a count only ever said "two of
+    something". Also: there was already a `kwh` helper in the file; the second
+    one threw at load and took every card with it.
+
 - **Per month, and the months before it, 2026-08-20.** Asked for by the owner:
   a charge figure that starts again on the 1st, and the months that have gone
   kept so the packs can be looked back on.

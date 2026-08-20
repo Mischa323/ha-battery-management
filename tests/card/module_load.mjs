@@ -54,8 +54,19 @@ try {
   process.exit(1);
 }
 
+//: every card this file is expected to register. Kept as a list rather than a
+//: count so adding one means naming it here, and the pairing checks below
+//: still do the real work - a number would only ever say "two of something".
+const EXPECTED = [
+  "battery-management-card",
+  "battery-management-prices-card",
+  "battery-management-plan-card",
+];
+
 const advertised = (globalThis.customCards || []).map((c) => c.type);
-check("both cards defined", defined.size === 2, [...defined.keys()]);
+check("every card is defined",
+  EXPECTED.every((t) => defined.has(t)) && defined.size === EXPECTED.length,
+  [...defined.keys()]);
 check(
   "the management card is defined",
   defined.has("battery-management-card"),
@@ -66,7 +77,10 @@ check(
   defined.has("battery-management-prices-card"),
   [...defined.keys()]
 );
-check("both cards advertised", advertised.length === 2, advertised);
+check("every card is advertised",
+  EXPECTED.every((t) => advertised.includes(t)) &&
+    advertised.length === EXPECTED.length,
+  advertised);
 check(
   "nothing advertised that does not exist",
   advertised.every((t) => defined.has(t)),
