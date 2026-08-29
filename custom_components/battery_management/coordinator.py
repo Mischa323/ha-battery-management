@@ -2134,11 +2134,19 @@ class BatteryCoordinator:
                     # control (gotcha 2), but it is the only way to see how far
                     # behind our command the hardware actually runs.
                     "actual_w": self._unit_power(name),
+                    # last_reported, not the default last_updated: gotcha 8
+                    # showed last_updated only moves when the value does, so a
+                    # pack holding a steady output or SoC reads as "stale" when
+                    # it is simply not changing. last_reported is bumped on
+                    # every poll, changed or not, so it actually answers
+                    # "is this pack still talking to us".
                     "actual_age_s": self._state_age(
-                        getattr(cfg_by_name_all.get(name), "power_sensor", None)
+                        getattr(cfg_by_name_all.get(name), "power_sensor", None),
+                        "last_reported",
                     ),
                     "soc_age_s": self._state_age(
-                        getattr(cfg_by_name_all.get(name), "soc_sensor", None)
+                        getattr(cfg_by_name_all.get(name), "soc_sensor", None),
+                        "last_reported",
                     ),
                     # what the device holds, and how long it took to hold it
                     "readback_w": self._read_float(
