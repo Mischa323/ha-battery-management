@@ -2082,6 +2082,7 @@ class BatteryCoordinator:
         bounds = bounds or {}
         legs = self.phase_power() or {}
         cfg_by_name_all = {u.name: u for u in self._units}
+        price = self.current_price()
         row = {
             "at": dt_util.utcnow().isoformat(),
             "grid_w": round(grid),
@@ -2108,6 +2109,20 @@ class BatteryCoordinator:
             ),
             "error_w": round(error),
             "setpoint_w": round(sp),
+            # what this hour costs and whether it was ranked cheap/dear/normal -
+            # recorded so a trace answers "what price did it buy at" on its own,
+            # instead of the price chart having to be cross-checked by hand
+            # against the tick times after the fact.
+            "price_eur_kwh": (price or {}).get("price"),
+            "price_role": (price or {}).get("role"),
+            # cumulative kWh produced today, if a solar sensor is configured -
+            # the diff between two rows is the only reading that can settle
+            # "was that solar" without guessing from grid_w alone.
+            "solar_produced_today_kwh": (
+                self._read_float(self._solar_produced_sensor)
+                if self._solar_produced_sensor
+                else None
+            ),
             "mode": self.mode,
             "policy": self.active_policy,
             "status": self.status,

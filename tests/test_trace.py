@@ -10,14 +10,20 @@ from __future__ import annotations
 
 import csv
 import os
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
+from custom_components.battery_management import coordinator as coordinator_module
 from custom_components.battery_management.const import (
+    CONF_CHEAP_HOURS,
     CONF_KP,
     CONF_PHASE_DETECT,
+    CONF_PRICE_SENSOR,
+    CONF_SOLAR_PRODUCED_SENSOR,
     CONF_TRACE,
     CONF_TRACE_DAYS,
+    MODE_DYNAMIC,
 )
 from custom_components.battery_management.trace import Trace
 
@@ -97,6 +103,66 @@ async def test_the_legs_are_recorded_when_they_are_configured(traced):
     row = rows(system.trace_dir)[0]
     assert row["phase1_w"] == "1000"
     assert row["phase3_w"] == "300"
+
+
+PRICE_SENSOR = "sensor.energy_prices"
+SOLAR_PRODUCED_SENSOR = "sensor.solar_produced_today"
+NOW = datetime(2026, 8, 30, 12, 0, tzinfo=timezone.utc)
+
+
+def price_attributes(cheap_hour: int) -> dict:
+    midnight = NOW.replace(hour=0, minute=0, second=0, microsecond=0)
+    slots = []
+    for i in range(24):
+        start = midnight + timedelta(hours=i)
+        price = 0.36 if start.hour != cheap_hour else 0.13
+        slots.append(
+            {
+                "start": start.isoformat(),
+                "end": (start + timedelta(hours=1)).isoformat(),
+                "value": price,
+            }
+        )
+    return {"raw_today": slots}
+
+
+async def test_the_price_paid_is_recorded(traced, monkeypatch):
+    """A trace should answer "what did that hour cost" on its own, without
+    the price chart having to be cross-checked by hand against the tick
+    times afterwards."""
+    monkeypatch.setattr(coordinator_module.dt_util, "utcnow", lambda: NOW)
+    system = traced(grid=300, **{CONF_PRICE_SENSOR: PRICE_SENSOR, CONF_CHEAP_HOURS: 1})
+    system.hass.states.set(PRICE_SENSOR, 0.36, price_attributes(cheap_hour=NOW.hour))
+    system.coordinator.mode = MODE_DYNAMIC
+
+    for _ in range(25):
+        await system.coordinator._async_tick(None)
+
+    row = rows(system.trace_dir)[-1]
+    assert row["price_eur_kwh"] == "0.13"
+    assert row["price_role"] == "cheap"
+
+
+async def test_no_price_source_leaves_the_column_empty(traced):
+    system = traced(grid=300)
+
+    for _ in range(25):
+        await system.coordinator._async_tick(None)
+
+    row = rows(system.trace_dir)[-1]
+    assert not row["price_eur_kwh"]
+    assert not row["price_role"]
+
+
+async def test_solar_produced_today_is_recorded_when_configured(traced):
+    system = traced(grid=300, **{CONF_SOLAR_PRODUCED_SENSOR: SOLAR_PRODUCED_SENSOR})
+    system.hass.states.set(SOLAR_PRODUCED_SENSOR, 4.2)
+
+    for _ in range(25):
+        await system.coordinator._async_tick(None)
+
+    row = rows(system.trace_dir)[-1]
+    assert row["solar_produced_today_kwh"] == "4.2"
 
 
 async def test_a_broken_disk_costs_the_trace_and_not_the_batteries(traced):
