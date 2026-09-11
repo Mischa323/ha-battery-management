@@ -118,6 +118,7 @@ What each row carries:
 | `<pack>_cap_w`, `<pack>_soc`, `<pack>_phase`, `<pack>_recovering` | its ceiling and state |
 | `mode`, `policy`, `status`, `dry_run`, `offline` | context |
 | `price_eur_kwh`, `price_role` | what this hour cost, and whether it was ranked `cheap` · `dear` · `normal` — so a trace can be read against the tariff without cross-checking the price chart by hand |
+| `market_price_eur_kwh` | the exchange price of the same slot, which is what export is settled against — what a kWh sent back was worth while a bought one cost `price_eur_kwh`. Direct supplier route only |
 | `solar_produced_today_kwh` | the configured solar sensor's cumulative reading for the day, if one is set — diff two rows to get the rate; the only way to confirm "was that solar" rather than guessing from `grid_w` |
 
 Rows with `event=phase_probe` record a phase measurement: the deltas per leg,

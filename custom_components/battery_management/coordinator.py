@@ -1143,6 +1143,12 @@ class BatteryCoordinator:
         if not rows:
             return None
         slots = parse_forecast({"prices": rows}, dt_util.utcnow())
+        if slots and self._price_resolution == RESOLUTION_HOURLY:
+            # folded like the all-in price, for the same reason: leaving this
+            # one per quarter while that one reads per hour would put two
+            # numbers about different spans of time side by side, on a
+            # dashboard where both look equally authoritative
+            slots = to_hourly(slots)
         current = slot_at(slots, dt_util.utcnow()) if slots else None
         return None if current is None else round(current.price, 4)
 
@@ -2115,6 +2121,13 @@ class BatteryCoordinator:
             # against the tick times after the fact.
             "price_eur_kwh": (price or {}).get("price"),
             "price_role": (price or {}).get("role"),
+            # the exchange price of the same slot, which is what export is
+            # settled against. Next to the all-in price above it answers the
+            # other half of the question: what a kWh sent back was worth while
+            # a kWh bought cost `price_eur_kwh`. Only the direct supplier route
+            # publishes it; a third-party sensor gives one number and this
+            # column stays empty.
+            "market_price_eur_kwh": self.current_market_price(),
             # cumulative kWh produced today, if a solar sensor is configured -
             # the diff between two rows is the only reading that can settle
             # "was that solar" without guessing from grid_w alone.

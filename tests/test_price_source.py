@@ -11,14 +11,19 @@ inventing a price.
 from __future__ import annotations
 
 import time
+from datetime import timedelta
 
 import pytest
 
+from homeassistant.util import dt as dt_util
+
 from custom_components.battery_management.const import (
+    CONF_PRICE_RESOLUTION,
     CONF_PRICE_SENSOR,
     CONF_PRICE_SOURCE,
     MAX_PRICE_AGE,
     MODE_DYNAMIC,
+    RESOLUTION_HOURLY,
 )
 from custom_components.battery_management.suppliers import (
     SOURCE_ENTITY,
@@ -266,6 +271,38 @@ async def test_the_exchange_price_does_not_disturb_the_ranking(build_system):
     await system.coordinator.async_refresh_prices()
 
     assert len(system.coordinator._price_forecast()) == 3
+
+
+async def test_by_the_hour_folds_the_exchange_price_too(build_system):
+    """Whichever resolution is chosen has to apply to both numbers.
+
+    Folding only the all-in price would put an hourly mean next to the
+    exchange price of one quarter - two numbers about different spans of
+    time, side by side, each looking as authoritative as the other.
+    """
+    hour = dt_util.utcnow().replace(minute=0, second=0, microsecond=0)
+    quarters = [
+        {
+            "from": (start := hour + timedelta(minutes=15 * i)).isoformat(),
+            "till": (start + timedelta(minutes=15)).isoformat(),
+            "marketPrice": price,
+            "energyTaxPrice": 0.13,
+        }
+        # the next hour repeats the prices, so an hour that turns over while
+        # the test runs cannot change the answer
+        for i, price in enumerate((0.10, 0.20, 0.30, 0.40) * 2)
+    ]
+    system = with_frank(
+        build_system,
+        FakeSession({"data": {"marketPricesElectricity": quarters}}),
+        **{CONF_PRICE_RESOLUTION: RESOLUTION_HOURLY},
+    )
+
+    await system.coordinator.async_refresh_prices()
+
+    # the duration-weighted mean of the four quarters, in both numbers
+    assert system.coordinator.current_market_price() == 0.25
+    assert system.coordinator.current_price()["price"] == 0.38
 
 
 async def test_a_third_party_sensor_has_no_exchange_price_to_offer(build_system):
