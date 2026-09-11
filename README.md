@@ -523,13 +523,25 @@ never be able to disagree about what "cheap" meant.
 ### Zooming the chart
 
 That setting is about the **decisions**. How many bars you care to look at is a
-separate question, so the chart has its own control: **−** and **+** under the
-day picker.
+separate question, so the chart has its own zoom.
 
-It opens **per uur** — 96 bars across a phone is about two pixels each, which
-is a texture rather than a chart. Pressing **+** shows every quarter, giving
-each bar a fixed width and letting the strip scroll sideways; **−** folds it
-back. The control only appears when the feed actually has quarters in it.
+**Pinch it with two fingers**, the way you would anything else. Dragging with
+one finger scrolls through the day and is left entirely to the browser, so it
+keeps its momentum and its rubber-band. A trackpad pinch (ctrl+wheel) does the
+same thing, and **−** / **+** under the day picker are there for a mouse, a
+keyboard, or a hand that is already full.
+
+Zoom is one continuous number rather than two settings: `1` fits the day to the
+width, `4` draws it four times as wide and scrolls. The resolution then falls
+out of the arithmetic instead of being a second thing to choose — once a
+quarter has enough pixels to be told apart from its neighbours, quarters are
+what gets drawn, and the label under the chart says which you are looking at.
+
+It always **opens on hours**, on every screen. 96 bars across a phone is about
+two pixels each, which is a texture rather than a chart; and even on a wall
+tablet wide enough to fit them comfortably it still opens folded, so the day
+reads the same way everywhere and the quarters are something you go and ask
+for. The zoom only appears when the feed actually has quarters in it.
 
 A folded hour is a summary, and summaries are where a chart gets to overstate
 things, so two rules keep it honest:
@@ -543,11 +555,10 @@ things, so two rules keep it honest:
   (1 van de 4 kwartieren)"* — so the ring cannot read as a promise about the
   whole hour.
 
-`price_zoom: quarter` in the card's YAML opens on the quarters instead, for a
-screen wide enough to take them. Like the charge-period pills, pressing the
-buttons changes it for the session only — a card cannot rewrite its own YAML,
-and pretending otherwise would lose the choice on the next reload without
-saying why.
+`price_zoom: quarter` in the card's YAML opens zoomed in instead, for a screen
+wide enough to take it. Like the charge-period pills, pinching changes it for
+the session only — a card cannot rewrite its own YAML, and pretending otherwise
+would lose the choice on the next reload without saying why.
 
 ### A prices-only card
 

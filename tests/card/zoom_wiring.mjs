@@ -42,9 +42,13 @@ class El {
     this.innerHTML = "";
     this.textContent = "";
     this.clientWidth = 320;
+    this.scrollWidth = 320;
+    this.scrollLeft = 0;
     this.offsetLeft = 0;
     this.offsetWidth = 11;
     this.listeners = {};
+    this.style.setProperty = (k, v) => (this.style[k] = v);
+    this.getBoundingClientRect = () => ({ left: 0, width: this.clientWidth });
     const classes = new Set();
     this.classes = classes;
     this.classList = {
@@ -56,6 +60,9 @@ class El {
   }
   addEventListener(type, fn) {
     (this.listeners[type] = this.listeners[type] || []).push(fn);
+  }
+  fire(type, event) {
+    for (const fn of this.listeners[type] || []) fn(event);
   }
   querySelector(sel) {
     if (!this.innerHTML.includes(`id="${sel.slice(1)}"`)) return null;
@@ -92,6 +99,7 @@ card.hass = { states: { "sensor.plan": { state: "0.3", attributes: { hours: quar
 
 const bars = () =>
   (card.querySelector("#plot").innerHTML.match(/class="slot/g) || []).length;
+const level = () => card.querySelector("#plevel").textContent;
 const press = (id) => {
   const button = card.querySelector(id);
   check(`${id} exists and is listening`, !!(button && button.listeners.click), id);
@@ -103,30 +111,77 @@ check("and the strip does not scroll until it needs to",
   !card.querySelector("#plot").classes.has("wide"),
   [...card.querySelector("#plot").classes]);
 check("the zoom row is offered, because there are quarters to see",
-  card.querySelector("#pzoom").style.display === "", card.querySelector("#pzoom").style.display);
+  card.querySelector("#pzoom").style.display === "",
+  card.querySelector("#pzoom").style.display);
+check("and − is disabled, because there is nowhere further out to go",
+  card.querySelector("#pout").classes.has("off"),
+  [...card.querySelector("#pout").classes]);
+
+// One press is not enough on a 320 px strip: 96 quarters need about 2.6x
+// before each is 6 px wide. That is the arithmetic doing its job, not a bug -
+// so press until the quarters arrive rather than asserting a magic count.
+press("#pin");
+check("one press widens the strip but keeps the hours",
+  card.querySelector("#plot").classes.has("wide") && bars() === 24,
+  [bars(), [...card.querySelector("#plot").classes]]);
 
 press("#pin");
-check("pressing + shows all 96 quarters", bars() === 96, bars());
-check("and widens the bars so they can be told apart",
-  card.querySelector("#plot").classes.has("wide"), [...card.querySelector("#plot").classes]);
-check("the level says which you are looking at",
-  card.querySelector("#plevel").textContent === "per kwartier",
-  card.querySelector("#plevel").textContent);
+check("a second press reaches the quarters", bars() === 96, bars());
+check("and the level says which you are looking at",
+  level() === "per kwartier", level());
 
+press("#pout");
 press("#pout");
 check("pressing − folds it back", bars() === 24, bars());
-check("and the level says so",
-  card.querySelector("#plevel").textContent === "per uur",
-  card.querySelector("#plevel").textContent);
+check("and the level says so", level() === "per uur", level());
 
-// A tapped bar is an index, and the indices mean different things at the two
-// levels: bar 40 is 10:00 at quarters and does not exist at hours. Carrying
-// the selection across would move the readout to an hour nobody tapped.
+// ------------------------------------------------------------- the pinch
+// The gesture the owner actually asked for. Two fingers spreading apart must
+// do what two presses did, without the page zooming instead of the chart.
+const strip = card.querySelector("#pscroll");
+const touch = (x) => ({ clientX: x, clientY: 0 });
+let prevented = 0;
+const pinch = (a, b) => ({
+  touches: [touch(a), touch(b)],
+  preventDefault: () => prevented++,
+});
+
+check("the strip listens for a pinch",
+  !!(strip.listeners.touchstart && strip.listeners.touchmove), Object.keys(strip.listeners));
+
+strip.fire("touchstart", pinch(140, 180));
+strip.fire("touchmove", pinch(60, 260));
+check("spreading two fingers reaches the quarters", bars() === 96, bars());
+check("and the pinch is taken off the page, so the dashboard does not zoom",
+  prevented >= 2, prevented);
+
+strip.fire("touchmove", pinch(150, 170));
+check("pinching back in folds it to hours again", bars() === 24, bars());
+strip.fire("touchend", {});
+
+// A one-finger drag is the scroller's, and must never be swallowed: that is
+// what "scrolling through the hours" rests on.
+prevented = 0;
+strip.fire("touchstart", { touches: [touch(100)], preventDefault: () => prevented++ });
+strip.fire("touchmove", { touches: [touch(40)], preventDefault: () => prevented++ });
+check("a one-finger drag is left to the browser to scroll",
+  prevented === 0, prevented);
+
+// ------------------------------------------------------- keeping your place
+card._scale = 1;
+card._update();
 press("#pin");
-card._picked = 40;
-press("#pout");
+press("#pin");
 check("zooming lets go of the tapped bar rather than mistranslating it",
   card._picked === null, card._picked);
+
+// --------------------------------------------------------------- the edges
+for (let i = 0; i < 12; i++) press("#pin");
+check("+ stops at the far end rather than zooming forever",
+  card.querySelector("#pin").classes.has("off"),
+  [...card.querySelector("#pin").classes]);
+for (let i = 0; i < 12; i++) press("#pout");
+check("and − stops at the fitted day", bars() === 24, bars());
 
 // An hourly feed has nothing finer to show, so the control must not be offered.
 const hourly = new PricesCard();
@@ -146,7 +201,7 @@ check("an hourly feed is not offered a zoom it cannot honour",
   hourly.querySelector("#pzoom").style.display === "none",
   hourly.querySelector("#pzoom").style.display);
 
-// Opening straight on the quarters, for a big screen where they do fit.
+// Opening straight on the quarters, for a screen where they do fit.
 const zoomed = new PricesCard();
 zoomed.setConfig({ type: "x", prices: "sensor.plan", price_zoom: "quarter" });
 zoomed.hass = { states: { "sensor.plan": { state: "0.3", attributes: { hours: quarterDay() } } } };

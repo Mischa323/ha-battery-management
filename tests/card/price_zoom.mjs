@@ -31,12 +31,14 @@ const check = (name, cond, got) => {
 
 const helpers = new Function(
   src +
-    ";return {foldToHours, hasQuarters, zoomedSlots, zoomOf, slotSpan," +
-    " drawPrices, priceBars, ZOOM_QUARTER, ZOOM_HOUR};"
+    ";return {foldToHours, hasQuarters, zoomLayout, slotSpan, clampScale," +
+    " drawPrices, priceBars, ZOOM_QUARTER, ZOOM_HOUR, ZOOM_FIT, ZOOM_MAX," +
+    " QUARTER_MIN_PX};"
 )();
 const {
-  foldToHours, hasQuarters, zoomedSlots, zoomOf, slotSpan,
-  drawPrices, priceBars, ZOOM_QUARTER, ZOOM_HOUR,
+  foldToHours, hasQuarters, zoomLayout, slotSpan, clampScale,
+  drawPrices, priceBars, ZOOM_QUARTER, ZOOM_HOUR, ZOOM_FIT, ZOOM_MAX,
+  QUARTER_MIN_PX,
 } = helpers;
 
 // A quarter starting `minutes` into 2026-09-11 09:00 UTC.
@@ -119,19 +121,59 @@ const wholeLabel = priceBars(whole).bars[0].label;
 check("and a whole planned hour is not qualified at all",
   !/kwartieren/.test(wholeLabel), wholeLabel);
 
-// -------------------------------------------------------------- the toggle
+// --------------------------------------------------------------- the zoom
+// Zoom is one continuous number, and the resolution falls out of it: quarters
+// are drawn once a quarter has enough pixels to be told apart from its
+// neighbours. That is the whole model, so it is checked at its edges.
 const day = [];
 for (let i = 0; i < 96; i++) day.push(q(i * 15 - 540, 0.2));
+const PHONE = 320;
 
-check("the chart opens on hours", zoomOf({}) === ZOOM_HOUR, zoomOf({}));
-check("a whole quarter-hourly day folds to 24 bars",
-  zoomedSlots({}, day).length === 24, zoomedSlots({}, day).length);
-check("zoomed in it is 96 again",
-  zoomedSlots({ _zoom: ZOOM_QUARTER }, day).length === 96,
-  zoomedSlots({ _zoom: ZOOM_QUARTER }, day).length);
+const fitted = zoomLayout({}, day, PHONE);
+check("it opens fitted to the width", fitted.scale === ZOOM_FIT, fitted.scale);
+check("and that means 24 hourly bars, not 96",
+  fitted.level === ZOOM_HOUR && fitted.slots.length === 24,
+  [fitted.level, fitted.slots.length]);
 
-// An already-hourly feed has nothing to fold, and folding it anyway would be a
-// second pass over data that is already what it claims to be.
+const far = zoomLayout({ _scale: 4 }, day, PHONE);
+check("pinched out far enough, the quarters appear",
+  far.level === ZOOM_QUARTER && far.slots.length === 96,
+  [far.level, far.slots.length]);
+check("and each one is wide enough to be told apart",
+  far.barPx >= QUARTER_MIN_PX, far.barPx);
+
+// The threshold itself: just under it must still be hours, or the chart would
+// hand back the smudge this whole change exists to remove.
+const need = (QUARTER_MIN_PX * 96) / PHONE;
+check("just below the threshold it is still hours",
+  zoomLayout({ _scale: need - 0.01 }, day, PHONE).level === ZOOM_HOUR,
+  zoomLayout({ _scale: need - 0.01 }, day, PHONE).level);
+check("and just above it, quarters",
+  zoomLayout({ _scale: need + 0.01 }, day, PHONE).level === ZOOM_QUARTER,
+  zoomLayout({ _scale: need + 0.01 }, day, PHONE).level);
+
+// The same scale has to mean the same thing on any screen, or "twice the day"
+// would show half a day on a phone and a third of one on a tablet.
+check("a wider screen reaches the quarters sooner, as it should",
+  zoomLayout({ _scale: 1.2 }, day, 900).level === ZOOM_QUARTER &&
+  zoomLayout({ _scale: 1.2 }, day, 320).level === ZOOM_HOUR,
+  [zoomLayout({ _scale: 1.2 }, day, 900).level, zoomLayout({ _scale: 1.2 }, day, 320).level]);
+// Asked for explicitly: hours by default, on every screen. A wall tablet is
+// wide enough to fit 96 legible bars, and still opens on hours - so the day
+// reads the same way everywhere and the quarters are something you ask for.
+check("but no screen opens on the quarters by itself",
+  zoomLayout({}, day, 900).level === ZOOM_HOUR &&
+  zoomLayout({}, day, 2000).level === ZOOM_HOUR,
+  [zoomLayout({}, day, 900).level, zoomLayout({}, day, 2000).level]);
+
+check("the scale cannot be pinched past its ends",
+  clampScale(0.01) === ZOOM_FIT && clampScale(9999) === ZOOM_MAX,
+  [clampScale(0.01), clampScale(9999)]);
+check("and rubbish falls back to fitted rather than to NaN",
+  clampScale(undefined) === ZOOM_FIT && clampScale("x") === ZOOM_FIT,
+  [clampScale(undefined), clampScale("x")]);
+
+// An already-hourly feed has nothing finer to show, at any scale.
 const hourly = [];
 for (let i = 0; i < 24; i++) {
   const from = Date.UTC(2026, 8, 11) + i * 3600000;
@@ -143,15 +185,20 @@ for (let i = 0; i < 24; i++) {
   });
 }
 check("an hourly feed is passed through untouched",
-  zoomedSlots({}, hourly) === hourly, zoomedSlots({}, hourly).length);
+  zoomLayout({}, hourly, PHONE).slots === hourly, zoomLayout({}, hourly, PHONE).slots.length);
+check("and zooming it does not invent quarters",
+  zoomLayout({ _scale: 6 }, hourly, PHONE).level === ZOOM_HOUR,
+  zoomLayout({ _scale: 6 }, hourly, PHONE).level);
 
 // ------------------------------------------------------------- the drawing
 const el = () => {
   const classes = new Set();
+  const props = {};
   return {
-    style: {},
-    innerHTML: "",
+    style: { setProperty: (k, v) => (props[k] = v) },
+    props,
     classes,
+    innerHTML: "",
     classList: {
       toggle: (name, on) => (on ? classes.add(name) : classes.delete(name)),
       contains: (name) => classes.has(name),
@@ -161,25 +208,31 @@ const el = () => {
 
 let plot = el();
 let axis = el();
-drawPrices(plot, axis, zoomedSlots({}, day), null, false);
-check("folded, the strip does not scroll", !plot.classes.has("wide"), [...plot.classes]);
+drawPrices(plot, axis, fitted.slots, null, 0);
+check("fitted, the strip does not scroll", !plot.classes.has("wide"), [...plot.classes]);
 check("and it draws 24 bars",
   (plot.innerHTML.match(/class="slot/g) || []).length === 24,
   (plot.innerHTML.match(/class="slot/g) || []).length);
 
 plot = el();
 axis = el();
-drawPrices(plot, axis, day, null, true);
-check("zoomed, the bars take a fixed width and the strip scrolls",
+drawPrices(plot, axis, far.slots, null, far.barPx);
+check("zoomed, the bars take the worked-out width and the strip scrolls",
   plot.classes.has("wide") && axis.classes.has("wide"),
   [[...plot.classes], [...axis.classes]]);
-check("the axis scrolls with it, or the labels would lie",
-  axis.classes.has("wide"), [...axis.classes]);
+check("the width is handed to the CSS, on both, or the labels would drift",
+  plot.props["--bw"] === axis.props["--bw"] && /px$/.test(plot.props["--bw"]),
+  [plot.props["--bw"], axis.props["--bw"]]);
 check("zoomed bars keep their gap rather than being hairlines",
   plot.style.gap === "2px", plot.style.gap);
-check("and the axis labels an hour at a time",
-  (axis.innerHTML.match(/>\d\d:\d\d</g) || []).length === 24,
-  (axis.innerHTML.match(/>\d\d:\d\d</g) || []).length);
+
+// Labels thin out with the bars rather than staying at six for the whole day,
+// which is what makes a scrolled strip navigable.
+const labels = (a) => (a.innerHTML.match(/>\d\d:\d\d</g) || []).length;
+const near = el();
+drawPrices(el(), near, far.slots, null, far.barPx);
+check("zoomed in there are more time labels, not the same six",
+  labels(near) > 6, labels(near));
 
 console.log(fails ? `\n${fails} FAILED` : "\nall zoom checks pass");
 process.exit(fails ? 1 : 0);
