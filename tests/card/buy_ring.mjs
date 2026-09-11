@@ -73,9 +73,15 @@ check("a bar in the band but not planned is still green",
 // --- the markup ----------------------------------------------------------
 const made = [];
 const el = () => {
+  const classes = new Set();
   const node = {
     style: {},
     innerHTML: "",
+    classes,
+    classList: {
+      toggle: (name, on) => (on ? classes.add(name) : classes.delete(name)),
+      contains: (name) => classes.has(name),
+    },
     addEventListener() {},
     getBoundingClientRect: () => ({ left: 0, width: 100 }),
   };

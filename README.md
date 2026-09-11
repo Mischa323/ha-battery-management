@@ -514,11 +514,40 @@ the 12 cheapest quarters.
 
 - **As the supplier publishes them** (the default) is the more precise: the
   coordinator will buy on a single cheap quarter.
-- **By the hour** folds them, weighted by duration. 24 bars on a chart instead
-  of 96, at the cost of averaging away the peaks inside each hour.
+- **By the hour** folds them, weighted by duration, before anything is decided.
+  You lose the peaks inside each hour in exchange for a simpler day.
 
 Whichever you pick applies to the decisions *and* the chart, because they must
 never be able to disagree about what "cheap" meant.
+
+### Zooming the chart
+
+That setting is about the **decisions**. How many bars you care to look at is a
+separate question, so the chart has its own control: **−** and **+** under the
+day picker.
+
+It opens **per uur** — 96 bars across a phone is about two pixels each, which
+is a texture rather than a chart. Pressing **+** shows every quarter, giving
+each bar a fixed width and letting the strip scroll sideways; **−** folds it
+back. The control only appears when the feed actually has quarters in it.
+
+A folded hour is a summary, and summaries are where a chart gets to overstate
+things, so two rules keep it honest:
+
+- Its colour is the verdict covering **most** of the hour. An hour split evenly
+  between cheap and dear is drawn as neither, and its tooltip says it is mixed —
+  which is the nudge to go and look at the quarters.
+- Its blue ring survives if **any** quarter inside will be bought on, because
+  hiding that charging happens in an hour is the one error worth avoiding here.
+  The tooltip then says how much of the hour it was — *"hier gaat hij laden
+  (1 van de 4 kwartieren)"* — so the ring cannot read as a promise about the
+  whole hour.
+
+`price_zoom: quarter` in the card's YAML opens on the quarters instead, for a
+screen wide enough to take them. Like the charge-period pills, pressing the
+buttons changes it for the session only — a card cannot rewrite its own YAML,
+and pretending otherwise would lose the choice on the next reload without
+saying why.
 
 ### A prices-only card
 

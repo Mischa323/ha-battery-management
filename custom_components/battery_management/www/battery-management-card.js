@@ -95,14 +95,25 @@ const PRICE_WAS = {
 function planSays(item, past) {
   if (item.bought) return " — toen geladen";
   if (!item.buy) return "";
-  return past ? " — hier zou hij laden" : " — hier gaat hij laden";
+  // On a folded hour the ring means "some of this hour", and saying which
+  // part keeps it from reading as a promise about the whole of it.
+  const share =
+    item.parts > 1 && item.buyParts && item.buyParts < item.parts
+      ? ` (${item.buyParts} van de ${item.parts} kwartieren)`
+      : "";
+  return (past ? " — hier zou hij laden" : " — hier gaat hij laden") + share;
 }
+
+/** Why a folded hour has no single verdict, and what to do about it. */
+const mixedSays = (bar) =>
+  bar.mixed ? " — gemengd uur, zoom in voor de kwartieren" : "";
 
 function slotLabel(bar) {
   const says = (bar.past ? PRICE_WAS : PRICE_SAYS)[bar.role] || "";
   return (
     `${hhmm(bar.start)} — ${bar.price.toFixed(3)} €/kWh — ${says}` +
-    planSays(bar, bar.past)
+    planSays(bar, bar.past) +
+    mixedSays(bar)
   );
 }
 
@@ -110,7 +121,14 @@ function slotLabel(bar) {
 const PRICE_CSS = `
           .phead { display:flex; justify-content:space-between; align-items:baseline;
                    font-size:.92em; margin-bottom:8px; }
+          .pscroll { overflow-x:auto; overscroll-behavior-x:contain; }
           .plot { display:flex; align-items:flex-end; gap:2px; height:96px; position:relative; }
+  /* Zoomed in, the bars stop sharing the width and take a fixed one, so the
+     strip scrolls instead of shrinking. A max-content width is what keeps the
+     zero line and the axis as long as the bars rather than as long as the
+     window they are seen through. */
+  .plot.wide, .paxis.wide { width:max-content; min-width:100%; }
+  .plot.wide .slot, .paxis.wide span { flex:0 0 11px; }
           .zero { position:absolute; left:0; right:0; height:1px; background: var(--divider-color); }
           .slot { flex:1 1 0; height:100%; position:relative; min-width:0; }
           .pbar { position:absolute; left:0; right:0; }
@@ -142,6 +160,9 @@ const PRICE_CSS = `
           .pnav .pbtn.off { opacity:.3; cursor:default; }
           .pnav .pday { min-width:8.5em; text-align:center; cursor:pointer;
                         color: var(--secondary-text-color); }
+          .pnav.pzoom { margin-top:4px; }
+          .pnav .plevel { min-width:7em; text-align:center;
+                          color: var(--secondary-text-color); }
 `;
 
 /** The day picker, shared by both charts. */
@@ -150,6 +171,11 @@ const PRICE_NAV = `
               <span class="pbtn" id="pprev" title="dag terug">‹</span>
               <span class="pday" id="pday" title="terug naar vandaag"></span>
               <span class="pbtn" id="pnext" title="dag verder">›</span>
+            </div>
+            <div class="pnav pzoom" id="pzoom" style="display:none">
+              <span class="pbtn" id="pout" title="uitzoomen naar hele uren">−</span>
+              <span class="plevel" id="plevel"></span>
+              <span class="pbtn" id="pin" title="inzoomen naar de kwartieren">+</span>
             </div>`;
 
 const PRICE_LEGEND = `
@@ -367,6 +393,104 @@ function dayRange(day) {
 const slotsOnDay = (hours, day) =>
   (hours || []).filter((h) => h && dayOf(h.start) === day);
 
+/** How long a slot lasts, defaulting to a quarter when it does not say. */
+const slotSpan = (slot) => {
+  const ms = at(slot.end) - at(slot.start);
+  return Number.isFinite(ms) && ms > 0 ? ms : 900000;
+};
+
+/** Whether this feed has anything finer than an hour to zoom into. */
+const hasQuarters = (slots) =>
+  (slots || []).some((s) => s && slotSpan(s) < 3540000);
+
+/**
+ * Quarter-hourly slots folded into the hours they fall in.
+ *
+ * 96 bars across a phone is about two pixels each, which is a texture rather
+ * than a chart - the owner could not read his own prices off it. So the day
+ * opens as 24 hours and the quarters are one tap away. That is the order the
+ * day is actually read in: the shape first, the exact quarter only when it
+ * turns out to matter.
+ *
+ * The price is the duration-weighted mean, the same fold `to_hourly` does on
+ * the integration side, so the card and the coordinator cannot end up
+ * disagreeing about what an hour cost.
+ *
+ * The verdict is the one covering most of the hour, and a tie gets `normal`:
+ * an hour split evenly between cheap and dear is not honestly either, and
+ * refusing to call it is what sends the reader to the quarters. `buy` is the
+ * deliberate exception - it survives if *any* quarter is bought on, because
+ * the hour will see charging and hiding that is the one error worth avoiding
+ * here. The label then says how many quarters, so the ring cannot over-promise.
+ */
+function foldToHours(slots) {
+  const buckets = new Map();
+  for (const slot of slots || []) {
+    const start = at(slot.start);
+    if (isNaN(start)) continue;
+    const hour = new Date(start);
+    hour.setMinutes(0, 0, 0);
+    const key = hour.getTime();
+    if (!buckets.has(key)) buckets.set(key, []);
+    buckets.get(key).push(slot);
+  }
+  return [...buckets.keys()].sort((a, b) => a - b).map((key) => foldOne(buckets.get(key)));
+}
+
+/** One hour's worth of slots, as a single slot the chart can draw. */
+function foldOne(group) {
+  let weighted = 0;
+  let total = 0;
+  const held = {};
+  for (const part of group) {
+    const ms = slotSpan(part);
+    const price = Number(part.price);
+    if (!isNaN(price)) {
+      weighted += price * ms;
+      total += ms;
+    }
+    const role = PRICE_COLOUR[part.role] ? part.role : "normal";
+    held[role] = (held[role] || 0) + ms;
+  }
+  // a strict majority of the hour, or no verdict at all
+  const ranked = Object.entries(held).sort((a, b) => b[1] - a[1]);
+  const role =
+    ranked.length === 1 || (ranked.length > 1 && ranked[0][1] > ranked[1][1])
+      ? ranked[0][0]
+      : "normal";
+
+  const starts = group.map((part) => at(part.start));
+  const ends = group.map((part) => at(part.end)).filter((v) => !isNaN(v));
+  const from = Math.min(...starts);
+  const buyParts = group.filter((part) => part.buy === true).length;
+  return {
+    start: new Date(from).toISOString(),
+    end: new Date(ends.length ? Math.max(...ends) : from + 3600000).toISOString(),
+    price: total ? weighted / total : 0,
+    role,
+    mixed: Object.keys(held).length > 1,
+    buy: buyParts > 0,
+    buyParts,
+    parts: group.length,
+    bought: group.some((part) => part.bought === true),
+    past: group.every((part) => part.past === true),
+  };
+}
+
+/** How the chart is read: whole hours, or the quarters inside them. */
+const ZOOM_HOUR = "hour";
+const ZOOM_QUARTER = "quarter";
+const ZOOM_LABEL = { hour: "per uur", quarter: "per kwartier" };
+
+/** The chosen level, defaulting to hours - see `foldToHours` for why. */
+const zoomOf = (card) => (card._zoom === ZOOM_QUARTER ? ZOOM_QUARTER : ZOOM_HOUR);
+
+/** The slots as drawn: folded unless the reader has zoomed in. */
+function zoomedSlots(card, slots) {
+  if (zoomOf(card) === ZOOM_QUARTER || !hasQuarters(slots)) return slots;
+  return foldToHours(slots);
+}
+
 /**
  * Recorder statistics, in the shape the chart already draws.
  *
@@ -440,6 +564,10 @@ function priceBars(hours) {
         past,
         buy: h.buy === true,
         bought: h.bought === true,
+        // only set on a folded hour, and only read by the label
+        mixed: h.mixed === true,
+        buyParts: h.buyParts,
+        parts: h.parts,
         start: h.start,
         price,
         bottom: zero + (price < 0 ? -size : 0),
@@ -454,11 +582,17 @@ function priceBars(hours) {
 }
 
 /** Fill a plot and its axis from the plan's `hours`. */
-function drawPrices(plot, axis, hours, picked) {
+function drawPrices(plot, axis, hours, picked, zoomed) {
   const { zero, bars } = priceBars(hours);
-  // a quarter-hourly feed is 96 bars; a 2 px gap between them would be most of
-  // the chart, so the surface separator gives way once they get thin
-  plot.style.gap = hours.length > 48 ? "1px" : "2px";
+  // Zoomed in the bars get a fixed width and the strip scrolls, so they are
+  // never thin and the gap can stay. Zoomed out a quarter-hourly feed would
+  // still be 96 bars if the folding was skipped (an already-hourly day, or a
+  // reader who asked for quarters), and a 2 px gap between them would be most
+  // of the chart - so the surface separator gives way once they get that thin.
+  const wide = zoomed === true && hours.length > 24;
+  plot.classList.toggle("wide", wide);
+  if (axis) axis.classList.toggle("wide", wide);
+  plot.style.gap = !wide && hours.length > 48 ? "1px" : "2px";
   plot.innerHTML =
     `<div class="zero" style="bottom:${zero}%"></div>` +
     bars
@@ -473,8 +607,10 @@ function drawPrices(plot, axis, hours, picked) {
       )
       .join("");
   if (!axis) return;
-  // a label every few hours, not one on every bar
-  const every = Math.max(1, Math.round(hours.length / 6));
+  // a label every few hours, not one on every bar. Zoomed in there is room for
+  // one an hour, which is what makes the quarters findable rather than just
+  // visible.
+  const every = wide ? 4 : Math.max(1, Math.round(hours.length / 6));
   axis.innerHTML = hours
     .map((h, i) => `<span>${i % every === 0 ? hhmm(h.start) : ""}</span>`)
     .join("");
@@ -531,6 +667,66 @@ function wireNav(card) {
     card._picked = null;
     card._update();
   });
+}
+
+/**
+ * The zoom buttons, and keeping the chart from jumping under the reader.
+ *
+ * Changing level renumbers every bar, so a tapped one has to be let go of -
+ * index 40 means 10:00 at quarters and nothing at all at hours.
+ */
+function wireZoom(card) {
+  const set = (level) => () => {
+    if (zoomOf(card) === level) return;
+    card._zoom = level;
+    card._picked = null;
+    // recentre once, on the change itself. Doing it on every update would
+    // drag the strip back under a reader who had scrolled it somewhere.
+    card._recentre = true;
+    card._update();
+  };
+  const on = (id, fn) => {
+    const el = card.querySelector(id);
+    if (el) el.addEventListener("click", fn);
+  };
+  on("#pin", set(ZOOM_QUARTER));
+  on("#pout", set(ZOOM_HOUR));
+}
+
+/** Offer the zoom only where there is something finer than an hour to see. */
+function renderZoom(card, slots) {
+  const group = card.querySelector("#pzoom");
+  if (!group) return;
+  const quarters = hasQuarters(slots);
+  group.style.display = quarters ? "" : "none";
+  if (!quarters) return;
+  const level = zoomOf(card);
+  const label = card.querySelector("#plevel");
+  if (label) label.textContent = ZOOM_LABEL[level];
+  for (const [id, at_end] of [["#pin", ZOOM_QUARTER], ["#pout", ZOOM_HOUR]]) {
+    const button = card.querySelector(id);
+    if (button) button.classList.toggle("off", level === at_end);
+  }
+}
+
+/**
+ * Bring the current slot into view after a zoom, once.
+ *
+ * Zooming into 96 bars and landing at midnight is technically a zoom and
+ * practically a loss - the reader was looking at now.
+ */
+function recentre(card) {
+  if (!card._recentre) return;
+  card._recentre = false;
+  const strip = card.querySelector("#pscroll");
+  const plot = card.querySelector("#plot");
+  if (!strip || !plot || typeof plot.querySelector !== "function") return;
+  const here = plot.querySelector(".slot.now") || plot.querySelector(".slot.picked");
+  if (!here || !strip.clientWidth) return;
+  strip.scrollLeft = Math.max(
+    0,
+    here.offsetLeft - strip.clientWidth / 2 + here.offsetWidth / 2
+  );
 }
 
 /** Which day is on show, and whether there is a later one to go to. */
@@ -656,6 +852,9 @@ class BatteryManagementCard extends HTMLElement {
     this._period = CHARGE_SUFFIX[config.charge_period]
       ? config.charge_period
       : DEFAULT_PERIOD;
+    // Hours unless the config asks for quarters. Like `charge_period`, tapping
+    // changes it for the session only - a card cannot write its own YAML.
+    this._zoom = zoomOf({ _zoom: config.price_zoom });
   }
 
   set hass(hass) {
@@ -686,13 +885,17 @@ class BatteryManagementCard extends HTMLElement {
     }
     wrap.style.display = "block";
     renderNav(this, hours);
-    const slots = chartSlots(this, hours);
+    const published = chartSlots(this, hours);
+    renderZoom(this, published);
+    const slots = zoomedSlots(this, published);
     drawPrices(
       this.querySelector("#plot"),
       this.querySelector("#paxis"),
       slots,
-      this._picked
+      this._picked,
+      zoomOf(this) === ZOOM_QUARTER
     );
+    recentre(this);
     const { slot, live } = pickedSlot(slots, this._picked);
     const average = dayAverage(slots);
     this.querySelector("#pnow").textContent = slot
@@ -893,8 +1096,10 @@ ${PRICE_CSS}
           </div>
           <div class="prices" id="prices" style="display:none">
             <div class="phead"><span>Prijs per uur</span><span id="pnow" class="muted"></span></div>
-            <div class="plot" id="plot"></div>
-            <div class="paxis" id="paxis"></div>
+            <div class="pscroll" id="pscroll">
+              <div class="plot" id="plot"></div>
+              <div class="paxis" id="paxis"></div>
+            </div>
 ${PRICE_NAV}
 ${PRICE_LEGEND}
           <div class="plan" id="plan" style="display:none"></div>
@@ -907,6 +1112,7 @@ ${PRICE_LEGEND}
     });
     wirePlot(this);
     wireNav(this);
+    wireZoom(this);
     // Delegated to the group rather than bound per pill, so the handler
     // survives `_update` rewriting the pills' classes - and so adding a period
     // later is a markup change and nothing else.
@@ -1238,6 +1444,7 @@ class BatteryManagementPricesCard extends HTMLElement {
     if (!config) throw new Error("Invalid configuration");
     this._config = config;
     this._built = false;
+    this._zoom = zoomOf({ _zoom: config.price_zoom });
   }
 
   set hass(hass) {
@@ -1273,8 +1480,10 @@ ${PRICE_CSS}
         <div class="pc">
           <div class="big" id="pnow">—</div>
           <div class="sub" id="psub"></div>
-          <div class="plot" id="plot"></div>
-          <div class="paxis" id="paxis"></div>
+          <div class="pscroll" id="pscroll">
+            <div class="plot" id="plot"></div>
+            <div class="paxis" id="paxis"></div>
+          </div>
 ${PRICE_NAV}
           <div class="ends" id="pends"></div>
 ${PRICE_LEGEND}
@@ -1282,6 +1491,7 @@ ${PRICE_LEGEND}
       </ha-card>`;
     wirePlot(this);
     wireNav(this);
+    wireZoom(this);
     this._built = true;
   }
 
@@ -1302,17 +1512,22 @@ ${PRICE_LEGEND}
       for (const id of ["#plot", "#paxis", "#pends"]) {
         this.querySelector(id).innerHTML = "";
       }
+      renderZoom(this, []);
       return;
     }
 
     renderNav(this, hours);
-    const slots = chartSlots(this, hours);
+    const published = chartSlots(this, hours);
+    renderZoom(this, published);
+    const slots = zoomedSlots(this, published);
     drawPrices(
       this.querySelector("#plot"),
       this.querySelector("#paxis"),
       slots,
-      this._picked
+      this._picked,
+      zoomOf(this) === ZOOM_QUARTER
     );
+    recentre(this);
 
     if (!slots.length) {
       // a day with nothing on it: say which of the two it is, rather than
