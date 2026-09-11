@@ -28,15 +28,37 @@ SOURCE_NONE = "none"
 SOURCE_ENTITY = "entity"
 
 FRANK_ENDPOINT = "https://frank-graphql-prod.graphcdn.app/"
+
+#: The market settles in 15-minute blocks and Frank publishes that way, so ask
+#: for them: 96 slots a day instead of 24. `price_resolution` still decides
+#: what is done with them - folding a quarter-hourly feed into hours is a
+#: readability choice this integration can make, but a feed that never had the
+#: quarters in it cannot be unfolded, and the peaks inside the hour are exactly
+#: where a cheap quarter hides.
+FRANK_RESOLUTION = "PT15M"
+
+#: `marketPrices` takes one day at a time, unlike the date range the hourly
+#: `marketPricesElectricity` accepted. So it is asked twice - once per day -
+#: rather than once with the two days aliased into a single document.
+#:
+#: That is not a style preference. A day Frank has not published yet is a
+#: GraphQL *error*, not a null, and the field is non-nullable: the error
+#: propagates and takes the whole `data` with it. Both days in one document
+#: therefore means no prices at all for the half of every day before tomorrow
+#: is published - which is worse than the hourly feed this replaced. Two
+#: requests cost one extra round trip an hour and let a missing tomorrow fail
+#: on its own.
 FRANK_QUERY = """
-query MarketPrices($startDate: Date!, $endDate: Date!) {
-  marketPricesElectricity(startDate: $startDate, endDate: $endDate) {
-    from
-    till
-    marketPrice
-    marketPriceTax
-    sourcingMarkupPrice
-    energyTaxPrice
+query MarketPrices($date: String!, $resolution: PriceResolution!) {
+  marketPrices(date: $date, resolution: $resolution) {
+    electricityPrices {
+      from
+      till
+      marketPrice
+      marketPriceTax
+      sourcingMarkupPrice
+      energyTaxPrice
+    }
   }
 }
 """
@@ -48,26 +70,68 @@ _FRANK_REQUIRED = "marketPrice"
 _FRANK_ADDERS = ("marketPriceTax", "sourcingMarkupPrice", "energyTaxPrice")
 
 
-def frank_request(today: date) -> tuple[str, dict]:
-    """The endpoint and JSON body asking for today's and tomorrow's prices.
+def frank_requests(today: date) -> list[tuple[str, dict]]:
+    """One request per day: today, then tomorrow.
 
-    Tomorrow is published during the afternoon and is simply absent before
-    then, which needs no special handling: `cheapest_slots` ranks over a
-    rolling 24 h window from now, so a short forecast is a short window rather
-    than a wrong one.
+    Tomorrow is published during the afternoon and errors before then, which
+    needs no special handling beyond keeping it in its own request:
+    `cheapest_slots` ranks over a rolling 24 h window from now, so a forecast
+    that stops at midnight is a short window rather than a wrong one.
     """
+    return [_frank_day(today), _frank_day(today + timedelta(days=1))]
+
+
+def _frank_day(day: date) -> tuple[str, dict]:
     return FRANK_ENDPOINT, {
         "operationName": "MarketPrices",
         "query": FRANK_QUERY,
         "variables": {
-            "startDate": today.isoformat(),
-            "endDate": (today + timedelta(days=2)).isoformat(),
+            "date": day.isoformat(),
+            "resolution": FRANK_RESOLUTION,
         },
     }
 
 
-def parse_frank(payload: dict) -> dict:
-    """Turn Frank Energie's answer into attributes `parse_forecast` can read.
+def _frank_rows(payloads: list) -> list:
+    """Every electricity row across the answers, in the order they arrived.
+
+    A payload that is missing, errored or malformed contributes nothing rather
+    than failing the others: an afternoon request has a tomorrow and a morning
+    one does not, and both are perfectly ordinary.
+
+    Slots are deduplicated on their start. Two different days cannot overlap,
+    so this normally does nothing - but a slot counted twice would be ranked
+    twice, quietly weighting one quarter-hour against the rest, and that is
+    not a failure anyone would notice by reading a dashboard.
+    """
+    rows: list = []
+    seen: set = set()
+    for payload in payloads:
+        if not isinstance(payload, dict):
+            continue
+        data = payload.get("data")
+        if not isinstance(data, dict):
+            continue
+        day = data.get("marketPrices")
+        if not isinstance(day, dict):
+            continue
+        values = day.get("electricityPrices")
+        if not isinstance(values, list):
+            continue
+        for row in values:
+            if not isinstance(row, dict):
+                continue
+            start = row.get("from")
+            if start and start in seen:
+                continue
+            if start:
+                seen.add(start)
+            rows.append(row)
+    return rows
+
+
+def parse_frank(payloads: list) -> dict:
+    """Turn Frank Energie's answers into attributes `parse_forecast` can read.
 
     The all-in price is used, not the bare exchange price. It ranks identically
     - tax and markup are a fixed adder and VAT a fixed multiplier, so the
@@ -78,11 +142,9 @@ def parse_frank(payload: dict) -> dict:
     An unrecognised or empty answer yields `{}`, which downstream means "no
     forecast" and disables cheap-hour charging. Never a guessed price.
     """
-    if not isinstance(payload, dict):
+    if not isinstance(payloads, list):
         return {}
-    rows = (payload.get("data") or {}).get("marketPricesElectricity")
-    if not isinstance(rows, list):
-        return {}
+    rows = _frank_rows(payloads)
 
     prices = []
     market_prices = []
@@ -116,5 +178,7 @@ def parse_frank(payload: dict) -> dict:
     return {"prices": prices, "market_prices": market_prices} if prices else {}
 
 
-#: key -> (build the request, read the answer)
-FETCHERS = {SUPPLIER_FRANK: (frank_request, parse_frank)}
+#: key -> (build the requests, read the answers). Plural on both sides: a
+#: supplier that needs several calls to describe one forecast is the normal
+#: case, not the exception.
+FETCHERS = {SUPPLIER_FRANK: (frank_requests, parse_frank)}

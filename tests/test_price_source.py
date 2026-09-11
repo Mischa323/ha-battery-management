@@ -11,14 +11,19 @@ inventing a price.
 from __future__ import annotations
 
 import time
+from datetime import timedelta
 
 import pytest
 
+from homeassistant.util import dt as dt_util
+
 from custom_components.battery_management.const import (
+    CONF_PRICE_RESOLUTION,
     CONF_PRICE_SENSOR,
     CONF_PRICE_SOURCE,
     MAX_PRICE_AGE,
     MODE_DYNAMIC,
+    RESOLUTION_HOURLY,
 )
 from custom_components.battery_management.suppliers import (
     SOURCE_ENTITY,
@@ -47,10 +52,23 @@ class FakeResponse:
 
 
 class FakeSession:
-    """Records what was asked for and answers with whatever it was given."""
+    """Records what was asked for and answers with whatever it was given.
 
-    def __init__(self, payload=None, status: int = 200, boom: Exception | None = None):
-        self.payload = payload
+    A refresh makes one request per day, so `replies` may hold a payload per
+    call; the last one is repeated once they run out. That default keeps the
+    tests that only care about today short, while
+    `test_a_day_that_is_not_published_yet_does_not_sink_the_other` can still
+    hand the two days different answers.
+    """
+
+    def __init__(
+        self,
+        payload=None,
+        status: int = 200,
+        boom: Exception | None = None,
+        replies: list | None = None,
+    ):
+        self.replies = replies if replies is not None else [payload]
         self.status = status
         self.boom = boom
         self.calls: list[tuple[str, dict]] = []
@@ -59,24 +77,38 @@ class FakeSession:
         self.calls.append((url, json))
         if self.boom is not None:
             raise self.boom
-        return FakeResponse(self.payload, self.status)
+        reply = self.replies[min(len(self.calls) - 1, len(self.replies) - 1)]
+        if isinstance(reply, Exception):
+            raise reply
+        return FakeResponse(reply, self.status)
 
 
 def frank_payload(*prices: float) -> dict:
-    """Hourly slots from midnight, priced in order."""
-    return {
-        "data": {
-            "marketPricesElectricity": [
-                {
-                    "from": f"2026-09-01T{hour:02d}:00:00.000Z",
-                    "till": f"2026-09-01T{hour + 1:02d}:00:00.000Z",
-                    "marketPrice": price,
-                    "energyTaxPrice": 0.13,
-                }
-                for hour, price in enumerate(prices)
-            ]
-        }
-    }
+    """Hourly slots from midnight, priced in order, under today's alias."""
+    return frank_answer(
+        [
+            {
+                "from": f"2026-09-01T{hour:02d}:00:00.000Z",
+                "till": f"2026-09-01T{hour + 1:02d}:00:00.000Z",
+                "marketPrice": price,
+                "energyTaxPrice": 0.13,
+            }
+            for hour, price in enumerate(prices)
+        ]
+    )
+
+
+def frank_answer(rows: list) -> dict:
+    """One day's answer. A refresh asks for each day in its own request."""
+    return {"data": {"marketPrices": {"electricityPrices": rows}}}
+
+
+#: Frank's reply for a date it has not published: a GraphQL error and a null
+#: `data`, which is exactly why each day gets its own request.
+FRANK_UNPUBLISHED = {
+    "errors": [{"message": "No marketprices found for segment ELECTRICITY"}],
+    "data": None,
+}
 
 
 def with_frank(build_system, session, **kwargs):
@@ -144,6 +176,66 @@ async def test_it_asks_the_supplier_and_keeps_the_answer(build_system):
     assert system.coordinator.prices_fetched_at is not None
     assert system.coordinator.prices_error is None
     assert len(system.coordinator._price_attributes()["prices"]) == 3
+
+
+async def test_each_day_is_asked_for_in_its_own_request(build_system):
+    session = FakeSession(frank_payload(0.10))
+    system = with_frank(build_system, session)
+
+    await system.coordinator.async_refresh_prices()
+
+    today = dt_util.now().date()
+    assert [body["variables"]["date"] for _, body in session.calls] == [
+        today.isoformat(),
+        (today + timedelta(days=1)).isoformat(),
+    ]
+
+
+async def test_a_day_that_is_not_published_yet_does_not_sink_the_other(build_system):
+    """The morning case, and the reason the two days are not one request.
+
+    Frank answers a date it has no prices for with a GraphQL error and a null
+    `data`. Today's prices must survive that completely - otherwise the
+    integration would have no forecast at all until the afternoon, every day.
+    """
+    session = FakeSession(
+        replies=[frank_payload(0.10, 0.05, 0.20), FRANK_UNPUBLISHED]
+    )
+    system = with_frank(build_system, session)
+
+    await system.coordinator.async_refresh_prices()
+
+    assert system.coordinator.prices_error is None
+    assert len(system.coordinator._price_attributes()["prices"]) == 3
+
+
+async def test_a_supplier_that_answers_nothing_at_all_is_still_an_error(build_system):
+    """Tolerating a missing tomorrow must not tolerate a missing everything."""
+    session = FakeSession(replies=[FRANK_UNPUBLISHED, FRANK_UNPUBLISHED])
+    system = with_frank(build_system, session)
+
+    await system.coordinator.async_refresh_prices()
+
+    assert system.coordinator.prices_error == "no prices in the response"
+    assert system.coordinator._price_attributes() is None
+
+
+async def test_a_transport_failure_is_reported_as_itself(build_system):
+    """Not as "no prices in the response": we never got a response to read."""
+    session = FakeSession(
+        replies=[frank_payload(0.10), OSError("no route to host")]
+    )
+    system = with_frank(build_system, session)
+
+    await system.coordinator.async_refresh_prices()
+
+    # today still arrived, so this is not an error at all
+    assert system.coordinator.prices_error is None
+
+    use(system, FakeSession(boom=OSError("no route to host")))
+    await system.coordinator.async_refresh_prices()
+
+    assert "no route to host" in system.coordinator.prices_error
 
 
 async def test_an_unreachable_supplier_is_not_an_error_state(build_system):
@@ -234,21 +326,19 @@ async def test_the_exchange_component_is_kept_apart_from_the_all_in_price(
     """Import is billed all-in, export is not. One number cannot be both, and a
     wrong number on an energy dashboard looks exactly like a right one."""
     session = FakeSession(
-        {
-            "data": {
-                "marketPricesElectricity": [
-                    {
-                        # a slot wide enough to cover whenever this runs
-                        "from": "2020-01-01T00:00:00.000Z",
-                        "till": "2099-01-01T00:00:00.000Z",
-                        "marketPrice": 0.10,
-                        "marketPriceTax": 0.021,
-                        "sourcingMarkupPrice": 0.02,
-                        "energyTaxPrice": 0.13,
-                    }
-                ]
-            }
-        }
+        frank_answer(
+            [
+                {
+                    # a slot wide enough to cover whenever this runs
+                    "from": "2020-01-01T00:00:00.000Z",
+                    "till": "2099-01-01T00:00:00.000Z",
+                    "marketPrice": 0.10,
+                    "marketPriceTax": 0.021,
+                    "sourcingMarkupPrice": 0.02,
+                    "energyTaxPrice": 0.13,
+                }
+            ]
+        )
     )
     system = with_frank(build_system, session)
 
@@ -266,6 +356,38 @@ async def test_the_exchange_price_does_not_disturb_the_ranking(build_system):
     await system.coordinator.async_refresh_prices()
 
     assert len(system.coordinator._price_forecast()) == 3
+
+
+async def test_by_the_hour_folds_the_exchange_price_too(build_system):
+    """Whichever resolution is chosen has to apply to both numbers.
+
+    Folding only the all-in price would put an hourly mean next to the
+    exchange price of one quarter - two numbers about different spans of
+    time, side by side, each looking as authoritative as the other.
+    """
+    hour = dt_util.utcnow().replace(minute=0, second=0, microsecond=0)
+    quarters = [
+        {
+            "from": (start := hour + timedelta(minutes=15 * i)).isoformat(),
+            "till": (start + timedelta(minutes=15)).isoformat(),
+            "marketPrice": price,
+            "energyTaxPrice": 0.13,
+        }
+        # the next hour repeats the prices, so an hour that turns over while
+        # the test runs cannot change the answer
+        for i, price in enumerate((0.10, 0.20, 0.30, 0.40) * 2)
+    ]
+    system = with_frank(
+        build_system,
+        FakeSession(frank_answer(quarters)),
+        **{CONF_PRICE_RESOLUTION: RESOLUTION_HOURLY},
+    )
+
+    await system.coordinator.async_refresh_prices()
+
+    # the duration-weighted mean of the four quarters, in both numbers
+    assert system.coordinator.current_market_price() == 0.25
+    assert system.coordinator.current_price()["price"] == 0.38
 
 
 async def test_a_third_party_sensor_has_no_exchange_price_to_offer(build_system):

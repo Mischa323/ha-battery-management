@@ -118,6 +118,7 @@ What each row carries:
 | `<pack>_cap_w`, `<pack>_soc`, `<pack>_phase`, `<pack>_recovering` | its ceiling and state |
 | `mode`, `policy`, `status`, `dry_run`, `offline` | context |
 | `price_eur_kwh`, `price_role` | what this hour cost, and whether it was ranked `cheap` · `dear` · `normal` — so a trace can be read against the tariff without cross-checking the price chart by hand |
+| `market_price_eur_kwh` | the exchange price of the same slot, which is what export is settled against — what a kWh sent back was worth while a bought one cost `price_eur_kwh`. Direct supplier route only |
 | `solar_produced_today_kwh` | the configured solar sensor's cumulative reading for the day, if one is set — diff two rows to get the rate; the only way to confirm "was that solar" rather than guessing from `grid_w` |
 
 Rows with `event=phase_probe` record a phase measurement: the deltas per leg,
@@ -417,6 +418,20 @@ sounds for *deciding*: tax and markup are a fixed adder and VAT a fixed
 multiplier, so the transform is monotonic and the cheap-to-expensive ranking is
 identical either way. It matters for *reading*: the number on the Plan sensor is
 then what you actually pay.
+
+The direct route asks for **quarter-hourly** prices — 96 slots a day rather
+than 24 — because that is how the market settles and how Frank publishes. *How
+to read the prices* still decides what happens to them, but it decides it here
+rather than at the supplier: folding quarters into hours is a choice this
+integration can make, whereas a feed that never carried the quarters cannot be
+unfolded, and a cheap quarter inside an ordinary hour is exactly what an hourly
+average hides.
+
+Today and tomorrow are fetched as **two separate requests**. Tomorrow is not
+published until the afternoon, and Frank answers a date it has no prices for
+with an error rather than an empty day — so asking for both in one GraphQL
+document would lose today along with it, every morning. Two requests let the
+missing day fail on its own.
 
 Prices are re-fetched hourly, which is about noticing that tomorrow has been
 published rather than tracking anything. A supplier that cannot be reached is

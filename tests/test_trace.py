@@ -143,6 +143,30 @@ async def test_the_price_paid_is_recorded(traced, monkeypatch):
     assert row["price_role"] == "cheap"
 
 
+async def test_the_export_price_is_recorded_beside_what_import_cost(traced, monkeypatch):
+    """`market_prices` is the exchange component the supplier settles export
+    against, so the trace can answer what a kWh sent back was worth at the
+    same moment a bought one cost `price_eur_kwh`."""
+    monkeypatch.setattr(coordinator_module.dt_util, "utcnow", lambda: NOW)
+    system = traced(grid=300, **{CONF_PRICE_SENSOR: PRICE_SENSOR, CONF_CHEAP_HOURS: 1})
+    attributes = price_attributes(cheap_hour=NOW.hour)
+    # the same slots without tax and markup, which is the shape the direct
+    # supplier route publishes alongside the all-in prices
+    attributes["market_prices"] = [
+        {**slot, "value": round(slot["value"] - 0.10, 4)}
+        for slot in attributes["raw_today"]
+    ]
+    system.hass.states.set(PRICE_SENSOR, 0.36, attributes)
+    system.coordinator.mode = MODE_DYNAMIC
+
+    for _ in range(25):
+        await system.coordinator._async_tick(None)
+
+    row = rows(system.trace_dir)[-1]
+    assert row["price_eur_kwh"] == "0.13"
+    assert row["market_price_eur_kwh"] == "0.03"
+
+
 async def test_no_price_source_leaves_the_column_empty(traced):
     system = traced(grid=300)
 
@@ -442,6 +466,21 @@ async def test_stale_and_unchanged_are_told_apart(traced):
     assert row["grid_changed_s"] != ""
 
 
+def across_midnight() -> tuple[datetime, datetime]:
+    """Two stamps either side of the most recent midnight.
+
+    Relative on purpose. These two tests used fixed August stamps, and
+    `_prune` deletes by the real clock rather than by the day the rows belong
+    to - so once the calendar passed the retention window they deleted their
+    own files the moment they wrote them. One then failed, and the other went
+    on passing over an empty directory, which is the worse half of the bug.
+    """
+    midnight = datetime.now(timezone.utc).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
+    return midnight - timedelta(seconds=8), midnight + timedelta(seconds=7)
+
+
 async def test_rows_are_filed_by_their_own_day(tmp_path):
     """A buffer that straddles midnight has to split, not pick a side.
 
@@ -451,14 +490,16 @@ async def test_rows_are_filed_by_their_own_day(tmp_path):
     real day this ran. Harmless to read, but it silently breaks anyone slicing
     the trace by day - and retention deletes by the date in the filename.
     """
+    before, after = across_midnight()
     trace = Trace(str(tmp_path), keep_days=14)
-    trace.add({"at": "2026-08-16T23:59:52.000000+00:00", "grid_w": 1})
-    trace.add({"at": "2026-08-17T00:00:07.000000+00:00", "grid_w": 2})
+    trace.add({"at": before.isoformat(), "grid_w": 1})
+    trace.add({"at": after.isoformat(), "grid_w": 2})
     trace.flush()
 
-    assert sorted(os.listdir(tmp_path)) == ["2026-08-16.csv", "2026-08-17.csv"]
-    yesterday = list(csv.DictReader(open(tmp_path / "2026-08-16.csv", encoding="utf-8")))
-    today = list(csv.DictReader(open(tmp_path / "2026-08-17.csv", encoding="utf-8")))
+    names = [f"{before.date()}.csv", f"{after.date()}.csv"]
+    assert sorted(os.listdir(tmp_path)) == names
+    yesterday = list(csv.DictReader(open(tmp_path / names[0], encoding="utf-8")))
+    today = list(csv.DictReader(open(tmp_path / names[1], encoding="utf-8")))
     assert [r["grid_w"] for r in yesterday] == ["1"]
     assert [r["grid_w"] for r in today] == ["2"]
     assert trace.written == 2
@@ -466,12 +507,15 @@ async def test_rows_are_filed_by_their_own_day(tmp_path):
 
 async def test_every_day_gets_its_own_header(tmp_path):
     """A split that forgot the header would produce an unreadable second file."""
+    before, after = across_midnight()
     trace = Trace(str(tmp_path), keep_days=14)
-    trace.add({"at": "2026-08-16T23:59:52.000000+00:00", "grid_w": 1})
-    trace.add({"at": "2026-08-17T00:00:07.000000+00:00", "grid_w": 2})
+    trace.add({"at": before.isoformat(), "grid_w": 1})
+    trace.add({"at": after.isoformat(), "grid_w": 2})
     trace.flush()
 
-    for name in os.listdir(tmp_path):
+    written = os.listdir(tmp_path)
+    assert len(written) == 2, "both days should have been written"
+    for name in written:
         with open(tmp_path / name, encoding="utf-8") as handle:
             assert handle.readline().strip() == "at,grid_w"
 
