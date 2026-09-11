@@ -11,7 +11,7 @@ from custom_components.battery_management.prices import parse_forecast
 from custom_components.battery_management.suppliers import (
     FRANK_ENDPOINT,
     SUPPLIERS,
-    frank_request,
+    frank_requests,
     parse_frank,
 )
 
@@ -25,27 +25,47 @@ def slot(start: str, price: float, **extra) -> dict:
     }
 
 
-def answer(*rows: dict, tomorrow: list | None = None) -> dict:
-    """What the endpoint returns: one aliased field per day."""
-    return {
-        "data": {
-            "today": {"electricityPrices": list(rows)},
-            "tomorrow": None if tomorrow is None else {"electricityPrices": tomorrow},
-        }
-    }
+def day(*rows: dict) -> dict:
+    """One day's answer: `marketPrices` holds the rows for that date."""
+    return {"data": {"marketPrices": {"electricityPrices": list(rows)}}}
 
 
-def test_the_request_asks_for_both_days_by_the_quarter():
-    """The market settles per quarter and so does the question we ask."""
-    url, body = frank_request(date(2026, 9, 1))
+def answer(*rows: dict, tomorrow: list | None = None) -> list:
+    """A whole refresh: one payload per day, tomorrow only once published."""
+    payloads = [day(*rows)]
+    if tomorrow is not None:
+        payloads.append(day(*tomorrow))
+    return payloads
 
-    assert url == FRANK_ENDPOINT
-    assert body["operationName"] == "MarketPrices"
-    assert body["variables"] == {
-        "today": "2026-09-01",
-        "tomorrow": "2026-09-02",
-        "resolution": "PT15M",
-    }
+
+#: what Frank actually sends for a date it has no prices for. Not a null under
+#: a perfectly good sibling - the field is non-nullable, so the error takes the
+#: entire `data` with it. Asking for both days in one document would therefore
+#: lose today as well, every morning.
+UNPUBLISHED = {
+    "errors": [{"message": "No marketprices found for segment ELECTRICITY"}],
+    "data": None,
+}
+
+
+def test_each_day_is_asked_for_separately_by_the_quarter():
+    """The market settles per quarter and so does the question we ask.
+
+    One request per day, because a day Frank has not published yet errors
+    rather than returning null, and a GraphQL error on a non-nullable field
+    nulls the whole response. Sharing a document with tomorrow would mean
+    losing today along with it.
+    """
+    requests = frank_requests(date(2026, 9, 1))
+
+    assert [body["variables"]["date"] for _, body in requests] == [
+        "2026-09-01",
+        "2026-09-02",
+    ]
+    for url, body in requests:
+        assert url == FRANK_ENDPOINT
+        assert body["operationName"] == "MarketPrices"
+        assert body["variables"]["resolution"] == "PT15M"
 
 
 def test_it_adds_tax_and_markup_to_the_market_price():
@@ -95,10 +115,11 @@ def test_a_slot_without_a_market_price_is_dropped():
 
 
 def test_an_error_response_is_no_forecast_rather_than_a_guess():
-    assert parse_frank({"errors": [{"message": "boom"}]}) == {}
+    assert parse_frank([{"errors": [{"message": "boom"}]}]) == {}
     assert parse_frank(answer()) == {}
-    assert parse_frank({"data": None}) == {}
-    assert parse_frank({}) == {}
+    assert parse_frank([{"data": None}]) == {}
+    assert parse_frank([{}]) == {}
+    assert parse_frank([]) == {}
     assert parse_frank("not json") == {}
 
 
@@ -151,21 +172,33 @@ def test_a_days_worth_of_quarters_survives_the_parse():
 
 
 def test_a_tomorrow_that_is_not_published_yet_leaves_today_alone():
-    """Prices arrive in the afternoon, so half the day every request has a
-    null tomorrow beside a perfectly good today."""
-    payload = answer(slot("2026-09-01T02:00:00Z", 0.08))
-    payload["data"]["tomorrow"] = None
+    """Prices arrive in the afternoon, so for half of every day the second
+    request comes back as an error beside a perfectly good first one.
 
-    assert len(parse_frank(payload)["prices"]) == 1
+    This is the case that made one-request-per-day necessary. If these two
+    shared a GraphQL document, this error would null the whole response and
+    today's prices would vanish with it - every morning, silently.
+    """
+    payloads = [day(slot("2026-09-01T02:00:00Z", 0.08)), UNPUBLISHED]
+
+    assert len(parse_frank(payloads)["prices"]) == 1
 
 
 def test_both_days_are_read_when_tomorrow_has_arrived():
-    payload = answer(
+    payloads = answer(
         slot("2026-09-01T02:00:00Z", 0.08),
         tomorrow=[slot("2026-09-02T02:00:00Z", 0.09)],
     )
 
-    assert len(parse_frank(payload)["prices"]) == 2
+    assert len(parse_frank(payloads)["prices"]) == 2
+
+
+def test_a_slot_returned_twice_is_only_ranked_once():
+    """Two days cannot overlap, so this should never happen - but a duplicate
+    would be ranked twice, quietly weighting one quarter against the rest."""
+    twice = slot("2026-09-01T02:00:00Z", 0.08)
+
+    assert len(parse_frank([day(twice), day(twice)])["prices"]) == 1
 
 
 def test_frank_energie_is_offered_by_name():

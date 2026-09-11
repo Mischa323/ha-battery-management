@@ -427,6 +427,12 @@ integration can make, whereas a feed that never carried the quarters cannot be
 unfolded, and a cheap quarter inside an ordinary hour is exactly what an hourly
 average hides.
 
+Today and tomorrow are fetched as **two separate requests**. Tomorrow is not
+published until the afternoon, and Frank answers a date it has no prices for
+with an error rather than an empty day — so asking for both in one GraphQL
+document would lose today along with it, every morning. Two requests let the
+missing day fail on its own.
+
 Prices are re-fetched hourly, which is about noticing that tomorrow has been
 published rather than tracking anything. A supplier that cannot be reached is
 not an error state — no forecast disables cheap-hour charging and leaves

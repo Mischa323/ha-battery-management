@@ -994,24 +994,37 @@ class BatteryCoordinator:
         if fetcher is None:
             return
         build, parse = fetcher
-        url, body = build(dt_util.now().date())
-        try:
-            session = self._session()
-            async with session.post(url, json=body, timeout=PRICE_TIMEOUT) as response:
-                response.raise_for_status()
-                payload = await response.json()
-        except Exception as err:  # noqa: BLE001 - a supplier is not our problem
-            self.prices_error = f"{type(err).__name__}: {err}"
-            _LOGGER.warning("Could not fetch prices from %s: %s", self._price_source, err)
-            self._notify()
-            return
+        payloads: list = []
+        failure: str | None = None
+        # one call per day, and a day that fails fails alone. Tomorrow simply
+        # does not exist until the afternoon, so a refresh that gets today and
+        # nothing else is the ordinary morning case rather than a fault.
+        for url, body in build(dt_util.now().date()):
+            try:
+                session = self._session()
+                async with session.post(
+                    url, json=body, timeout=PRICE_TIMEOUT
+                ) as response:
+                    response.raise_for_status()
+                    payloads.append(await response.json())
+            except Exception as err:  # noqa: BLE001 - a supplier is not our problem
+                failure = failure or f"{type(err).__name__}: {err}"
+                _LOGGER.debug(
+                    "one price request to %s failed: %s", self._price_source, err
+                )
 
-        parsed = parse(payload)
+        parsed = parse(payloads)
         if not parsed:
             # reached them and understood nothing: say so rather than keeping
-            # yesterday's answer around looking healthy
-            self.prices_error = "no prices in the response"
-            _LOGGER.warning("%s returned no usable prices", self._price_source)
+            # yesterday's answer around looking healthy. A transport failure is
+            # reported as itself - "no prices in the response" would be a lie
+            # about a supplier we never got an answer from at all.
+            self.prices_error = failure or "no prices in the response"
+            _LOGGER.warning(
+                "Could not fetch usable prices from %s: %s",
+                self._price_source,
+                self.prices_error,
+            )
         else:
             self._supplier_prices = parsed
             self.prices_fetched_at = time.time()

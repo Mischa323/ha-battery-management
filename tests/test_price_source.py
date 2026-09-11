@@ -52,10 +52,23 @@ class FakeResponse:
 
 
 class FakeSession:
-    """Records what was asked for and answers with whatever it was given."""
+    """Records what was asked for and answers with whatever it was given.
 
-    def __init__(self, payload=None, status: int = 200, boom: Exception | None = None):
-        self.payload = payload
+    A refresh makes one request per day, so `replies` may hold a payload per
+    call; the last one is repeated once they run out. That default keeps the
+    tests that only care about today short, while
+    `test_a_day_that_is_not_published_yet_does_not_sink_the_other` can still
+    hand the two days different answers.
+    """
+
+    def __init__(
+        self,
+        payload=None,
+        status: int = 200,
+        boom: Exception | None = None,
+        replies: list | None = None,
+    ):
+        self.replies = replies if replies is not None else [payload]
         self.status = status
         self.boom = boom
         self.calls: list[tuple[str, dict]] = []
@@ -64,7 +77,10 @@ class FakeSession:
         self.calls.append((url, json))
         if self.boom is not None:
             raise self.boom
-        return FakeResponse(self.payload, self.status)
+        reply = self.replies[min(len(self.calls) - 1, len(self.replies) - 1)]
+        if isinstance(reply, Exception):
+            raise reply
+        return FakeResponse(reply, self.status)
 
 
 def frank_payload(*prices: float) -> dict:
@@ -82,14 +98,17 @@ def frank_payload(*prices: float) -> dict:
     )
 
 
-def frank_answer(rows: list, tomorrow: list | None = None) -> dict:
-    """The endpoint's shape: one aliased `marketPrices` field per day."""
-    return {
-        "data": {
-            "today": {"electricityPrices": rows},
-            "tomorrow": None if tomorrow is None else {"electricityPrices": tomorrow},
-        }
-    }
+def frank_answer(rows: list) -> dict:
+    """One day's answer. A refresh asks for each day in its own request."""
+    return {"data": {"marketPrices": {"electricityPrices": rows}}}
+
+
+#: Frank's reply for a date it has not published: a GraphQL error and a null
+#: `data`, which is exactly why each day gets its own request.
+FRANK_UNPUBLISHED = {
+    "errors": [{"message": "No marketprices found for segment ELECTRICITY"}],
+    "data": None,
+}
 
 
 def with_frank(build_system, session, **kwargs):
@@ -157,6 +176,66 @@ async def test_it_asks_the_supplier_and_keeps_the_answer(build_system):
     assert system.coordinator.prices_fetched_at is not None
     assert system.coordinator.prices_error is None
     assert len(system.coordinator._price_attributes()["prices"]) == 3
+
+
+async def test_each_day_is_asked_for_in_its_own_request(build_system):
+    session = FakeSession(frank_payload(0.10))
+    system = with_frank(build_system, session)
+
+    await system.coordinator.async_refresh_prices()
+
+    today = dt_util.now().date()
+    assert [body["variables"]["date"] for _, body in session.calls] == [
+        today.isoformat(),
+        (today + timedelta(days=1)).isoformat(),
+    ]
+
+
+async def test_a_day_that_is_not_published_yet_does_not_sink_the_other(build_system):
+    """The morning case, and the reason the two days are not one request.
+
+    Frank answers a date it has no prices for with a GraphQL error and a null
+    `data`. Today's prices must survive that completely - otherwise the
+    integration would have no forecast at all until the afternoon, every day.
+    """
+    session = FakeSession(
+        replies=[frank_payload(0.10, 0.05, 0.20), FRANK_UNPUBLISHED]
+    )
+    system = with_frank(build_system, session)
+
+    await system.coordinator.async_refresh_prices()
+
+    assert system.coordinator.prices_error is None
+    assert len(system.coordinator._price_attributes()["prices"]) == 3
+
+
+async def test_a_supplier_that_answers_nothing_at_all_is_still_an_error(build_system):
+    """Tolerating a missing tomorrow must not tolerate a missing everything."""
+    session = FakeSession(replies=[FRANK_UNPUBLISHED, FRANK_UNPUBLISHED])
+    system = with_frank(build_system, session)
+
+    await system.coordinator.async_refresh_prices()
+
+    assert system.coordinator.prices_error == "no prices in the response"
+    assert system.coordinator._price_attributes() is None
+
+
+async def test_a_transport_failure_is_reported_as_itself(build_system):
+    """Not as "no prices in the response": we never got a response to read."""
+    session = FakeSession(
+        replies=[frank_payload(0.10), OSError("no route to host")]
+    )
+    system = with_frank(build_system, session)
+
+    await system.coordinator.async_refresh_prices()
+
+    # today still arrived, so this is not an error at all
+    assert system.coordinator.prices_error is None
+
+    use(system, FakeSession(boom=OSError("no route to host")))
+    await system.coordinator.async_refresh_prices()
+
+    assert "no route to host" in system.coordinator.prices_error
 
 
 async def test_an_unreachable_supplier_is_not_an_error_state(build_system):
