@@ -95,14 +95,25 @@ const PRICE_WAS = {
 function planSays(item, past) {
   if (item.bought) return " — toen geladen";
   if (!item.buy) return "";
-  return past ? " — hier zou hij laden" : " — hier gaat hij laden";
+  // On a folded hour the ring means "some of this hour", and saying which
+  // part keeps it from reading as a promise about the whole of it.
+  const share =
+    item.parts > 1 && item.buyParts && item.buyParts < item.parts
+      ? ` (${item.buyParts} van de ${item.parts} kwartieren)`
+      : "";
+  return (past ? " — hier zou hij laden" : " — hier gaat hij laden") + share;
 }
+
+/** Why a folded hour has no single verdict, and what to do about it. */
+const mixedSays = (bar) =>
+  bar.mixed ? " — gemengd uur, zoom in voor de kwartieren" : "";
 
 function slotLabel(bar) {
   const says = (bar.past ? PRICE_WAS : PRICE_SAYS)[bar.role] || "";
   return (
     `${hhmm(bar.start)} — ${bar.price.toFixed(3)} €/kWh — ${says}` +
-    planSays(bar, bar.past)
+    planSays(bar, bar.past) +
+    mixedSays(bar)
   );
 }
 
@@ -110,7 +121,18 @@ function slotLabel(bar) {
 const PRICE_CSS = `
           .phead { display:flex; justify-content:space-between; align-items:baseline;
                    font-size:.92em; margin-bottom:8px; }
+          /* pan-x: the browser keeps horizontal dragging, which is what makes
+             scrolling through the day feel native. Pinching is ours, and is
+             taken off the browser in the handler rather than here, so a
+             one-finger drag is never stolen from it. */
+          .pscroll { overflow-x:auto; overscroll-behavior-x:contain; touch-action:pan-x; }
           .plot { display:flex; align-items:flex-end; gap:2px; height:96px; position:relative; }
+  /* Zoomed in, the bars stop sharing the width and take the one the zoom
+     works out, so the strip scrolls instead of shrinking. A max-content width
+     is what keeps the zero line and the axis as long as the bars rather than
+     as long as the window they are seen through. */
+  .plot.wide, .paxis.wide { width:max-content; min-width:100%; }
+  .plot.wide .slot, .paxis.wide span { flex:0 0 var(--bw, 11px); }
           .zero { position:absolute; left:0; right:0; height:1px; background: var(--divider-color); }
           .slot { flex:1 1 0; height:100%; position:relative; min-width:0; }
           .pbar { position:absolute; left:0; right:0; }
@@ -142,6 +164,9 @@ const PRICE_CSS = `
           .pnav .pbtn.off { opacity:.3; cursor:default; }
           .pnav .pday { min-width:8.5em; text-align:center; cursor:pointer;
                         color: var(--secondary-text-color); }
+          .pnav.pzoom { margin-top:4px; }
+          .pnav .plevel { min-width:7em; text-align:center;
+                          color: var(--secondary-text-color); }
 `;
 
 /** The day picker, shared by both charts. */
@@ -150,6 +175,11 @@ const PRICE_NAV = `
               <span class="pbtn" id="pprev" title="dag terug">‹</span>
               <span class="pday" id="pday" title="terug naar vandaag"></span>
               <span class="pbtn" id="pnext" title="dag verder">›</span>
+            </div>
+            <div class="pnav pzoom" id="pzoom" style="display:none">
+              <span class="pbtn" id="pout" title="uitzoomen naar hele uren">−</span>
+              <span class="plevel" id="plevel"></span>
+              <span class="pbtn" id="pin" title="inzoomen naar de kwartieren">+</span>
             </div>`;
 
 const PRICE_LEGEND = `
@@ -367,6 +397,151 @@ function dayRange(day) {
 const slotsOnDay = (hours, day) =>
   (hours || []).filter((h) => h && dayOf(h.start) === day);
 
+/** How long a slot lasts, defaulting to a quarter when it does not say. */
+const slotSpan = (slot) => {
+  const ms = at(slot.end) - at(slot.start);
+  return Number.isFinite(ms) && ms > 0 ? ms : 900000;
+};
+
+/** Whether this feed has anything finer than an hour to zoom into. */
+const hasQuarters = (slots) =>
+  (slots || []).some((s) => s && slotSpan(s) < 3540000);
+
+/**
+ * Quarter-hourly slots folded into the hours they fall in.
+ *
+ * 96 bars across a phone is about two pixels each, which is a texture rather
+ * than a chart - the owner could not read his own prices off it. So the day
+ * opens as 24 hours and the quarters are one tap away. That is the order the
+ * day is actually read in: the shape first, the exact quarter only when it
+ * turns out to matter.
+ *
+ * The price is the duration-weighted mean, the same fold `to_hourly` does on
+ * the integration side, so the card and the coordinator cannot end up
+ * disagreeing about what an hour cost.
+ *
+ * The verdict is the one covering most of the hour, and a tie gets `normal`:
+ * an hour split evenly between cheap and dear is not honestly either, and
+ * refusing to call it is what sends the reader to the quarters. `buy` is the
+ * deliberate exception - it survives if *any* quarter is bought on, because
+ * the hour will see charging and hiding that is the one error worth avoiding
+ * here. The label then says how many quarters, so the ring cannot over-promise.
+ */
+function foldToHours(slots) {
+  const buckets = new Map();
+  for (const slot of slots || []) {
+    const start = at(slot.start);
+    if (isNaN(start)) continue;
+    const hour = new Date(start);
+    hour.setMinutes(0, 0, 0);
+    const key = hour.getTime();
+    if (!buckets.has(key)) buckets.set(key, []);
+    buckets.get(key).push(slot);
+  }
+  return [...buckets.keys()].sort((a, b) => a - b).map((key) => foldOne(buckets.get(key)));
+}
+
+/** One hour's worth of slots, as a single slot the chart can draw. */
+function foldOne(group) {
+  let weighted = 0;
+  let total = 0;
+  const held = {};
+  for (const part of group) {
+    const ms = slotSpan(part);
+    const price = Number(part.price);
+    if (!isNaN(price)) {
+      weighted += price * ms;
+      total += ms;
+    }
+    const role = PRICE_COLOUR[part.role] ? part.role : "normal";
+    held[role] = (held[role] || 0) + ms;
+  }
+  // a strict majority of the hour, or no verdict at all
+  const ranked = Object.entries(held).sort((a, b) => b[1] - a[1]);
+  const role =
+    ranked.length === 1 || (ranked.length > 1 && ranked[0][1] > ranked[1][1])
+      ? ranked[0][0]
+      : "normal";
+
+  const starts = group.map((part) => at(part.start));
+  const ends = group.map((part) => at(part.end)).filter((v) => !isNaN(v));
+  const from = Math.min(...starts);
+  const buyParts = group.filter((part) => part.buy === true).length;
+  return {
+    start: new Date(from).toISOString(),
+    end: new Date(ends.length ? Math.max(...ends) : from + 3600000).toISOString(),
+    price: total ? weighted / total : 0,
+    role,
+    mixed: Object.keys(held).length > 1,
+    buy: buyParts > 0,
+    buyParts,
+    parts: group.length,
+    bought: group.some((part) => part.bought === true),
+    past: group.every((part) => part.past === true),
+  };
+}
+
+/** How the chart is read: whole hours, or the quarters inside them. */
+const ZOOM_HOUR = "hour";
+const ZOOM_QUARTER = "quarter";
+const ZOOM_LABEL = { hour: "per uur", quarter: "per kwartier" };
+
+/**
+ * Zoom is one continuous number, not two settings.
+ *
+ * `1` means the day fits the width; `4` means it is drawn four times as wide
+ * and scrolls. Pinching multiplies it, so it behaves the way a pinch does
+ * everywhere else - and the resolution then falls out of the arithmetic rather
+ * than being a second thing to choose: once a quarter has enough pixels to be
+ * told apart, quarters are what gets drawn.
+ */
+const ZOOM_FIT = 1;
+const ZOOM_MAX = 8;
+//: below this a quarter is a hairline, and four of them are a smudge rather
+//: than four prices - which is the whole complaint this answers
+const QUARTER_MIN_PX = 6;
+//: what a button press is worth, in pinch terms
+const ZOOM_STEP = 1.6;
+
+const clampScale = (value) =>
+  Math.min(ZOOM_MAX, Math.max(ZOOM_FIT, Number(value) || ZOOM_FIT));
+
+const scaleOf = (card) => clampScale(card._scale);
+
+/**
+ * What the current scale means for this day: which slots, and how wide.
+ *
+ * `width` is the strip's own width, so the same scale means the same thing on
+ * a phone and on a wall tablet: "the day, twice over" rather than a pixel
+ * count that shows half a day on one and a third on the other.
+ */
+function zoomLayout(card, slots, width) {
+  const scale = scaleOf(card);
+  const content = Math.max(1, width) * scale;
+  const list = slots || [];
+  // Two conditions, and the first is a choice rather than arithmetic. The day
+  // opens as hours on every screen, even a wall tablet wide enough to fit 96
+  // bars comfortably - so the chart reads the same way everywhere and the
+  // quarters are something you go and ask for. The second is the arithmetic:
+  // asked for or not, they are only drawn once they are wide enough to tell
+  // apart, or zooming would hand back the smudge this replaced.
+  if (
+    scale > ZOOM_FIT &&
+    hasQuarters(list) &&
+    list.length &&
+    content / list.length >= QUARTER_MIN_PX
+  ) {
+    return { slots: list, level: ZOOM_QUARTER, scale, barPx: content / list.length };
+  }
+  const folded = hasQuarters(list) ? foldToHours(list) : list;
+  return {
+    slots: folded,
+    level: ZOOM_HOUR,
+    scale,
+    barPx: folded.length ? content / folded.length : 0,
+  };
+}
+
 /**
  * Recorder statistics, in the shape the chart already draws.
  *
@@ -440,6 +615,10 @@ function priceBars(hours) {
         past,
         buy: h.buy === true,
         bought: h.bought === true,
+        // only set on a folded hour, and only read by the label
+        mixed: h.mixed === true,
+        buyParts: h.buyParts,
+        parts: h.parts,
         start: h.start,
         price,
         bottom: zero + (price < 0 ? -size : 0),
@@ -454,11 +633,22 @@ function priceBars(hours) {
 }
 
 /** Fill a plot and its axis from the plan's `hours`. */
-function drawPrices(plot, axis, hours, picked) {
+function drawPrices(plot, axis, hours, picked, barPx) {
   const { zero, bars } = priceBars(hours);
-  // a quarter-hourly feed is 96 bars; a 2 px gap between them would be most of
-  // the chart, so the surface separator gives way once they get thin
-  plot.style.gap = hours.length > 48 ? "1px" : "2px";
+  // Wide means "wider than the window", which is exactly when the strip has to
+  // scroll and the bars stop sharing the width. At the fitted scale they share
+  // it as before, and a quarter-hourly day that somehow reaches this unfolded
+  // would be 96 hairlines - so the 2 px surface separator gives way once the
+  // bars get that thin.
+  const wide = Number(barPx) > 0;
+  plot.classList.toggle("wide", wide);
+  if (axis) axis.classList.toggle("wide", wide);
+  if (wide) {
+    const width = `${barPx.toFixed(2)}px`;
+    plot.style.setProperty("--bw", width);
+    if (axis) axis.style.setProperty("--bw", width);
+  }
+  plot.style.gap = !wide && hours.length > 48 ? "1px" : "2px";
   plot.innerHTML =
     `<div class="zero" style="bottom:${zero}%"></div>` +
     bars
@@ -473,8 +663,12 @@ function drawPrices(plot, axis, hours, picked) {
       )
       .join("");
   if (!axis) return;
-  // a label every few hours, not one on every bar
-  const every = Math.max(1, Math.round(hours.length / 6));
+  // A label roughly every 56 px, so zooming in reveals more of them instead of
+  // spreading six across a strip four screens wide. That is what turns
+  // scrolling through the day into something you can navigate by.
+  const every = wide
+    ? Math.max(1, Math.round(56 / barPx))
+    : Math.max(1, Math.round(hours.length / 6));
   axis.innerHTML = hours
     .map((h, i) => `<span>${i % every === 0 ? hhmm(h.start) : ""}</span>`)
     .join("");
@@ -531,6 +725,181 @@ function wireNav(card) {
     card._picked = null;
     card._update();
   });
+}
+
+/**
+ * Set the zoom, keeping whatever the reader was looking at under their fingers.
+ *
+ * `anchor` is where on the whole strip the zoom is centred, 0..1. Without it a
+ * pinch walks the day sideways: the content grows from the left edge, so the
+ * slot between your fingers slides away from them while you are still holding
+ * it. The new scroll position is worked out from the *new* content width, so
+ * it has to be applied after the redraw rather than before.
+ */
+function setScale(card, value, anchor) {
+  const next = clampScale(value);
+  if (next === scaleOf(card)) return;
+  card._scale = next;
+  card._anchor = typeof anchor === "number" ? anchor : null;
+  card._update();
+}
+
+/**
+ * Pinch to zoom, and drag to move through the day.
+ *
+ * Dragging is the browser's - `touch-action: pan-x` on the strip leaves
+ * one-finger horizontal scrolling exactly as native as it is anywhere else in
+ * Home Assistant, which also means it keeps its momentum and its rubber-band.
+ * Only the two-finger case is taken, and only while two fingers are down, so a
+ * drag is never stolen from the scroller.
+ *
+ * `preventDefault` on those two fingers is what stops the pinch reaching the
+ * page and zooming the whole dashboard instead of the chart - which is the
+ * behaviour that makes a chart feel like a picture of a chart.
+ */
+function wirePinch(card) {
+  const strip = card.querySelector("#pscroll");
+  if (!strip || typeof strip.addEventListener !== "function") return;
+
+  const gap = (touches) =>
+    Math.hypot(
+      touches[0].clientX - touches[1].clientX,
+      touches[0].clientY - touches[1].clientY
+    );
+
+  /** Where between the two fingers sits on the whole strip, 0..1. */
+  const between = (touches) => {
+    const box = strip.getBoundingClientRect ? strip.getBoundingClientRect() : { left: 0 };
+    const middle = (touches[0].clientX + touches[1].clientX) / 2 - box.left;
+    const total = strip.scrollWidth || strip.clientWidth || 1;
+    return Math.min(1, Math.max(0, (strip.scrollLeft + middle) / total));
+  };
+
+  let from = 0;
+  let was = ZOOM_FIT;
+  let anchor = 0.5;
+
+  strip.addEventListener(
+    "touchstart",
+    (event) => {
+      if (!event.touches || event.touches.length !== 2) return;
+      from = gap(event.touches);
+      was = scaleOf(card);
+      anchor = between(event.touches);
+      if (event.preventDefault) event.preventDefault();
+    },
+    { passive: false }
+  );
+
+  strip.addEventListener(
+    "touchmove",
+    (event) => {
+      if (!from || !event.touches || event.touches.length !== 2) return;
+      if (event.preventDefault) event.preventDefault();
+      const now = gap(event.touches);
+      if (now > 0) setScale(card, was * (now / from), anchor);
+    },
+    { passive: false }
+  );
+
+  const release = () => {
+    from = 0;
+  };
+  strip.addEventListener("touchend", release);
+  strip.addEventListener("touchcancel", release);
+
+  // A trackpad pinch arrives as ctrl+wheel, which is how every browser reports
+  // it. Same gesture, same result, so a desktop reader is not left with only
+  // the buttons.
+  strip.addEventListener(
+    "wheel",
+    (event) => {
+      if (!event.ctrlKey) return;
+      if (event.preventDefault) event.preventDefault();
+      const box = strip.getBoundingClientRect
+        ? strip.getBoundingClientRect()
+        : { left: 0 };
+      const total = strip.scrollWidth || strip.clientWidth || 1;
+      const where = Math.min(
+        1,
+        Math.max(0, (strip.scrollLeft + (event.clientX - box.left)) / total)
+      );
+      setScale(card, scaleOf(card) * Math.exp(-event.deltaY / 200), where);
+    },
+    { passive: false }
+  );
+}
+
+/**
+ * The buttons, for anyone not pinching: a mouse, a keyboard, one hand full.
+ *
+ * They step the same continuous scale the pinch does, so the two cannot end up
+ * meaning different things.
+ */
+function wireZoom(card) {
+  const on = (id, fn) => {
+    const el = card.querySelector(id);
+    if (el) el.addEventListener("click", fn);
+  };
+  // centred on the middle of what is on screen, which is where a reader
+  // pressing a button is looking
+  const middle = () => {
+    const strip = card.querySelector("#pscroll");
+    if (!strip || !strip.scrollWidth) return 0.5;
+    return (strip.scrollLeft + strip.clientWidth / 2) / strip.scrollWidth;
+  };
+  on("#pin", () => setScale(card, scaleOf(card) * ZOOM_STEP, middle()));
+  on("#pout", () => setScale(card, scaleOf(card) / ZOOM_STEP, middle()));
+}
+
+/**
+ * Offer the zoom only where there is something finer than an hour to see, and
+ * say which of the two you are looking at.
+ */
+function renderZoom(card, slots, level) {
+  const group = card.querySelector("#pzoom");
+  if (!group) return;
+  const quarters = hasQuarters(slots);
+  group.style.display = quarters ? "" : "none";
+  if (!quarters) return;
+  const label = card.querySelector("#plevel");
+  if (label) label.textContent = ZOOM_LABEL[level] || ZOOM_LABEL[ZOOM_HOUR];
+  const scale = scaleOf(card);
+  const off = (id, done) => {
+    const button = card.querySelector(id);
+    if (button) button.classList.toggle("off", done);
+  };
+  off("#pin", scale >= ZOOM_MAX);
+  off("#pout", scale <= ZOOM_FIT);
+}
+
+/**
+ * Put the strip back where the reader was, after the redraw changed its width.
+ *
+ * Two cases. A pinch or a button press carries an anchor - the point it was
+ * centred on - and that point has to land back under the fingers. A level
+ * change with no anchor falls back to the current slot, because zooming into
+ * 96 bars and arriving at midnight is technically a zoom and practically a
+ * loss.
+ */
+function restoreView(card) {
+  const strip = card.querySelector("#pscroll");
+  const plot = card.querySelector("#plot");
+  if (!strip || !plot) return;
+  const total = strip.scrollWidth || 0;
+  const window_ = strip.clientWidth || 0;
+  if (typeof card._anchor === "number" && total) {
+    strip.scrollLeft = Math.max(0, Math.min(total - window_, card._anchor * total - window_ / 2));
+    card._anchor = null;
+    card._recentre = false;
+    return;
+  }
+  if (!card._recentre) return;
+  card._recentre = false;
+  if (typeof plot.querySelector !== "function" || !window_) return;
+  const here = plot.querySelector(".slot.now") || plot.querySelector(".slot.picked");
+  if (!here) return;
+  strip.scrollLeft = Math.max(0, here.offsetLeft - window_ / 2 + here.offsetWidth / 2);
 }
 
 /** Which day is on show, and whether there is a later one to go to. */
@@ -656,6 +1025,10 @@ class BatteryManagementCard extends HTMLElement {
     this._period = CHARGE_SUFFIX[config.charge_period]
       ? config.charge_period
       : DEFAULT_PERIOD;
+    // Fitted to the width unless the config asks to open on the quarters. Like
+    // `charge_period`, pinching changes it for the session only - a card
+    // cannot write its own YAML.
+    this._scale = config.price_zoom === ZOOM_QUARTER ? 2.5 : ZOOM_FIT;
   }
 
   set hass(hass) {
@@ -686,13 +1059,26 @@ class BatteryManagementCard extends HTMLElement {
     }
     wrap.style.display = "block";
     renderNav(this, hours);
-    const slots = chartSlots(this, hours);
+    const published = chartSlots(this, hours);
+    const view = zoomLayout(
+      this,
+      published,
+      (this.querySelector("#pscroll") || {}).clientWidth
+    );
+    // the indices belong to a resolution, so a tapped bar cannot survive a
+    // change of one: bar 40 is 10:00 at quarters and does not exist at hours
+    if (this._level && this._level !== view.level) this._picked = null;
+    this._level = view.level;
+    renderZoom(this, published, view.level);
+    const slots = view.slots;
     drawPrices(
       this.querySelector("#plot"),
       this.querySelector("#paxis"),
       slots,
-      this._picked
+      this._picked,
+      view.scale > ZOOM_FIT ? view.barPx : 0
     );
+    restoreView(this);
     const { slot, live } = pickedSlot(slots, this._picked);
     const average = dayAverage(slots);
     this.querySelector("#pnow").textContent = slot
@@ -893,8 +1279,10 @@ ${PRICE_CSS}
           </div>
           <div class="prices" id="prices" style="display:none">
             <div class="phead"><span>Prijs per uur</span><span id="pnow" class="muted"></span></div>
-            <div class="plot" id="plot"></div>
-            <div class="paxis" id="paxis"></div>
+            <div class="pscroll" id="pscroll">
+              <div class="plot" id="plot"></div>
+              <div class="paxis" id="paxis"></div>
+            </div>
 ${PRICE_NAV}
 ${PRICE_LEGEND}
           <div class="plan" id="plan" style="display:none"></div>
@@ -907,6 +1295,8 @@ ${PRICE_LEGEND}
     });
     wirePlot(this);
     wireNav(this);
+    wireZoom(this);
+    wirePinch(this);
     // Delegated to the group rather than bound per pill, so the handler
     // survives `_update` rewriting the pills' classes - and so adding a period
     // later is a markup change and nothing else.
@@ -1238,6 +1628,7 @@ class BatteryManagementPricesCard extends HTMLElement {
     if (!config) throw new Error("Invalid configuration");
     this._config = config;
     this._built = false;
+    this._scale = config.price_zoom === ZOOM_QUARTER ? 2.5 : ZOOM_FIT;
   }
 
   set hass(hass) {
@@ -1273,8 +1664,10 @@ ${PRICE_CSS}
         <div class="pc">
           <div class="big" id="pnow">—</div>
           <div class="sub" id="psub"></div>
-          <div class="plot" id="plot"></div>
-          <div class="paxis" id="paxis"></div>
+          <div class="pscroll" id="pscroll">
+            <div class="plot" id="plot"></div>
+            <div class="paxis" id="paxis"></div>
+          </div>
 ${PRICE_NAV}
           <div class="ends" id="pends"></div>
 ${PRICE_LEGEND}
@@ -1282,6 +1675,8 @@ ${PRICE_LEGEND}
       </ha-card>`;
     wirePlot(this);
     wireNav(this);
+    wireZoom(this);
+    wirePinch(this);
     this._built = true;
   }
 
@@ -1302,17 +1697,31 @@ ${PRICE_LEGEND}
       for (const id of ["#plot", "#paxis", "#pends"]) {
         this.querySelector(id).innerHTML = "";
       }
+      renderZoom(this, [], ZOOM_HOUR);
       return;
     }
 
     renderNav(this, hours);
-    const slots = chartSlots(this, hours);
+    const published = chartSlots(this, hours);
+    const view = zoomLayout(
+      this,
+      published,
+      (this.querySelector("#pscroll") || {}).clientWidth
+    );
+    // the indices belong to a resolution, so a tapped bar cannot survive a
+    // change of one: bar 40 is 10:00 at quarters and does not exist at hours
+    if (this._level && this._level !== view.level) this._picked = null;
+    this._level = view.level;
+    renderZoom(this, published, view.level);
+    const slots = view.slots;
     drawPrices(
       this.querySelector("#plot"),
       this.querySelector("#paxis"),
       slots,
-      this._picked
+      this._picked,
+      view.scale > ZOOM_FIT ? view.barPx : 0
     );
+    restoreView(this);
 
     if (!slots.length) {
       // a day with nothing on it: say which of the two it is, rather than

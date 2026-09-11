@@ -514,11 +514,51 @@ the 12 cheapest quarters.
 
 - **As the supplier publishes them** (the default) is the more precise: the
   coordinator will buy on a single cheap quarter.
-- **By the hour** folds them, weighted by duration. 24 bars on a chart instead
-  of 96, at the cost of averaging away the peaks inside each hour.
+- **By the hour** folds them, weighted by duration, before anything is decided.
+  You lose the peaks inside each hour in exchange for a simpler day.
 
 Whichever you pick applies to the decisions *and* the chart, because they must
 never be able to disagree about what "cheap" meant.
+
+### Zooming the chart
+
+That setting is about the **decisions**. How many bars you care to look at is a
+separate question, so the chart has its own zoom.
+
+**Pinch it with two fingers**, the way you would anything else. Dragging with
+one finger scrolls through the day and is left entirely to the browser, so it
+keeps its momentum and its rubber-band. A trackpad pinch (ctrl+wheel) does the
+same thing, and **−** / **+** under the day picker are there for a mouse, a
+keyboard, or a hand that is already full.
+
+Zoom is one continuous number rather than two settings: `1` fits the day to the
+width, `4` draws it four times as wide and scrolls. The resolution then falls
+out of the arithmetic instead of being a second thing to choose — once a
+quarter has enough pixels to be told apart from its neighbours, quarters are
+what gets drawn, and the label under the chart says which you are looking at.
+
+It always **opens on hours**, on every screen. 96 bars across a phone is about
+two pixels each, which is a texture rather than a chart; and even on a wall
+tablet wide enough to fit them comfortably it still opens folded, so the day
+reads the same way everywhere and the quarters are something you go and ask
+for. The zoom only appears when the feed actually has quarters in it.
+
+A folded hour is a summary, and summaries are where a chart gets to overstate
+things, so two rules keep it honest:
+
+- Its colour is the verdict covering **most** of the hour. An hour split evenly
+  between cheap and dear is drawn as neither, and its tooltip says it is mixed —
+  which is the nudge to go and look at the quarters.
+- Its blue ring survives if **any** quarter inside will be bought on, because
+  hiding that charging happens in an hour is the one error worth avoiding here.
+  The tooltip then says how much of the hour it was — *"hier gaat hij laden
+  (1 van de 4 kwartieren)"* — so the ring cannot read as a promise about the
+  whole hour.
+
+`price_zoom: quarter` in the card's YAML opens zoomed in instead, for a screen
+wide enough to take it. Like the charge-period pills, pinching changes it for
+the session only — a card cannot rewrite its own YAML, and pretending otherwise
+would lose the choice on the next reload without saying why.
 
 ### A prices-only card
 
