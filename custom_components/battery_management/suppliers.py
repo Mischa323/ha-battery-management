@@ -28,18 +28,39 @@ SOURCE_NONE = "none"
 SOURCE_ENTITY = "entity"
 
 FRANK_ENDPOINT = "https://frank-graphql-prod.graphcdn.app/"
+
+#: The market settles in 15-minute blocks and Frank publishes that way, so ask
+#: for them: 96 slots a day instead of 24. `price_resolution` still decides
+#: what is done with them - folding a quarter-hourly feed into hours is a
+#: readability choice this integration can make, but a feed that never had the
+#: quarters in it cannot be unfolded, and the peaks inside the hour are exactly
+#: where a cheap quarter hides.
+FRANK_RESOLUTION = "PT15M"
+
+#: `marketPrices` takes one day at a time, unlike the date range the hourly
+#: `marketPricesElectricity` accepted. Two aliases of the same field keep that
+#: to one round trip - and GraphQL answers per field, so a tomorrow that has
+#: not been published yet comes back null beside a perfectly good today.
+_FRANK_FIELDS = """
+    electricityPrices {
+      from
+      till
+      marketPrice
+      marketPriceTax
+      sourcingMarkupPrice
+      energyTaxPrice
+    }
+"""
 FRANK_QUERY = """
-query MarketPrices($startDate: Date!, $endDate: Date!) {
-  marketPricesElectricity(startDate: $startDate, endDate: $endDate) {
-    from
-    till
-    marketPrice
-    marketPriceTax
-    sourcingMarkupPrice
-    energyTaxPrice
+query MarketPrices($today: String!, $tomorrow: String!, $resolution: PriceResolution!) {
+  today: marketPrices(date: $today, resolution: $resolution) {
+    %(fields)s
+  }
+  tomorrow: marketPrices(date: $tomorrow, resolution: $resolution) {
+    %(fields)s
   }
 }
-"""
+""" % {"fields": _FRANK_FIELDS}
 
 #: what an all-in price is made of. `marketPrice` is required - a slot without
 #: one is not a price. The rest default to 0, which yields the bare exchange
@@ -60,10 +81,29 @@ def frank_request(today: date) -> tuple[str, dict]:
         "operationName": "MarketPrices",
         "query": FRANK_QUERY,
         "variables": {
-            "startDate": today.isoformat(),
-            "endDate": (today + timedelta(days=2)).isoformat(),
+            "today": today.isoformat(),
+            "tomorrow": (today + timedelta(days=1)).isoformat(),
+            "resolution": FRANK_RESOLUTION,
         },
     }
+
+
+def _frank_rows(data: dict) -> list:
+    """Every electricity row in the answer, both days together.
+
+    A day that is missing, null or malformed contributes nothing rather than
+    failing the other one: an afternoon request has a tomorrow and a morning
+    one does not, and both are perfectly ordinary.
+    """
+    rows: list = []
+    for key in ("today", "tomorrow"):
+        day = data.get(key)
+        if not isinstance(day, dict):
+            continue
+        values = day.get("electricityPrices")
+        if isinstance(values, list):
+            rows.extend(values)
+    return rows
 
 
 def parse_frank(payload: dict) -> dict:
@@ -80,9 +120,10 @@ def parse_frank(payload: dict) -> dict:
     """
     if not isinstance(payload, dict):
         return {}
-    rows = (payload.get("data") or {}).get("marketPricesElectricity")
-    if not isinstance(rows, list):
+    data = payload.get("data")
+    if not isinstance(data, dict):
         return {}
+    rows = _frank_rows(data)
 
     prices = []
     market_prices = []

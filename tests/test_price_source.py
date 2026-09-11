@@ -68,18 +68,26 @@ class FakeSession:
 
 
 def frank_payload(*prices: float) -> dict:
-    """Hourly slots from midnight, priced in order."""
+    """Hourly slots from midnight, priced in order, under today's alias."""
+    return frank_answer(
+        [
+            {
+                "from": f"2026-09-01T{hour:02d}:00:00.000Z",
+                "till": f"2026-09-01T{hour + 1:02d}:00:00.000Z",
+                "marketPrice": price,
+                "energyTaxPrice": 0.13,
+            }
+            for hour, price in enumerate(prices)
+        ]
+    )
+
+
+def frank_answer(rows: list, tomorrow: list | None = None) -> dict:
+    """The endpoint's shape: one aliased `marketPrices` field per day."""
     return {
         "data": {
-            "marketPricesElectricity": [
-                {
-                    "from": f"2026-09-01T{hour:02d}:00:00.000Z",
-                    "till": f"2026-09-01T{hour + 1:02d}:00:00.000Z",
-                    "marketPrice": price,
-                    "energyTaxPrice": 0.13,
-                }
-                for hour, price in enumerate(prices)
-            ]
+            "today": {"electricityPrices": rows},
+            "tomorrow": None if tomorrow is None else {"electricityPrices": tomorrow},
         }
     }
 
@@ -239,21 +247,19 @@ async def test_the_exchange_component_is_kept_apart_from_the_all_in_price(
     """Import is billed all-in, export is not. One number cannot be both, and a
     wrong number on an energy dashboard looks exactly like a right one."""
     session = FakeSession(
-        {
-            "data": {
-                "marketPricesElectricity": [
-                    {
-                        # a slot wide enough to cover whenever this runs
-                        "from": "2020-01-01T00:00:00.000Z",
-                        "till": "2099-01-01T00:00:00.000Z",
-                        "marketPrice": 0.10,
-                        "marketPriceTax": 0.021,
-                        "sourcingMarkupPrice": 0.02,
-                        "energyTaxPrice": 0.13,
-                    }
-                ]
-            }
-        }
+        frank_answer(
+            [
+                {
+                    # a slot wide enough to cover whenever this runs
+                    "from": "2020-01-01T00:00:00.000Z",
+                    "till": "2099-01-01T00:00:00.000Z",
+                    "marketPrice": 0.10,
+                    "marketPriceTax": 0.021,
+                    "sourcingMarkupPrice": 0.02,
+                    "energyTaxPrice": 0.13,
+                }
+            ]
+        )
     )
     system = with_frank(build_system, session)
 
@@ -294,7 +300,7 @@ async def test_by_the_hour_folds_the_exchange_price_too(build_system):
     ]
     system = with_frank(
         build_system,
-        FakeSession({"data": {"marketPricesElectricity": quarters}}),
+        FakeSession(frank_answer(quarters)),
         **{CONF_PRICE_RESOLUTION: RESOLUTION_HOURLY},
     )
 

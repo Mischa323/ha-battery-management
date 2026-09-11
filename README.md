@@ -419,6 +419,14 @@ multiplier, so the transform is monotonic and the cheap-to-expensive ranking is
 identical either way. It matters for *reading*: the number on the Plan sensor is
 then what you actually pay.
 
+The direct route asks for **quarter-hourly** prices — 96 slots a day rather
+than 24 — because that is how the market settles and how Frank publishes. *How
+to read the prices* still decides what happens to them, but it decides it here
+rather than at the supplier: folding quarters into hours is a choice this
+integration can make, whereas a feed that never carried the quarters cannot be
+unfolded, and a cheap quarter inside an ordinary hour is exactly what an hourly
+average hides.
+
 Prices are re-fetched hourly, which is about noticing that tomorrow has been
 published rather than tracking anything. A supplier that cannot be reached is
 not an error state — no forecast disables cheap-hour charging and leaves
