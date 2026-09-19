@@ -979,6 +979,11 @@ than the cheap hour before it on every ordinary day, so that comparison fires
 constantly and says nothing. It also stands down when either side is too thin a
 slice to judge — two night hours seen from 02:00 are not a day.
 
+The solar ceiling still has the last word on *how much*. A full day of sun into
+packs that hold exactly that much means buy nothing, peak ahead or not; half a
+day of sun means buy to half and leave the rest to the roof. The peak boundary
+decides **when** it may buy, never how much.
+
 **This does nothing until you set a floor.** *Buy at least to* ships at 0, and
 reading that as a level to stop at would mean "buy nothing", which is the fault
 it was reported alongside. With no floor stated, nothing is lowered.

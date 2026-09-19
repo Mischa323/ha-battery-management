@@ -18,9 +18,12 @@ from custom_components.battery_management.const import (
     CONF_EXPENSIVE_HOURS,
     CONF_FULL_CHARGE_MINUTES,
     CONF_PRICE_SENSOR,
+    CONF_SOLAR_FORECAST_MAX,
     CONF_SOLAR_FORECAST_SENSORS,
     MODE_DYNAMIC,
+    POLICY_CHEAPER_TOMORROW,
     POLICY_DYNAMIC_CHARGE,
+    POLICY_SOLAR_HEADROOM,
 )
 
 PRICES = "sensor.energy_prices"
@@ -740,3 +743,126 @@ async def test_with_no_peak_ahead_the_cheaper_day_still_wins(planned):
     await system.coordinator._async_tick(None)
 
     assert system.coordinator.active_policy != POLICY_DYNAMIC_CHARGE
+
+
+async def test_the_sun_still_stops_the_buying_before_the_peak(planned):
+    """The peak bound says *when* it may buy, never *how much*.
+
+    Bounding the window at the peak makes buying more likely, not less - which
+    is the point, but it is also the way this could have started filling packs
+    that the sun was about to fill for free. The solar ceiling is untouched and
+    still has the last word: a full day of sun into packs that hold exactly
+    that much means buy nothing, peak ahead or not.
+    """
+    system = planned(remaining=14.0, soc=(20.0, 20.0))
+    system.hass.states.set(PRICES, 0.13, reported_day())
+
+    await system.coordinator._async_tick(None)
+
+    assert system.coordinator.charge_ceiling() == 0.0
+    assert system.coordinator.active_policy != POLICY_DYNAMIC_CHARGE
+
+
+async def test_it_buys_up_to_the_sun_ceiling_and_no_further(planned):
+    """Half a day of sun leaves half the packs to buy, and the peak bound
+    decides only that it is bought today rather than after the peak."""
+    system = planned(remaining=7.0, soc=(20.0, 20.0))
+    system.hass.states.set(PRICES, 0.13, reported_day())
+
+    await system.coordinator._async_tick(None)
+
+    # 7 kWh of sun into 14 kWh of packs: buy to 50 %, leave the rest to the roof
+    assert system.coordinator.charge_ceiling() == 50.0
+    assert system.coordinator.active_policy == POLICY_DYNAMIC_CHARGE
+
+
+async def test_packs_above_the_sun_ceiling_are_left_alone(planned):
+    """Same day, same peak ahead, but the room is already the sun's."""
+    system = planned(remaining=7.0, soc=(60.0, 60.0))
+    system.hass.states.set(PRICES, 0.13, reported_day())
+
+    await system.coordinator._async_tick(None)
+
+    assert system.coordinator.active_policy != POLICY_DYNAMIC_CHARGE
+
+
+# -- the reason, kept apart from the sun --------------------------------------
+#
+# `_buy_ceiling` used to answer "and was the sun the reason", and that flag was
+# doing two jobs: naming the policy, and standing for "a solar ceiling exists
+# at all". Lowering the ceiling for a *price* reason cleared it, which switched
+# on `_sun_is_enough` - a fallback meant only for having no solar ceiling in
+# the first place. Silent for a site that leaves the plain threshold at 0, and
+# wrong for one that sets it.
+
+
+def test_a_price_lowered_ceiling_does_not_wake_the_plain_threshold(planned):
+    """The bug. With `solar_forecast_max` set, clearing the flag handed the
+    decision to a fallback that had no business being consulted."""
+    system = planned(remaining=6.0, **{CONF_SOLAR_FORECAST_MAX: 4.0})
+    system.hass.states.set(PRICES, 0.13, reported_day())
+    system.coordinator.buy_ceiling_min = 40.0
+
+    ceiling, reason = system.coordinator._buy_ceiling()
+
+    assert ceiling == 40.0
+    assert reason == POLICY_CHEAPER_TOMORROW
+
+
+async def test_and_it_still_buys(planned):
+    """The visible half of the same bug: 6 kWh of sun clears a 4 kWh threshold,
+    so the fallback would have said "sun is enough" and bought nothing."""
+    system = planned(soc=(10.0, 10.0), remaining=6.0,
+                     **{CONF_SOLAR_FORECAST_MAX: 4.0})
+    system.hass.states.set(PRICES, 0.13, reported_day())
+    system.coordinator.buy_ceiling_min = 40.0
+
+    await system.coordinator._async_tick(None)
+
+    assert system.coordinator.active_policy == POLICY_DYNAMIC_CHARGE
+
+
+def test_the_sun_keeps_the_credit_when_nothing_lowers_it(planned):
+    """No cheaper day, so the ceiling is the sun's and says so."""
+    system = priced(planned, 0.30, 0.30, remaining=10.5)
+
+    ceiling, reason = system.coordinator._buy_ceiling()
+
+    assert ceiling == 25.0  # 10.5 kWh of sun into 14 kWh of packs
+    assert reason == POLICY_SOLAR_HEADROOM
+
+
+def test_a_floor_above_the_sun_ceiling_still_wins_and_keeps_its_name(planned):
+    """Pre-existing and deliberate: "Buy at least to" is a floor under the
+    computed ceiling, so it raises a gloomy forecast as well as capping a
+    cheaper tomorrow. Nothing was lowered here, so the sun keeps the credit."""
+    system = priced(planned, 0.30, 0.30, remaining=10.5)
+    system.coordinator.buy_ceiling_min = 40.0
+
+    ceiling, reason = system.coordinator._buy_ceiling()
+
+    assert ceiling == 40.0
+    assert reason == POLICY_SOLAR_HEADROOM
+
+
+def test_a_cheaper_tomorrow_that_lowers_nothing_does_not_take_the_credit(planned):
+    """The floor sits *above* the sun's ceiling, so a cheaper tomorrow has
+    nothing left to take off. Naming it anyway would send someone looking at
+    prices for a ceiling the roof is holding down."""
+    system = planned(remaining=10.5)
+    system.hass.states.set(PRICES, 0.13, reported_day())
+    system.coordinator.buy_ceiling_min = 40.0
+
+    ceiling, reason = system.coordinator._buy_ceiling()
+
+    assert system.coordinator.next_day_step() > 0   # the lowering did run
+    assert ceiling == 40.0
+    assert reason == POLICY_SOLAR_HEADROOM
+
+
+def test_with_no_forecast_at_all_the_reason_is_neither(planned):
+    """Then the bare SoC threshold is holding it, and the fallback is exactly
+    what should be consulted."""
+    system = planned(**{CONF_FULL_CHARGE_MINUTES: 0})
+
+    assert system.coordinator._buy_ceiling()[1] is None
