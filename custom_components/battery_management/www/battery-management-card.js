@@ -84,6 +84,52 @@ const PRICE_WAS = {
   past: "geweest",
 };
 
+/** The sun expected to reach the packs, falling back to the bare forecast.
+ *
+ * The two were the same number until the share was measured, so an older
+ * integration publishes only the forecast - and half a sentence with a dash in
+ * it is worse than the slightly optimistic figure it replaced.
+ */
+const arriving = (expected) =>
+  expected.solar_expected_kwh === null || expected.solar_expected_kwh === undefined
+    ? expected.solar_remaining_kwh
+    : expected.solar_expected_kwh;
+
+/**
+ * Why the ceiling is holding room open, in the reader's terms.
+ *
+ * The ceiling is the one number on this card that decides whether the packs
+ * get filled, and it is set by a forecast of sun that mostly never reaches
+ * them - the house is first in the queue. Left unsaid, "koopt bij tot 45 %"
+ * reads as a setting rather than as a bet, and the owner who lost a night to
+ * exactly that had no way to see the bet being placed.
+ *
+ * So: what the panels will make, how much of it history says gets past the
+ * house, and - while that is still unmeasured - that it is assuming all of it,
+ * which is the case worth warning about rather than hiding.
+ */
+function sunShareSays(expected) {
+  const coming = Number(expected.solar_remaining_kwh);
+  if (!Number.isFinite(coming) || coming <= 0.05) return "";
+  const share = expected.solar_capture_share;
+  // an integration too old to publish the share at all, or a card cached from
+  // before it existed: say nothing rather than warn about a measurement this
+  // pairing was never going to make
+  if (!("solar_capture_share" in expected)) return "";
+  if (share === null || share === undefined) {
+    return (
+      "Er komt nog " + kwh(coming) + " zon en er wordt ruimte voor alles " +
+      "vrijgehouden — nog niet gemeten hoeveel daarvan de accu's haalt."
+    );
+  }
+  return (
+    "Er komt nog " + kwh(coming) + " zon; daarvan belandt naar verwachting " +
+    kwh(expected.solar_expected_kwh) + " in de accu's (" +
+    Math.round(share * 100) + " %, gemeten over " + expected.solar_capture_days +
+    " dagen). De rest gaat rechtstreeks het huis in."
+  );
+}
+
 /** What one bar says: its hour, its price, its verdict, and whether we bought.
  *
  * Three facts, strongest last and only one of them shown. "bought" is the grid
@@ -1897,6 +1943,7 @@ class BatteryManagementPlanCard extends HTMLElement {
               <div class="l muted">via het net</div></div>
           </div>
           <div class="muted note" id="plwhy"></div>
+          <div class="muted note" id="plsunshare"></div>
           <h4>Wanneer van het net</h4>
           <div id="plhours"></div>
           <div class="muted note" id="plnone"></div>
@@ -1944,14 +1991,16 @@ class BatteryManagementPlanCard extends HTMLElement {
         expected.room_for_solar_kwh > expected.solar_kwh + 0.05
           ? " Er staat " + kwh(expected.room_for_solar_kwh) +
             " ruimte vrij, maar er komt maar " +
-            kwh(expected.solar_remaining_kwh) + " zon."
+            kwh(arriving(expected)) + " zon in de accu's."
           : "";
       el("plwhy").textContent =
         "Koopt bij tot " + Math.round(expected.ceiling) +
         " % en laat de rest aan de zon." + short;
+      el("plsunshare").textContent = sunShareSays(expected);
     } else {
       el("plsun").textContent = "—";
       el("plnet").textContent = "—";
+      el("plsunshare").textContent = "";
       el("plwhy").textContent = planState
         ? NO_SPLIT[expected.reason] || "Nog niet te zeggen."
         : "";

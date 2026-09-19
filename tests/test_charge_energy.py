@@ -642,7 +642,15 @@ async def test_the_period_attributes_keep_their_names(build_system, clock, wall_
         assert isinstance(attributes["history"], dict)
 
 
-async def test_a_closed_period_carries_all_three_figures(build_system, clock, wall_clock):
+async def test_a_closed_period_carries_all_four_figures(build_system, clock, wall_clock):
+    """Two of these are easy to confuse and mean very different things.
+
+    `solar_kwh` is the sun's share of what reached the *packs*. `produced_kwh`
+    is what the panels *made*, most of which the house takes on the way past.
+    The gap between them is what the buy ceiling learns from - see
+    `solar_capture` - so they have to be separate figures rather than one
+    number doing both jobs.
+    """
     system = build_system(grid=2000, charge_power=True)
     charging(system, 1500, 500)
     await run(system, 60, advance=clock, seconds=60)
@@ -651,7 +659,7 @@ async def test_a_closed_period_carries_all_three_figures(build_system, clock, wa
 
     closed = system.coordinator.period_attributes("month")["history"]["2026-08"]
 
-    assert set(closed) == {"charged_kwh", "grid_kwh", "solar_kwh"}
+    assert set(closed) == {"charged_kwh", "grid_kwh", "solar_kwh", "produced_kwh"}
 
 
 async def test_the_sun_share_is_the_remainder(build_system, clock, wall_clock):
@@ -669,3 +677,93 @@ async def test_the_sun_share_is_the_remainder(build_system, clock, wall_clock):
     # and it really is a split of something, not two zeroes agreeing
     assert c.period_solar_kwh("day") > 0
     assert c.period_charged_kwh("day", grid=True) > 0
+
+
+# -- what the panels made, beside what reached the packs ----------------------
+#
+# The buy ceiling needs both numbers to work out what share of the sun actually
+# arrives (see `solar_capture` and test_solar_headroom.py). This is the half it
+# did not already have.
+
+PRODUCED = "sensor.enphase_today"
+
+
+def produced(system, kwh) -> None:
+    system.hass.states.set(PRODUCED, kwh)
+
+
+def solar_config():
+    from custom_components.battery_management.const import CONF_SOLAR_PRODUCED_SENSOR
+
+    return {CONF_SOLAR_PRODUCED_SENSOR: PRODUCED}
+
+
+async def test_production_is_counted_as_it_arrives(build_system, clock):
+    system = build_system(grid=0, **solar_config())
+    produced(system, 0.0)
+    await run(system, 1, advance=clock)
+    produced(system, 4.5)
+    await run(system, 1, advance=clock)
+
+    assert system.coordinator.periods["day"]["produced_wh"] == pytest.approx(4500)
+
+
+async def test_the_daily_reset_is_not_counted_as_negative_sun(build_system, clock):
+    """A delta, not a level - which is what makes this survive a sensor whose
+    day does not start when the period does.
+
+    This owner's inverter rolls its total over at 01:00 local, an hour out of
+    step with the day it is credited to. As a delta the reset is just a drop,
+    and a drop is not production.
+    """
+    system = build_system(grid=0, **solar_config())
+    produced(system, 0.0)
+    await run(system, 1, advance=clock)
+    produced(system, 14.0)
+    await run(system, 1, advance=clock)
+    produced(system, 0.0)          # midnight, or 01:00 on this site
+    await run(system, 1, advance=clock)
+    produced(system, 2.0)
+    await run(system, 1, advance=clock)
+
+    # yesterday's 14 plus today's 2, and nothing subtracted in between
+    assert system.coordinator.periods["day"]["produced_wh"] == pytest.approx(16000)
+
+
+async def test_the_first_reading_is_a_starting_point_not_a_gain(build_system, clock):
+    """Restarting at teatime must not book the whole day again."""
+    system = build_system(grid=0, **solar_config())
+    produced(system, 11.0)
+
+    await run(system, 3, advance=clock)
+
+    assert system.coordinator.periods["day"]["produced_wh"] == 0.0
+
+
+async def test_production_is_counted_with_no_charge_sensor_at_all(build_system, clock):
+    """It is counted before the charge-sensor check, deliberately: a site with
+    no charge sensors still has a forecast to compare against, and the day's
+    production is worth recording either way."""
+    system = build_system(grid=0, **solar_config())
+    produced(system, 0.0)
+    await run(system, 1, advance=clock)
+    produced(system, 3.0)
+    await run(system, 1, advance=clock)
+
+    assert system.coordinator.counts_charge_energy is False
+    assert system.coordinator.periods["day"]["produced_wh"] == pytest.approx(3000)
+
+
+async def test_a_closed_day_keeps_what_the_panels_made(build_system, clock, wall_clock):
+    system = build_system(grid=0, **solar_config())
+    produced(system, 0.0)
+    await run(system, 1, advance=clock)
+    produced(system, 9.0)
+    await run(system, 1, advance=clock)
+    wall_clock(2026, 9, 1)
+    await run(system, 1, advance=clock)
+
+    closed = system.coordinator.periods["day"]["history"]
+    assert list(closed.values())[0]["produced_kwh"] == pytest.approx(9.0)
+    # and the new day starts from nought rather than carrying it forward
+    assert system.coordinator.periods["day"]["produced_wh"] == 0.0

@@ -127,6 +127,85 @@ check("a bounded ceiling says the space will not be filled",
     out.plwhy.textContent.includes("2.0 kWh"),
   out.plwhy.textContent);
 
+// --- how much of the sun is expected to arrive ----------------------------
+//
+// The ceiling is the one number on this card that decides whether the packs
+// get filled, and it is set by a forecast of sun that mostly never reaches
+// them. Unsaid, "koopt bij tot 45 %" reads as a setting rather than a bet.
+// The owner who lost a night to exactly that had no way to see the bet.
+
+const MEASURED = {
+  ...FULL,
+  expected: {
+    ...FULL.expected,
+    solar_remaining_kwh: 7.4,
+    solar_expected_kwh: 1.7,
+    solar_capture_share: 0.23,
+    solar_capture_days: 14,
+  },
+};
+
+out = render(MEASURED);
+check("it says how much sun is coming and how much of it lands",
+  out.plsunshare.textContent.includes("7.4 kWh") &&
+    out.plsunshare.textContent.includes("1.7 kWh"),
+  out.plsunshare.textContent);
+check("and that the rest goes to the house, which is the part nobody guesses",
+  out.plsunshare.textContent.includes("huis"), out.plsunshare.textContent);
+check("with the share and how much measurement is behind it",
+  out.plsunshare.textContent.includes("23 %") &&
+    out.plsunshare.textContent.includes("14 dagen"),
+  out.plsunshare.textContent);
+
+// Before there is history the ceiling reserves room for the whole forecast -
+// which is the assumption that emptied the packs. It must be visible, not
+// silently absent.
+out = render({
+  ...FULL,
+  expected: {
+    ...FULL.expected,
+    solar_remaining_kwh: 7.4,
+    solar_expected_kwh: 7.4,
+    solar_capture_share: null,
+    solar_capture_days: 0,
+  },
+});
+check("unmeasured, it warns that room is being held for all of it",
+  out.plsunshare.textContent.includes("alles") &&
+    out.plsunshare.textContent.includes("nog niet gemeten"),
+  out.plsunshare.textContent);
+
+out = render({
+  ...FULL,
+  expected: {
+    ...FULL.expected,
+    solar_remaining_kwh: 0,
+    solar_expected_kwh: 0,
+    solar_capture_share: 0.23,
+    solar_capture_days: 14,
+  },
+});
+check("after sunset there is nothing to explain and it says nothing",
+  out.plsunshare.textContent === "", out.plsunshare.textContent);
+
+// An integration too old to publish any of this, or a card cached from before
+// it existed. Neither may leave a dash in the middle of a sentence.
+out = render(FULL);
+check("an older integration is not warned about a measurement it cannot make",
+  out.plsunshare.textContent === "", out.plsunshare.textContent);
+out = render({
+  ...FULL,
+  expected: { ...FULL.expected, room_for_solar_kwh: 5.6, solar_kwh: 2.0,
+              solar_remaining_kwh: 2.0, ceiling: 60 },
+});
+check("and the shortfall clause falls back to the forecast rather than a dash",
+  !out.plwhy.textContent.includes("—"), out.plwhy.textContent);
+
+// The split is unknown: no stale explanation may survive underneath it.
+out = render({ ...FULL, expected: { known: false, reason: "no_forecast" } });
+check("an unknown split clears the sun line with it",
+  out.plsunshare.textContent === "", out.plsunshare.textContent);
+
 // --- the hours ------------------------------------------------------------
 out = render(FULL);
 check("only buying hours are listed",

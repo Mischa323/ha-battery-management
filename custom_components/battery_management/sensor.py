@@ -307,6 +307,23 @@ class ChargeCeilingSensor(_BaseSensor):
         ceiling = self.coordinator.charge_ceiling()
         return None if ceiling is None else round(ceiling)
 
+    @property
+    def extra_state_attributes(self):
+        """Why the ceiling is where it is.
+
+        The number on its own invites the wrong reading - "it stopped buying at
+        45 %" looks like a setting rather than a forecast being trusted. These
+        two say how much of that forecast is expected to reach a pack, and on
+        how many measured days that expectation rests. Empty means no
+        measurement yet and the whole forecast is being reserved for.
+        """
+        share, days = self.coordinator.solar_capture()
+        return {
+            "solar_remaining_kwh": self.coordinator.solar_remaining(),
+            "solar_capture_share": None if share is None else round(share, 3),
+            "solar_capture_days": days,
+        }
+
 
 class PlanSensor(_BaseSensor):
     """Today's intentions, for a dashboard to render.

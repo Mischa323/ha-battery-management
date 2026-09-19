@@ -753,7 +753,7 @@ capped — that would be throwing sun away.
 | **Other controller** | What the site's own automations are commanding, signed. | not shadow running |
 | **Fast charge duration** | How long a *fast charge* would take from now — at full power, which is what the be-full-by blueprint triggers. Slowest pack, since they charge in parallel. Its `at_current_rate_minutes` attribute answers the other question: how long at the rate being commanded right now, which on solar surplus alone is far longer. | the charge time has not been measured |
 | **Solar remaining** | Sun still expected today. Its attributes break down every forecast sensor separately, so "0 kWh" can be told apart from a sensor that is not reading. | no forecast sensors configured |
-| **Charge ceiling** | How full it is worth buying to: 100 % − remaining sun ÷ capacity, within your two bounds. | the charge time has not been measured |
+| **Charge ceiling** | How full it is worth buying to: 100 % − (remaining sun × the measured share that reaches the packs) ÷ capacity, within your two bounds. Its `solar_capture_share` and `solar_capture_days` attributes say how much of the forecast it expects to arrive, and on how many measured days that rests. | the charge time has not been measured |
 | **Market price** | The exchange component of this hour, without tax or markup. For the Energy dashboard's *export compensation* — see below. | not on the direct route |
 | **Current price** | What this hour costs, in EUR/kWh. Its attributes say which decision the hour belongs to, when it changes, and what the next one is. | no prices available |
 | **Plan** | Today's cheap and dear hours with their prices, plus the numbers the ceiling was computed from, all in attributes. Its `hours` attribute is the whole series, each slot carrying the `role` it belongs to — `cheap`, `dear` or `normal` — which is what the card's chart is drawn from. | never |
@@ -866,6 +866,62 @@ content: >-
   {%- endfor %}
   {% endif %}
 ```
+
+### How much of the sun actually arrives
+
+The ceiling reserves room for the sun still to come. Reserving room for *all*
+of it assumes every kilowatt hour the panels make reaches a pack — but the
+house is first in the queue, and at most sites it takes the larger share.
+
+That assumption has a cost. On one site the ceiling held buying back at 45 %
+through a five-hour window at €0.129/kWh, because the forecast promised ~15 kWh
+more sun. 7.4 kWh arrived, and 1.7 kWh of *that* reached the packs. They were
+flat by 08:00 the next morning.
+
+So the reservation is scaled by what recent days actually delivered:
+
+    buy up to 100 % − (sun still coming × measured share) ÷ capacity
+
+The share is `(charged − bought) ÷ produced`, taken as the **median of the last
+14 days** that had at least 1 kWh of sun and actually recorded charging. Both
+halves were already being counted per day; only the panels' own output was
+added.
+
+- **A fortnight** covers two weekends, so weekend habits cannot pass for the
+  whole picture, and it is short enough that the season shows through — once
+  the heating is on the house takes a larger share, and that reaches the
+  ceiling within a couple of weeks. Being a *share*, shrinking daylight moves
+  both halves together, so it stays comparable through the autumn.
+- **The median, not the mean**, because a fortnight contains the odd day away
+  from home or with a car on the charger, and one of those must not move a
+  number the packs are steered by.
+- **Under three measured days it is not used at all**, and the ceiling behaves
+  exactly as it did before this existed. Days that recorded no charging are
+  skipped rather than counted as zero — the charge-power sensors are optional,
+  and missing data is not the same as a sun that delivered nothing.
+
+The share never exceeds 1, so **this can only ever raise the ceiling** — it can
+talk the packs into buying more, never into buying less, and cannot introduce a
+new way to be caught empty. It is floored at 0.05 so a fortnight of cloud
+cannot say "buy to full" on the morning of a blazing day.
+
+`sensor.battery_management_charge_ceiling` carries `solar_capture_share` and
+`solar_capture_days` in its attributes, so what it learned is visible rather
+than implied. The **Plan card** says it in words under the split:
+
+> Er komt nog 7.4 kWh zon; daarvan belandt naar verwachting 1.7 kWh in de
+> accu's (23 %, gemeten over 14 dagen). De rest gaat rechtstreeks het huis in.
+
+and while it is still unmeasured, says *that* instead — room is being held for
+the whole forecast, which is the assumption worth seeing rather than hiding.
+
+The Plan sensor's `expected` block publishes both figures: `solar_remaining_kwh`
+is what the panels will make and `solar_expected_kwh` what is expected to get
+past the house. The split shown on the card is read off the second, the same
+number the ceiling was set from — reading it off the first would have the card
+promise sun the ceiling had already written off.
+
+### Bounding it by hand
 
 Two sliders bound the computed ceiling, because it is only as good as the solar
 forecast behind it: **Buy at least to** and **Buy at most to**. Leave them at

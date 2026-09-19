@@ -107,7 +107,13 @@ async def test_the_legs_are_recorded_when_they_are_configured(traced):
 
 PRICE_SENSOR = "sensor.energy_prices"
 SOLAR_PRODUCED_SENSOR = "sensor.solar_produced_today"
-NOW = datetime(2026, 8, 30, 12, 0, tzinfo=timezone.utc)
+#: Noon today, not a fixed date. `Trace._prune` deletes by the real clock, so a
+#: hardcoded stamp writes its rows straight into the bin once the calendar
+#: passes the retention window - these two tests were pinned to 30 August and
+#: went red on 13 September, a fortnight later, having passed all the way up to
+#: it. The same rot caught `across_midnight` below; fixing that one and leaving
+#: this one was the miss worth not repeating.
+NOW = datetime.now(timezone.utc).replace(hour=12, minute=0, second=0, microsecond=0)
 
 
 def price_attributes(cheap_hour: int) -> dict:

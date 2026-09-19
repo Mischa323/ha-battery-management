@@ -471,6 +471,28 @@ DEFAULT_PERIOD = PERIOD_MONTH
 #: How many completed periods of each to remember. Chosen so each covers a
 #: comparable stretch of calendar: two months of days, a year of weeks, two
 #: years of months - enough to put any period beside the same one last year.
+#: How far back the buy ceiling looks when working out what share of the sun
+#: actually reaches the packs, and how careful it is about saying so.
+#:
+#: A fortnight covers two weekends, so an owner's weekend habits cannot pass
+#: for the whole picture, and it is short enough that the season shows through:
+#: once the heating is on the house takes a larger share, and that should reach
+#: the ceiling within a couple of weeks rather than a couple of months.
+#:
+#: It is a *share*, so shrinking daylight moves the numerator and the
+#: denominator together and the figure stays comparable across the autumn.
+SOLAR_CAPTURE_DAYS = 14
+#: Below this many measured days the share is not used at all and the ceiling
+#: behaves exactly as it did before it existed. Three is enough for a median to
+#: mean something and short enough to start helping in the first week.
+SOLAR_CAPTURE_MIN_DAYS = 3
+#: A day with less sun than this says nothing about what a sunny day delivers.
+SOLAR_CAPTURE_MIN_KWH = 1.0
+#: Never reserve nothing at all. If the measured share collapses - a fortnight
+#: of cloud, a house that swallowed everything - the arithmetic would otherwise
+#: say "buy to full" on the morning of a blazing day.
+SOLAR_CAPTURE_FLOOR = 0.05
+
 PERIOD_HISTORY = {
     PERIOD_DAY: 62,
     PERIOD_WEEK: 53,
