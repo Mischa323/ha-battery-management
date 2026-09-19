@@ -197,7 +197,10 @@ def slots_in_window(
 
 
 def pick_cheapest(
-    candidates: list[Slot], cheap_hours: float, min_margin: float = 0.0
+    candidates: list[Slot],
+    cheap_hours: float,
+    min_margin: float = 0.0,
+    include_ties: bool = False,
 ) -> list[Slot]:
     """The cheapest `cheap_hours` worth of an already-chosen candidate set.
 
@@ -206,6 +209,14 @@ def pick_cheapest(
     day (what the chart *colours*). Those are deliberately different sets - see
     `cheapest_on_day` - and the one thing that must not differ is the ranking
     itself.
+
+    Where several slots share a price the earliest wins, so the answer is the
+    same on every tick rather than however the list happened to be ordered.
+
+    `include_ties` then keeps the ones the budget cut off mid-tie. It is for
+    *drawing* only and deliberately not the default: the budget is hours the
+    owner agreed to buy on, and quietly spending six of them because four were
+    asked for would be a different thing entirely.
     """
     if cheap_hours <= 0 or not candidates:
         return []
@@ -213,8 +224,16 @@ def pick_cheapest(
         (slot.end - slot.start).total_seconds() / 60 for slot in candidates
     )
     wanted = max(1, round(cheap_hours * 60 / span_minutes))
+    # the earliest of equals, so two runs over the same day cannot disagree
     ranked = sorted(candidates, key=lambda slot: (slot.price, slot.start))
     picked = ranked[:wanted]
+    if include_ties and picked:
+        # At the same price they are the same hour as far as a reader is
+        # concerned, and cutting the band inside a tie draws a distinction the
+        # prices do not make: two bars at 0.129, one green and one grey, with
+        # nothing to tell them apart but where the count ran out.
+        cutoff = picked[-1].price
+        picked = [slot for slot in ranked if slot.price <= cutoff]
 
     if min_margin > 0:
         # what charging then would displace: the dearest hours of the same set.
@@ -270,9 +289,20 @@ def cheapest_on_day(
     for the other.
 
     The margin still applies, so a flat day paints nothing rather than calling
-    its least-expensive hours cheap.
+    its least-expensive hours cheap. That is also what keeps `include_ties`
+    from painting a whole flat day green: on a day with nothing to choose
+    between, every hour ties with every other and none of them clears the
+    margin.
+
+    `include_ties` is the one way this band is allowed to be wider than the
+    configured hours, and it is a different thing from the fault above: the
+    band still holds the cheapest *prices* of the day, it just does not split
+    two hours that cost exactly the same. Asked for by the owner on
+    2026-09-19, looking at six hours at 0.129 against a budget of four.
     """
-    return pick_cheapest(slots_between(slots, start, end), cheap_hours, min_margin)
+    return pick_cheapest(
+        slots_between(slots, start, end), cheap_hours, min_margin, include_ties=True
+    )
 
 
 def dearest_on_day(

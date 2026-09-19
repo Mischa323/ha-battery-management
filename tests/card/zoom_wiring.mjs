@@ -35,11 +35,14 @@ const check = (name, cond, got) => {
  * selector would let a typo'd id pass, which is exactly the kind of mistake
  * a card of this size makes and no unit test catches.
  */
+/** Rebuilds of the plot, counted: the cost a pinch must not pay per event. */
+let rebuilds = 0;
+
 class El {
   constructor(id) {
     this.id = id;
     this.style = {};
-    this.innerHTML = "";
+    this._html = "";
     this.textContent = "";
     this.clientWidth = 320;
     this.scrollWidth = 320;
@@ -58,6 +61,13 @@ class El {
       remove: (n) => classes.delete(n),
     };
   }
+  get innerHTML() {
+    return this._html;
+  }
+  set innerHTML(value) {
+    this._html = value;
+    if (this.id === "#plot") rebuilds++;
+  }
   addEventListener(type, fn) {
     (this.listeners[type] = this.listeners[type] || []).push(fn);
   }
@@ -65,7 +75,7 @@ class El {
     for (const fn of this.listeners[type] || []) fn(event);
   }
   querySelector(sel) {
-    if (!this.innerHTML.includes(`id="${sel.slice(1)}"`)) return null;
+    if (!this._html.includes(`id="${sel.slice(1)}"`)) return null;
     this._kids = this._kids || {};
     return (this._kids[sel] = this._kids[sel] || new El(sel));
   }
@@ -196,6 +206,71 @@ check("+ stops at the far end rather than zooming forever",
   [...card.querySelector("#pin").classes]);
 for (let i = 0; i < 12; i++) press("#pout");
 check("and − stops at the fitted day", bars() === 24, bars());
+
+// ------------------------------------------------- one gesture, not several
+//
+// Asked for after living with it: "ik wil met 1 beweging totaal kunnen
+// inzoomen, en niet meerdere keren dezelfde beweging maken. dus de stappen
+// moeten soepel overgaan."
+//
+// Two separate complaints, and they had two separate causes. The range was
+// mapped straight across from the fingers, so spanning it needed them eight
+// times further apart than they started - no hand does that, so it took
+// several pinches. And every touchmove rebuilt ninety-six elements, which is
+// what made the ones it did manage arrive in steps.
+
+/** Fingers `gap` apart, centred on the strip. */
+const spread = (gap) => ({
+  touches: [touch(160 - gap / 2), touch(160 + gap / 2)],
+  preventDefault() {},
+});
+
+/** A gesture, as a hand makes it: a smooth run of widths, not one jump. */
+function gesture(from, to, steps = 10) {
+  strip.fire("touchstart", spread(from));
+  rebuilds = 0;
+  for (let i = 1; i <= steps; i++) {
+    strip.fire("touchmove", spread(from + ((to - from) * i) / steps));
+  }
+}
+
+card._scale = 1;
+card._update();
+gesture(60, 250);
+const moves = 10;
+check("one spread of the fingers reaches the far end of the zoom",
+  card._scale === 8, card._scale);
+check("and that is the whole range, from the fitted day to the last quarter",
+  bars() === 96, bars());
+// One rebuild, at the hours/quarters crossing - which really is a different
+// set of bars. The other nine moves are the same bars at a new width.
+check("without rebuilding the bars on every single move",
+  rebuilds <= 2, `${rebuilds} rebuilds over ${moves} moves`);
+strip.fire("touchend", {});
+
+// ...and back, in one gesture too, or zooming out would be the chore instead.
+gesture(250, 60);
+check("and one pinch back in returns to the fitted day",
+  card._scale === 1 && bars() === 24, [card._scale, bars()]);
+strip.fire("touchend", {});
+
+// Letting go puts right what was let slide: the axis thins its labels by bar
+// width, and that is left stale during the gesture on purpose.
+card._scale = 1;
+card._update();
+gesture(60, 140, 4);
+rebuilds = 0;
+strip.fire("touchend", {});
+check("letting go settles the chart properly",
+  rebuilds === 1, `${rebuilds} rebuilds on release`);
+
+// A press is a whole gesture by itself, so it must not wait for anything.
+card._scale = 1;
+card._update();
+rebuilds = 0;
+press("#pin");
+check("a button press settles straight away",
+  rebuilds >= 1, `${rebuilds} rebuilds`);
 
 // An hourly feed has nothing finer to show, so the control must not be offered.
 const hourly = new PricesCard();

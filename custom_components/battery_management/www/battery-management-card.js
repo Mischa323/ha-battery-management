@@ -548,6 +548,14 @@ const ZOOM_MAX = 8;
 const QUARTER_MIN_PX = 6;
 //: what a button press is worth, in pinch terms
 const ZOOM_STEP = 1.6;
+//: How far the fingers travel, against how far the chart travels.
+//:
+//: Mapped straight across, spanning the whole range in one go would need the
+//: fingers to move eight times as far apart - which no hand does, so the zoom
+//: had to be pinched several times over. Squaring it means a comfortable
+//: spread of about 2.8x covers the lot, in one movement, and the same pinch
+//: back out returns to the fitted day.
+const PINCH_GAIN = 2;
 
 const clampScale = (value) =>
   Math.min(ZOOM_MAX, Math.max(ZOOM_FIT, Number(value) || ZOOM_FIT));
@@ -787,6 +795,53 @@ function setScale(card, value, anchor) {
   if (next === scaleOf(card)) return;
   card._scale = next;
   card._anchor = typeof anchor === "number" ? anchor : null;
+  if (rewidth(card)) return;
+  card._update();
+}
+
+/**
+ * Re-width the bars in place, without rebuilding them.
+ *
+ * A pinch fires every few milliseconds. A full update rebuilds ninety-six
+ * elements and re-reads every entity behind the card, and doing that per event
+ * is what made the zoom move in steps rather than follow the fingers. Within
+ * one resolution none of that work changes anything: they are the same bars at
+ * a different width, and a width is a CSS variable.
+ *
+ * Returns false when the resolution itself has to change - crossing between
+ * hours and quarters really is a different set of bars, and that one needs the
+ * real update.
+ *
+ * The axis thins its labels by bar width, so those go slightly stale during
+ * the gesture; `settle` puts them right once the fingers lift, which is soon
+ * enough for something nobody can read mid-pinch anyway.
+ */
+function rewidth(card) {
+  const strip = card.querySelector("#pscroll");
+  const plot = card.querySelector("#plot");
+  const published = card._published;
+  if (!strip || !plot || !published || !published.length) return false;
+  const view = zoomLayout(card, published, strip.clientWidth);
+  if (view.level !== card._level) return false;
+
+  const axis = card.querySelector("#paxis");
+  const wide = view.scale > ZOOM_FIT;
+  plot.classList.toggle("wide", wide);
+  if (axis) axis.classList.toggle("wide", wide);
+  if (wide) {
+    const width = `${view.barPx.toFixed(2)}px`;
+    plot.style.setProperty("--bw", width);
+    if (axis) axis.style.setProperty("--bw", width);
+  }
+  restoreView(card);
+  card._stale = true;
+  return true;
+}
+
+/** Put back what `rewidth` let go stale, once the gesture is over. */
+function settle(card) {
+  if (!card._stale) return;
+  card._stale = false;
   card._update();
 }
 
@@ -843,13 +898,14 @@ function wirePinch(card) {
       if (!from || !event.touches || event.touches.length !== 2) return;
       if (event.preventDefault) event.preventDefault();
       const now = gap(event.touches);
-      if (now > 0) setScale(card, was * (now / from), anchor);
+      if (now > 0) setScale(card, was * Math.pow(now / from, PINCH_GAIN), anchor);
     },
     { passive: false }
   );
 
   const release = () => {
     from = 0;
+    settle(card);
   };
   strip.addEventListener("touchend", release);
   strip.addEventListener("touchcancel", release);
@@ -871,6 +927,12 @@ function wirePinch(card) {
         Math.max(0, (strip.scrollLeft + (event.clientX - box.left)) / total)
       );
       setScale(card, scaleOf(card) * Math.exp(-event.deltaY / 200), where);
+      // A wheel has no "lifted off" to listen for, so wait for it to go quiet.
+      if (card._quiet) clearTimeout(card._quiet);
+      card._quiet = setTimeout(() => {
+        card._quiet = null;
+        settle(card);
+      }, 160);
     },
     { passive: false }
   );
@@ -894,8 +956,13 @@ function wireZoom(card) {
     if (!strip || !strip.scrollWidth) return 0.5;
     return (strip.scrollLeft + strip.clientWidth / 2) / strip.scrollWidth;
   };
-  on("#pin", () => setScale(card, scaleOf(card) * ZOOM_STEP, middle()));
-  on("#pout", () => setScale(card, scaleOf(card) / ZOOM_STEP, middle()));
+  const step = (by) => () => {
+    setScale(card, scaleOf(card) * by, middle());
+    // one press is the whole gesture, so there is nothing to wait for
+    settle(card);
+  };
+  on("#pin", step(ZOOM_STEP));
+  on("#pout", step(1 / ZOOM_STEP));
 }
 
 /**
@@ -1106,6 +1173,9 @@ class BatteryManagementCard extends HTMLElement {
     wrap.style.display = "block";
     renderNav(this, hours);
     const published = chartSlots(this, hours);
+    // kept so a pinch can re-lay them out without asking the card for them
+    // again - see `rewidth`
+    this._published = published;
     const view = zoomLayout(
       this,
       published,
@@ -1749,6 +1819,9 @@ ${PRICE_LEGEND}
 
     renderNav(this, hours);
     const published = chartSlots(this, hours);
+    // kept so a pinch can re-lay them out without asking the card for them
+    // again - see `rewidth`
+    this._published = published;
     const view = zoomLayout(
       this,
       published,
