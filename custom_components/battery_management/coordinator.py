@@ -166,6 +166,7 @@ from .const import (
     POLICY_MIN_OUTPUT,
     POLICY_DISABLED,
     POLICY_BUY_WINDOW,
+    POLICY_CHEAPER_TOMORROW,
     POLICY_DYNAMIC_CHARGE,
     POLICY_SOLAR_HEADROOM,
     POLICY_DYNAMIC_NO_PRICES,
@@ -1609,8 +1610,16 @@ class BatteryCoordinator:
             self._cheap_hours, PRICE_WINDOW_HOURS,
         )
 
-    def _buy_ceiling(self) -> tuple[float, bool]:
-        """How full it is worth buying to, and whether the sun is the reason.
+    def _buy_ceiling(self) -> tuple[float, str | None]:
+        """How full it is worth buying to, and what put it there.
+
+        The reason is returned rather than a "the sun did it" flag, because
+        that flag was doing two jobs: naming the policy, and standing for "a
+        solar ceiling exists at all". Clearing it for a *price* reason
+        therefore switched on `_sun_is_enough`, a fallback meant only for
+        having no solar ceiling in the first place - a quiet, wrong answer for
+        anyone who had set the plain threshold. `None` now means exactly one
+        thing: nothing but the bare SoC threshold is holding this.
 
         Prefer the solar-aware ceiling: it answers "how much can I still get
         free" instead of guessing with a fixed threshold, and falls back to the
@@ -1620,7 +1629,7 @@ class BatteryCoordinator:
         Forecast.Solar for nothing.
         """
         ceiling = self._solar_headroom_ceiling()
-        blame_the_sun = ceiling is not None
+        reason = POLICY_SOLAR_HEADROOM if ceiling is not None else None
         if ceiling is None:
             ceiling = self._charge_below_soc
 
@@ -1644,9 +1653,17 @@ class BatteryCoordinator:
             and step >= self._price_margin
             and self.buy_ceiling_min > 0
         ):
-            ceiling = min(ceiling, self.buy_ceiling_min)
-            blame_the_sun = False
-        return self._bound_ceiling(ceiling), blame_the_sun
+            # `min` is not the cap - `_bound_ceiling` below raises anything
+            # under the floor back to it either way, so the final number is the
+            # floor whichever branch this takes. What it decides is the
+            # *reason*: a floor sitting above the sun's ceiling has taken
+            # nothing off, and naming a cheaper tomorrow there would send
+            # someone looking at prices for a ceiling the roof is holding down.
+            lowered = min(ceiling, self.buy_ceiling_min)
+            if lowered < ceiling:
+                reason = POLICY_CHEAPER_TOMORROW
+            ceiling = lowered
+        return self._bound_ceiling(ceiling), reason
 
     def hours_of_charge_needed(self, online: dict | None = None) -> float | None:
         """How long on the grid the packs still need to reach the buy ceiling.
@@ -1732,14 +1749,16 @@ class BatteryCoordinator:
         now = dt_util.utcnow()
         current = slot_at(slots, now)
 
-        ceiling, blame_the_sun = self._buy_ceiling()
-        if not blame_the_sun and self._sun_is_enough():
+        ceiling, reason = self._buy_ceiling()
+        # the plain-threshold fallback, and only there: with a ceiling of its
+        # own there is nothing for a bare "is there a lot of sun" to add
+        if reason is None and self._sun_is_enough():
             return False, None
         if ceiling <= 0:
             # more sun coming than the packs could hold: buying nothing is right
-            return False, POLICY_SOLAR_HEADROOM if blame_the_sun else None
+            return False, reason
         if not any(s.soc < min(ceiling, s.charge_limit) for s in online.values()):
-            return False, POLICY_SOLAR_HEADROOM if blame_the_sun else None
+            return False, reason
         self._buying_slot = _slot_key(current)
         return True, POLICY_DYNAMIC_CHARGE
 

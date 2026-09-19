@@ -272,6 +272,7 @@ POLICY_MODE_PAUSE = "mode_pause"                    # mode holds everything at 0
 POLICY_DYNAMIC_CHARGE = "dynamic_charge"      # buying now because it is cheap
 POLICY_BUY_WINDOW = "buy_window"              # a cheap hour: not selling what we came to buy
 POLICY_SOLAR_HEADROOM = "solar_headroom"      # not buying, the sun still fits
+POLICY_CHEAPER_TOMORROW = "cheaper_tomorrow"  # holding back, a cheaper day is coming
 POLICY_EXTERNAL = "external_plan"             # following someone else's plan
 POLICY_EXTERNAL_STALE = "external_stale"      # plan went quiet, regulating ourselves
 POLICY_DYNAMIC_NO_PRICES = "dynamic_no_prices"  # dynamic, but the sensor is mute
@@ -293,6 +294,7 @@ POLICIES = [
     POLICY_DYNAMIC_CHARGE,
     POLICY_BUY_WINDOW,
     POLICY_SOLAR_HEADROOM,
+    POLICY_CHEAPER_TOMORROW,
     POLICY_EXTERNAL,
     POLICY_EXTERNAL_STALE,
     POLICY_DYNAMIC_NO_PRICES,
