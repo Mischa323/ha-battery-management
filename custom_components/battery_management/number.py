@@ -38,7 +38,7 @@ class SocReserveNumber(NumberEntity):
 
     _attr_has_entity_name = True
     _attr_should_poll = False
-    _attr_name = "SoC reserve"
+    _attr_translation_key = "soc_reserve"
     _attr_icon = "mdi:battery-lock"
     _attr_native_unit_of_measurement = PERCENTAGE
     _attr_native_min_value = 0
@@ -101,7 +101,7 @@ class _CeilingNumber(NumberEntity):
 
 
 class BuyCeilingMinNumber(_CeilingNumber):
-    _attr_name = "Buy at least to"
+    _attr_translation_key = "buy_ceiling_min"
     _attr_icon = "mdi:arrow-collapse-up"
 
     def __init__(self, coordinator, entry) -> None:
@@ -117,7 +117,7 @@ class BuyCeilingMinNumber(_CeilingNumber):
 
 
 class BuyCeilingMaxNumber(_CeilingNumber):
-    _attr_name = "Buy at most to"
+    _attr_translation_key = "buy_ceiling_max"
     _attr_icon = "mdi:arrow-collapse-down"
 
     def __init__(self, coordinator, entry) -> None:

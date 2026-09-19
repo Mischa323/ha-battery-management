@@ -195,8 +195,8 @@ Build order, and why:
    stays *on* and holds them there (target 0, no discharge) until the user
    releases it; it tops up again if a pack drifts down. Switching off at full
    handed control straight back to the mode, which discharged the packs again -
-   defeating the reason you pressed it before a storm. `fast_charge_hold` in the
-   tuning options restores the old auto-release. Not resumed after a restart,
+   defeating the reason you pressed it before a storm. `fast_charge_hold`, under
+   the pack settings, restores the old auto-release. Not resumed after a restart,
    same reasoning as fast charge itself.
 6. ~~**Mode select**~~ — **done.** `select.…_mode`: Follow the meter · Charge
    only · Discharge only · Pause. Each is a bound on the setpoint applied at the
@@ -1117,8 +1117,12 @@ possible, and they gate section A.
   mistake made both packs ping-pong every tick — the limit fed the coordinator's
   own output back in). `discovery.py` resolves all six entities from one Anker
   **device**, shown for review rather than silently accepted, ties left blank on
-  purpose. Options flow has a menu — **tuning** and **units** — so a mis-picked
-  entity no longer means deleting and re-adding the entry.
+  purpose. Options flow has a menu — one entry per question, split by what the
+  setting is *about* rather than by when it was added — so a mis-picked entity
+  no longer means deleting and re-adding the entry. Every step folds its answers
+  into the stored options through `_merged()`; `tests/test_options_merge.py`
+  enforces that structurally, because handing back only one step's fields
+  silently deletes every other section.
 - **N>2 units.** `tests/test_config_flow.py` drives the real wizard through 1 and
   3 units via Home Assistant itself; `_distribute` is unit-tested with 3.
 - **services.yaml.** `set_setpoint`, `start_fast_charge`, `stop_fast_charge`,

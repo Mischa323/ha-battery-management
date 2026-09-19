@@ -89,49 +89,108 @@
       "init": {
         "title": "Battery Management",
         "menu_options": {
-          "tuning": "Control parameters",
-          "units": "Battery unit entities",
+          "control": "Regulating",
+          "battery": "The packs",
           "dynamic": "Dynamic tariff",
-          "shadow": "Shadow running",
-          "phases": "Fuse protection per phase"
+          "solar": "Solar",
+          "phases": "Fuse protection per phase",
+          "units": "Battery unit entities",
+          "logging": "Logging and safety nets",
+          "shadow": "Shadow running"
         }
       },
-      "tuning": {
-        "title": "Tune the coordinator",
-        "description": "Saving reloads the integration. Each unit is briefly released as far as it can be, then the coordinator resumes on its own with the setpoint it had.",
+      "control": {
+        "title": "Regulating",
+        "description": "How hard and how often the packs are corrected to hold the meter at zero. Nothing else belongs here: when to buy is under Dynamic tariff, what the packs can take is under The packs.\n\nSaving reloads the integration. Each unit is briefly released as far as it can be, then the coordinator resumes on its own with the setpoint it had.",
         "data": {
           "bias": "Import bias (W)",
           "deadband": "Deadband (W)",
           "kp": "Gain (Kp)",
-          "interval": "Control interval (seconds)",
-          "min_output": "Minimum output (W)",
-          "unit_max": "Max power per unit (W)",
-          "fast_charge_hold": "Keep the packs full after a fast charge",
-          "fill_before_dear_day": "Fill up before a dearer day",
-          "full_charge_minutes": "Minutes from empty to full at max power",
-          "external_timeout": "Minutes an external setpoint stays valid",
-          "discharge_recovery": "Charge back this far before discharging again (%)",
           "kp_return": "Return gain",
-          "trace": "Write a trace file",
-          "trace_days": "Keep for",
-          "grid_max_age": "Ignore the meter after (seconds)"
+          "interval": "Control interval (seconds)",
+          "min_output": "Minimum output (W)"
         },
         "data_description": {
           "bias": "Aim for this much import instead of exactly zero, so a brief overshoot still exports nothing.",
           "deadband": "Ignore errors smaller than this, otherwise the packs chase every kettle. Costs a steady-state error of at most bias + deadband.",
           "kp": "How hard it corrects per tick: new setpoint = old + Kp x error. Higher reacts faster and overshoots sooner. 0.25 at 15 s is proven stable here.",
-          "interval": "Seconds between decisions. Do not go below 15: the Modbus sensors lag 10-30 s, and at 10 s both packs wound up and discharged into an export.",
-          "min_output": "The smallest amount a pack is ever given. It is never split into two shares below this, never handed out under this, and never asked for less than this - a pack that small does not regulate accurately and its own firmware says so. Small demands go to one pack; below three quarters of this value the packs stop entirely, so a setpoint resting near the line cannot switch them on and off every tick. The setpoint keeps integrating meanwhile, so a persistent small import climbs over on its own. Measure it for your hardware.",
-          "unit_max": "Hard ceiling per pack, needed because the target entity's own maximum is unreliable - one unit here reports 10000 for a 3500 W device.",
-          "fast_charge_hold": "On: the switch stays on at full and holds them there until you release it. Off: it switches itself off and your mode discharges them again.",
-          "fill_before_dear_day": "Off by default. On: when tomorrow's cheap hours are clearly dearer than what is left of today, buy to \"Buy at most to\" instead of stopping at \"Only top up below\". It never buys room the sun is expected to fill - that energy is free, and buying it exports the afternoon instead of storing it - so with a solar forecast configured this changes little.",
-          "full_charge_minutes": "Measured once, per pack. Gives both the minutes-to-full estimate and the usable capacity that the solar-aware charge ceiling needs. 0 hides both rather than guessing.",
-          "external_timeout": "In External plan mode: if no new plan arrives within this time, control returns to following the meter instead of freezing on the last instruction.",
-          "discharge_recovery": "Once a pack has been emptied it waits until it is this many points above its floor before it discharges again. Without it, the sun lifting a pack from 5 % to 6 % gets discharged straight back to 5 %, over and over - and the bottom of the pack is the worst place to cycle it. Counted above the floor, so it follows your SoC reserve and each pack's own discharge limit. It never blocks charging, and a pack coming down from full still empties all the way to its limit. 0 switches it off.",
           "kp_return": "How fast the command is wound back down. Higher than the gain above on purpose: coming back cannot oscillate, and it is what stops the packs exporting into a load that has already gone away. Set it equal to the gain above for the old symmetric behaviour.",
-          "trace": "One CSV row per tick under config/battery_management_trace/, so a question about last week can still be answered. Costs about 2 MB a day.",
-          "trace_days": "Whole days older than this are deleted.",
-          "grid_max_age": "Stop regulating once the meter has not reported for this long, instead of integrating a number that stopped moving. A frozen reading stays perfectly readable, so nothing else notices it: the setpoint walks to full discharge and holds there. 0 trusts the reading whatever its age."
+          "interval": "Seconds between decisions. Do not go below 15: the Modbus sensors lag 10-30 s, and at 10 s both packs wound up and discharged into an export.",
+          "min_output": "The smallest amount a pack is ever given. It is never split into two shares below this, never handed out under this, and never asked for less than this - a pack that small does not regulate accurately and its own firmware says so. Small demands go to one pack; below three quarters of this value the packs stop entirely, so a setpoint resting near the line cannot switch them on and off every tick. The setpoint keeps integrating meanwhile, so a persistent small import climbs over on its own. Measure it for your hardware."
+        }
+      },
+      "battery": {
+        "title": "The packs",
+        "description": "What the packs themselves can take, and what happens at the extremes. Filled in once and then left alone while the hardware stays the same - unlike the control parameters, which you adjust while watching the meter.\n\nSaving reloads the integration.",
+        "data": {
+          "unit_max": "Max power per unit (W)",
+          "full_charge_minutes": "Minutes from empty to full at max power",
+          "discharge_recovery": "Charge back this far before discharging again (%)",
+          "fast_charge_hold": "Keep the packs full after a fast charge"
+        },
+        "data_description": {
+          "unit_max": "Hard ceiling per pack, needed because the target entity's own maximum is unreliable - one unit here reports 10000 for a 3500 W device.",
+          "full_charge_minutes": "Measured once, per pack. Gives both the minutes-to-full estimate and the usable capacity that the solar-aware charge ceiling needs. 0 hides both rather than guessing.",
+          "discharge_recovery": "Once a pack has been emptied it waits until it is this many points above its floor before it discharges again. Without it, the sun lifting a pack from 5 % to 6 % gets discharged straight back to 5 %, over and over - and the bottom of the pack is the worst place to cycle it. Counted above the floor, so it follows your SoC reserve and each pack's own discharge limit. It never blocks charging, and a pack coming down from full still empties all the way to its limit. 0 switches it off.",
+          "fast_charge_hold": "On: the switch stays on at full and holds them there until you release it. Off: it switches itself off and your mode discharges them again."
+        }
+      },
+      "dynamic": {
+        "title": "Dynamic tariff",
+        "description": "Optional. Without a price sensor the Dynamic mode is not offered and nothing else changes. Exchange (day-ahead) prices are enough: tax and markup shift every hour equally, so the cheap-to-expensive order is the same.\n\nHow full buying may fill the packs is set in three places, in rising order of authority: the fallback ceiling below, then the measured solar ceiling, and around both the two sliders \"Buy up to: at least\" and \"Buy up to: at most\" on the device page - those are entities, so they can be moved without a reload.",
+        "data": {
+          "price_source": "Where prices come from",
+          "price_resolution": "How to read the prices",
+          "cheap_hours": "Hours a day to buy on",
+          "price_margin": "Minimum saving",
+          "expensive_hours": "Hours a day to mark as expensive",
+          "charge_below_soc": "Buy up to (fallback, %)",
+          "fill_before_dear_day": "Fill up before a dearer day"
+        },
+        "data_description": {
+          "price_source": "Fetching them ourselves saves installing a second custom integration, which matters at a house you do not live in. Frank Energie publishes its market prices openly, so no login is needed - and the price used is the all-in one, including tax and markup, not the bare exchange price. Pick the sensor option for any other supplier: Nord Pool, ENTSO-e, EnergyZero, Tibber and the rest are all read by shape.",
+          "price_resolution": "The market settles in 15-minute blocks and suppliers are starting to publish that way. Taking the feed as published is the more precise choice - the coordinator will happily buy on a single cheap quarter. By the hour is easier to read: 24 bars on a chart instead of 96, at the cost of averaging away the peaks inside each hour. Whichever you pick applies to the decisions and the chart alike, so they can never disagree.",
+          "cheap_hours": "How many of the coming day's cheapest slots may be used to charge from the grid. Ranked over a rolling 24 hours, not over everything published.",
+          "price_margin": "Only buy from the grid when the hour is at least this much per kWh cheaper than the dear hours it is saving for. Covers the round-trip loss (~12%) plus wear, and stops \"cheapest three hours left\" from calling the most expensive hour of the day cheap. 0 = pure ranking.",
+          "expensive_hours": "Colours the price chart only: these are the hours shown as the dearest ahead. It does not stop the packs discharging - grid-zero is the floor in every mode, so the packs cover the house whatever the hour costs. 0 hides the colouring.",
+          "charge_below_soc": "Fallback ceiling: how full buying may fill the packs while the charge time is unmeasured. Once it is measured the solar-aware ceiling takes over, and that stays between the two sliders \"Buy up to: at least\" and \"Buy up to: at most\" on the device page.",
+          "fill_before_dear_day": "Off by default. On: when tomorrow's cheap hours are clearly dearer than what is left of today, buy up to \"Buy up to: at most\" instead of stopping at the ceiling that would otherwise apply. It never buys room the sun is expected to fill - that energy is free, and buying it exports the afternoon instead of storing it - so with a solar forecast configured this changes little."
+        }
+      },
+      "solar": {
+        "title": "Solar",
+        "description": "What the sun is still expected to bring today. This is what the charge ceiling leaves room for: what the sun delivers free this afternoon is not worth buying tonight, because buying it exports the afternoon instead of storing it.\n\nLeaving it empty is fine - the ceiling then has nothing to go on and only the bounds you set apply. How much of the forecast actually lands in the packs is measured over the last fortnight, so a roof that consistently over- or under-delivers corrects itself.",
+        "data": {
+          "solar_forecast_sensors": "Solar forecast sensors",
+          "solar_produced_sensor": "Produced so far today",
+          "solar_forecast_max": "Fallback: skip buying above this many kWh expected"
+        },
+        "data_description": {
+          "solar_forecast_sensors": "Pick every roof plane; they are summed. Prefer the 'remaining today' variants - a whole-day total is right at 02:00 and wrong at 17:00.",
+          "solar_produced_sensor": "Only needed if the sensors above give a day total: this is subtracted, leaving what is still to come.",
+          "solar_forecast_max": "Only used while the charge time is unmeasured, since without a capacity there is no way to turn kWh into a percentage. 0 ignores the forecast."
+        }
+      },
+      "phases": {
+        "title": "Fuse protection per phase",
+        "description": "The packs are single-phase and the control loop only knows the household total. A pack charging at 3500 W on a leg that is already pulling 20 A takes that leg to 35 A - while the other two sit half idle and the total looks perfectly reasonable.\n\nPoint this at your meter's per-phase power sensors, in L1, L2, L3 order, and each leg gets its own ceiling. Leave the list empty and none of this exists.\n\nWhich pack sits on which leg is measured, not configured: one pack is asked to move while the others hold still, and whichever leg moves with it is the answer.",
+        "data": {
+          "phase_power_sensors": "Per-phase power sensors (L1, L2, L3)",
+          "phase_limit_amps": "Main fuse per phase (A)",
+          "phase_voltage": "Nominal voltage (V)",
+          "phase_margin": "Margin kept free (%)",
+          "phase_detect": "Find out which pack is on which phase",
+          "phase_redetect": "Measure again after a restart",
+          "phase_probe_seconds": "Measurement duration (s)"
+        },
+        "data_description": {
+          "phase_power_sensors": "In L1, L2, L3 order - the order decides which leg is which. Signed like the main meter: + import, - export. Empty switches the whole protection off. One sensor means a single-phase supply, and then everything is on that one leg.",
+          "phase_limit_amps": "What your main fuse is rated at per phase, typically 25 or 35 in the Netherlands. Read it off the fuse itself rather than off your contract.",
+          "phase_voltage": "Only used to turn the fuse rating into watts. 230 unless you know otherwise.",
+          "phase_margin": "Left unused, for the kettle somebody switches on while we are deciding. Ten per cent of 25 A is 2.5 A of room. A fuse is not a cliff, but running it to the last ampere leaves nothing for the rest of the house.",
+          "phase_detect": "Nothing in the Modbus data says how the cables were run, so it is measured: one pack is commanded while the others hold at 0, and the leg that moves with it is the answer. Takes about a minute per pack, during which the packs do not regulate. Switch it off if you would rather type the phases in yourself on each unit's page.",
+          "phase_redetect": "On by default: an integration that has been down cannot vouch for what changed while it was. Switch it off once the wiring is known and stable - otherwise every restart parks the packs for a minute.",
+          "phase_probe_seconds": "How long one pack is held at power before the legs are read. Longer is more reliable and more disruptive; the packs take a few seconds to respond and the meter a few more."
         }
       },
       "units": {
@@ -160,30 +219,20 @@
           "power_sensor": "The pack's own power reading. Never used for control - it lags 10-30 s - but it is what lets the trace show what the pack actually did next to what it was told to do."
         }
       },
-      "dynamic": {
-        "title": "Dynamic tariff",
-        "description": "Optional. Without a price sensor the Dynamic mode is not offered and nothing else changes. Exchange (day-ahead) prices are enough: tax and markup shift every hour equally, so the cheap-to-expensive order is the same.",
+      "logging": {
+        "title": "Logging and safety nets",
+        "description": "The trace file, plus the two timeouts that stop a reading or a plan that has stopped moving from being acted on as though it were fresh. A frozen value stays perfectly readable, so nothing else notices it.\n\nSaving reloads the integration.",
         "data": {
-          "price_source": "Where prices come from",
-          "cheap_hours": "Hours a day to buy on",
-          "charge_below_soc": "Only buy below this state of charge (%)",
-          "solar_forecast_max": "Fallback: skip buying above this many kWh expected",
-          "expensive_hours": "Hours a day to mark as expensive",
-          "solar_forecast_sensors": "Solar forecast sensors",
-          "solar_produced_sensor": "Produced so far today",
-          "price_resolution": "How to read the prices",
-          "price_margin": "Minimum saving"
+          "trace": "Write a trace file",
+          "trace_days": "Keep for",
+          "grid_max_age": "Ignore the meter after (seconds)",
+          "external_timeout": "Minutes an external setpoint stays valid"
         },
         "data_description": {
-          "price_source": "Fetching them ourselves saves installing a second custom integration, which matters at a house you do not live in. Frank Energie publishes its market prices openly, so no login is needed - and the price used is the all-in one, including tax and markup, not the bare exchange price. Pick the sensor option for any other supplier: Nord Pool, ENTSO-e, EnergyZero, Tibber and the rest are all read by shape.",
-          "cheap_hours": "How many of the coming day's cheapest slots may be used to charge from the grid. Ranked over a rolling 24 hours, not over everything published.",
-          "charge_below_soc": "Fallback ceiling, used only while the charge time is unmeasured. Once it is, the solar-aware ceiling replaces it.",
-          "solar_forecast_max": "Only used while the charge time is unmeasured, since without a capacity there is no way to turn kWh into a percentage. 0 ignores the forecast.",
-          "expensive_hours": "Colours the price chart only: these are the hours shown as the dearest ahead. It does not stop the packs discharging - grid-zero is the floor in every mode, so the packs cover the house whatever the hour costs. 0 hides the colouring.",
-          "solar_forecast_sensors": "Pick every roof plane; they are summed. Prefer the 'remaining today' variants - a whole-day total is right at 02:00 and wrong at 17:00.",
-          "solar_produced_sensor": "Only needed if the sensors above give a day total: this is subtracted, leaving what is still to come.",
-          "price_resolution": "The market settles in 15-minute blocks and suppliers are starting to publish that way. Taking the feed as published is the more precise choice - the coordinator will happily buy on a single cheap quarter. By the hour is easier to read: 24 bars on a chart instead of 96, at the cost of averaging away the peaks inside each hour. Whichever you pick applies to the decisions and the chart alike, so they can never disagree.",
-          "price_margin": "Only buy from the grid when the hour is at least this much per kWh cheaper than the dear hours it is saving for. Covers the round-trip loss (~12%) plus wear, and stops \"cheapest three hours left\" from calling the most expensive hour of the day cheap. 0 = pure ranking."
+          "trace": "One CSV row per tick under config/battery_management_trace/, so a question about last week can still be answered. Costs about 2 MB a day.",
+          "trace_days": "Whole days older than this are deleted.",
+          "grid_max_age": "Stop regulating once the meter has not reported for this long, instead of integrating a number that stopped moving. A frozen reading stays perfectly readable, so nothing else notices it: the setpoint walks to full discharge and holds there. 0 trusts the reading whatever its age.",
+          "external_timeout": "In External plan mode: if no new plan arrives within this time, control returns to following the meter instead of freezing on the last instruction."
         }
       },
       "shadow": {
@@ -208,28 +257,6 @@
         "data_description": {
           "mode_control": "The option this pack must be set to before it will take orders. Usually third_party_control.",
           "mode_safe": "Where it is put when you switch off or Home Assistant unloads. Leave empty for a pack with no meter of its own: it is then simply commanded 0 W and its mode left alone, which is a safe resting state."
-        }
-      },
-      "phases": {
-        "title": "Fuse protection per phase",
-        "description": "The packs are single-phase and the control loop only knows the household total. A pack charging at 3500 W on a leg that is already pulling 20 A takes that leg to 35 A - while the other two sit half idle and the total looks perfectly reasonable.\n\nPoint this at your meter's per-phase power sensors, in L1, L2, L3 order, and each leg gets its own ceiling. Leave the list empty and none of this exists.\n\nWhich pack sits on which leg is measured, not configured: one pack is asked to move while the others hold still, and whichever leg moves with it is the answer.",
-        "data": {
-          "phase_power_sensors": "Per-phase power sensors (L1, L2, L3)",
-          "phase_limit_amps": "Main fuse per phase (A)",
-          "phase_voltage": "Nominal voltage (V)",
-          "phase_margin": "Margin kept free (%)",
-          "phase_detect": "Find out which pack is on which phase",
-          "phase_redetect": "Measure again after a restart",
-          "phase_probe_seconds": "Measurement duration (s)"
-        },
-        "data_description": {
-          "phase_power_sensors": "In L1, L2, L3 order - the order decides which leg is which. Signed like the main meter: + import, - export. Empty switches the whole protection off. One sensor means a single-phase supply, and then everything is on that one leg.",
-          "phase_limit_amps": "What your main fuse is rated at per phase, typically 25 or 35 in the Netherlands. Read it off the fuse itself rather than off your contract.",
-          "phase_voltage": "Only used to turn the fuse rating into watts. 230 unless you know otherwise.",
-          "phase_margin": "Left unused, for the kettle somebody switches on while we are deciding. Ten per cent of 25 A is 2.5 A of room. A fuse is not a cliff, but running it to the last ampere leaves nothing for the rest of the house.",
-          "phase_detect": "Nothing in the Modbus data says how the cables were run, so it is measured: one pack is commanded while the others hold at 0, and the leg that moves with it is the answer. Takes about a minute per pack, during which the packs do not regulate. Switch it off if you would rather type the phases in yourself on each unit's page.",
-          "phase_redetect": "On by default: an integration that has been down cannot vouch for what changed while it was. Switch it off once the wiring is known and stable - otherwise every restart parks the packs for a minute.",
-          "phase_probe_seconds": "How long one pack is held at power before the legs are read. Longer is more reliable and more disruptive; the packs take a few seconds to respond and the meter a few more."
         }
       },
       "price_entity": {
@@ -332,16 +359,30 @@
       }
     },
     "switch": {
+      "coordinator_enabled": {
+        "name": "Coordinator enabled"
+      },
       "dry_run": {
         "name": "Dry run"
+      },
+      "fast_charge": {
+        "name": "Fast charge (emergency)"
       }
     },
     "number": {
+      "soc_reserve": {
+        "name": "SoC reserve"
+      },
       "buy_ceiling_min": {
-        "name": "Buy at least to"
+        "name": "Buy up to: at least"
       },
       "buy_ceiling_max": {
-        "name": "Buy at most to"
+        "name": "Buy up to: at most"
+      }
+    },
+    "button": {
+      "detect_phases": {
+        "name": "Detect phases"
       }
     }
   },

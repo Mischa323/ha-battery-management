@@ -28,7 +28,7 @@ async def async_setup_entry(
 class DetectPhasesButton(ButtonEntity):
     _attr_has_entity_name = True
     _attr_should_poll = False
-    _attr_name = "Detect phases"
+    _attr_translation_key = "detect_phases"
     _attr_icon = "mdi:transmission-tower"
     _attr_entity_category = EntityCategory.CONFIG
 

@@ -189,7 +189,7 @@ class GridObservedSensor(_GridSensor):
     fastest way to notice.
     """
 
-    _attr_name = "Grid power (as read)"
+    _attr_translation_key = "grid_observed"
     _attr_icon = "mdi:transmission-tower"
 
     def __init__(self, coordinator, entry) -> None:
@@ -214,7 +214,7 @@ class GridUsedSensor(_GridSensor):
     you check the reconstruction is sane.
     """
 
-    _attr_name = "Grid power (regulated against)"
+    _attr_translation_key = "grid_used"
     _attr_icon = "mdi:transmission-tower-import"
 
     def __init__(self, coordinator, entry) -> None:
@@ -238,7 +238,7 @@ class OtherControllerSensor(_GridSensor):
     targets, + discharging.
     """
 
-    _attr_name = "Other controller"
+    _attr_translation_key = "other_controller"
     _attr_icon = "mdi:account-arrow-left"
 
     def __init__(self, coordinator, entry) -> None:
@@ -257,7 +257,7 @@ class OtherControllerSensor(_GridSensor):
 class SolarRemainingSensor(_BaseSensor):
     """Sun still to come today. What the buy ceiling is computed from."""
 
-    _attr_name = "Solar remaining"
+    _attr_translation_key = "solar_remaining"
     _attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
     _attr_device_class = SensorDeviceClass.ENERGY_STORAGE
     _attr_state_class = SensorStateClass.MEASUREMENT
@@ -289,7 +289,7 @@ class ChargeCeilingSensor(_BaseSensor):
     there is no way to turn kWh of expected sun into a percentage.
     """
 
-    _attr_name = "Charge ceiling"
+    _attr_translation_key = "charge_ceiling"
     _attr_native_unit_of_measurement = PERCENTAGE
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_icon = "mdi:battery-arrow-up"
@@ -333,7 +333,7 @@ class PlanSensor(_BaseSensor):
     claiming otherwise would look authoritative and be wrong.
     """
 
-    _attr_name = "Plan"
+    _attr_translation_key = "plan"
     _attr_icon = "mdi:calendar-clock"
 
     def __init__(self, coordinator, entry) -> None:

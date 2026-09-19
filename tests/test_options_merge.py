@@ -4,7 +4,7 @@ Home Assistant replaces the *whole* options dict with whatever an options step
 hands back. A step that returns only its own fields therefore deletes every
 other section, silently - nothing errors, the settings are simply gone.
 
-That is exactly what happened at the primary site: saving the tuning screen wiped
+That is exactly what happened at the primary site: saving one screen wiped
 the three solar forecast sensors, and it was put down to the reboot that
 happened to follow. So this is checked structurally, by reading the source,
 because it must hold for steps nobody has written yet.
@@ -53,8 +53,8 @@ def test_every_step_is_found():
     """A guard on the guard: an empty list would pass everything below."""
     names = {step.name for step in steps()}
 
-    assert "async_step_tuning" in names
-    assert len(names) >= 5
+    assert "async_step_control" in names
+    assert len(names) >= 8
 
 
 def test_no_step_hands_back_its_own_input_as_the_whole_options():
