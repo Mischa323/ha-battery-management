@@ -944,6 +944,50 @@ past the house. The split shown on the card is read off the second, the same
 number the ceiling was set from — reading it off the first would have the card
 promise sun the ceiling had already written off.
 
+### Not ranking across the peak
+
+The cheap hours are ranked over a rolling 24 hours, which is right for deciding
+*when* — at 16:00 what matters is what is still ahead. It was wrong across an
+expensive stretch. Energy bought now serves what comes after it is bought and
+before it is spent, so a cheap hour on the far side of tonight's peak is not an
+alternative to one on this side. They are not substitutes, and ranking them
+together meant tomorrow morning's cheaper quarters took the budget that
+tonight needed.
+
+Reported on 2026-09-19: the packs sat at their floor for four and a quarter
+hours, charged for 75 minutes, and stopped at 31 % on a quarter boundary — the
+price unchanged, the ceiling at 79 %, the market price at −0.0012 and no dear
+quarter yet that day. So the buying now stops at the **next expensive
+stretch**: only the hours before it compete for the budget.
+
+The margin is still measured against the *whole* window, deliberately. What the
+bound cuts off is the dear hours the buying is for, and comparing the cheap
+hours only with each other would rule every one of them out and buy nothing at
+all.
+
+### How full, when tomorrow is cheaper
+
+Whether to buy before the peak is settled by the peak. How *full* is a fair
+question for tomorrow's prices to answer: with a much cheaper day coming there
+is no sense filling to the brim tonight.
+
+So when the cheap hours beyond local midnight are cheaper than the rest of
+today by more than the margin, the ceiling drops to **Buy at least to** — take
+what tonight needs, top up on the cheap day. That comparison is made across the
+day boundary rather than across the peak: everything beyond a peak is dearer
+than the cheap hour before it on every ordinary day, so that comparison fires
+constantly and says nothing. It also stands down when either side is too thin a
+slice to judge — two night hours seen from 02:00 are not a day.
+
+**This does nothing until you set a floor.** *Buy at least to* ships at 0, and
+reading that as a level to stop at would mean "buy nothing", which is the fault
+it was reported alongside. With no floor stated, nothing is lowered.
+
+There is deliberately no move in the other direction — a dearer tomorrow does
+not raise the ceiling. It would override both *Only top up below* and the solar
+headroom on most autumn days, and buying room the sun was going to fill does
+not make tomorrow cheaper; it exports the afternoon instead of storing it.
+
 ### Bounding it by hand
 
 Two sliders bound the computed ceiling, because it is only as good as the solar

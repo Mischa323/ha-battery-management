@@ -574,3 +574,169 @@ def test_the_sensor_counts_today_not_everything_published(through_the_day):
 
     assert len(plan["cheap_hours"]) == 4
     assert all(h["start"][:10] == NOW.strftime("%Y-%m-%d") for h in plan["cheap_hours"])
+
+
+# -- how full, given what tomorrow costs --------------------------------------
+#
+# Asked for on 2026-09-19, alongside the fix that stops the buying being
+# deferred across the peak. Whether to buy before the peak is settled by the
+# peak; how *full* to buy is a fair question for tomorrow's prices to answer.
+#
+#   a much cheaper day coming  -> take only what tonight needs, top up then
+#   a much dearer day coming   -> fill up while it is cheap
+#
+# The first is guarded on the owner having stated a floor. "Buy at least to"
+# ships at 0, and reading that as "buy to nothing" is exactly the fault this
+# was reported alongside - so with no floor set, nothing is lowered.
+
+
+def two_days(today: float, tomorrow: float, dear_hour: int = 18) -> dict:
+    """A flat price each day, so only the step between them is in play."""
+    midnight = NOW.replace(hour=0, minute=0, second=0, microsecond=0)
+    slots = []
+    for i in range(48):
+        start = midnight + timedelta(hours=i)
+        price = today if start.day == NOW.day else tomorrow
+        if start.hour == dear_hour and start.day == NOW.day:
+            price = max(today, tomorrow) + 0.40
+        slots.append(
+            {
+                "start": start.isoformat(),
+                "end": (start + timedelta(hours=1)).isoformat(),
+                "value": price,
+            }
+        )
+    return {"raw_today": slots}
+
+
+def priced(planned, today, tomorrow, **options):
+    system = planned(**options)
+    system.hass.states.set(PRICES, today, two_days(today, tomorrow))
+    return system
+
+
+def test_a_much_cheaper_tomorrow_reads_as_one(planned):
+    system = priced(planned, 0.30, 0.10)
+
+    assert system.coordinator.next_day_step() == pytest.approx(0.20, abs=0.02)
+
+
+def test_a_cheaper_tomorrow_takes_only_what_the_floor_asks_for(planned):
+    """The packs still get through tonight; the rest waits for the cheap day."""
+    system = priced(planned, 0.30, 0.10, remaining=0.0)
+    system.coordinator.buy_ceiling_min = 40.0
+
+    assert system.coordinator.charge_ceiling() == 40.0
+
+
+def test_without_a_floor_a_cheaper_tomorrow_changes_nothing(planned):
+    """"Buy at least to" ships at 0, and lowering the ceiling to nothing is how
+    the packs came to be flat at breakfast. No floor, no lowering."""
+    system = priced(planned, 0.30, 0.10, remaining=0.0)
+    system.coordinator.buy_ceiling_min = 0.0
+
+    assert system.coordinator.charge_ceiling() == 100.0
+
+
+def test_a_dearer_tomorrow_does_not_move_the_ceiling_either(planned):
+    """Only the lowering half is in.
+
+    Raising the ceiling on a dearer tomorrow would override both
+    `charge_below_soc` and the solar headroom on most autumn days, and buying
+    room the sun was going to fill does not make tomorrow cheaper - it exports
+    the afternoon instead of storing it. Worth having, worth asking about
+    first; pinned here so adding it later is a deliberate act.
+    """
+    system = priced(planned, 0.10, 0.30, remaining=7.0)
+    system.coordinator.buy_ceiling_min = 40.0
+
+    assert system.coordinator.next_day_step() < 0
+    assert system.coordinator.charge_ceiling() == 50.0  # 7 kWh of 14 kWh packs
+
+
+def test_a_similar_tomorrow_leaves_the_ceiling_alone(planned):
+    """Within the margin the two days are the same day, and nothing moves.
+
+    No sun left, so the solar ceiling is 100 and that is what should survive -
+    the point is that a penny between the days does not move it either way.
+    """
+    system = priced(planned, 0.30, 0.29, remaining=0.0)
+    system.coordinator.buy_ceiling_min = 40.0
+
+    assert system.coordinator.next_day_step() == pytest.approx(0.01, abs=0.005)
+    assert system.coordinator.charge_ceiling() == 100.0
+
+
+def test_the_sun_outranks_the_next_day_either_way(planned):
+    """Room the sun is expected to fill is free energy, and no price step on
+    either side is a reason to buy it."""
+    system = priced(planned, 0.10, 0.30, remaining=14.0)
+
+    # 14 kWh of sun into 14 kWh of packs: buy nothing, whatever tomorrow costs
+    assert system.coordinator.charge_ceiling() == 0.0
+
+
+# -- the reported day, end to end ---------------------------------------------
+
+
+def reported_day() -> dict:
+    """2026-09-19, in shape: cheap now, a peak tonight, a cheaper day after.
+
+    The packs sat at 5 % for four and a quarter hours, charged for 75 minutes
+    and stopped at 31 % on a quarter boundary - price unchanged, ceiling at
+    79 %, market price at -0.0012, and no dear quarter yet that day. Tomorrow's
+    cheaper hours had taken the budget, and tomorrow arrives after the peak
+    they were needed for.
+    """
+    midnight = NOW.replace(hour=0, minute=0, second=0, microsecond=0)
+    slots = []
+    for i in range(48):
+        start = midnight + timedelta(hours=i)
+        if start.day != NOW.day:
+            price = 0.08          # the cheaper day, beyond the peak
+        elif 16 <= start.hour < 19:
+            price = 0.45          # tonight's peak
+        elif 12 <= start.hour < 16:
+            price = 0.13          # cheap, and on this side of it
+        else:
+            price = 0.25
+        slots.append(
+            {
+                "start": start.isoformat(),
+                "end": (start + timedelta(hours=1)).isoformat(),
+                "value": price,
+            }
+        )
+    return {"raw_today": slots}
+
+
+async def test_it_buys_before_the_peak_though_tomorrow_is_cheaper(planned):
+    """The fault, through the coordinator rather than the arithmetic.
+
+    Ranked over the whole window, tomorrow's 0.08 wins and nothing is bought -
+    and the packs go into a 0.45 evening on whatever they happen to hold. The
+    two were never alternatives: energy bought tomorrow cannot serve tonight.
+    """
+    system = planned(remaining=0.0, soc=(20.0, 20.0))
+    system.hass.states.set(PRICES, 0.13, reported_day())
+
+    await system.coordinator._async_tick(None)
+
+    assert system.coordinator.active_policy == POLICY_DYNAMIC_CHARGE
+    assert system.coordinator.setpoint < 0
+
+
+async def test_with_no_peak_ahead_the_cheaper_day_still_wins(planned):
+    """The bound is a peak, not a curfew. Take the peak away and the ranking
+    reaches into tomorrow again, which is what it is for."""
+    flat = reported_day()
+    for slot in flat["raw_today"]:
+        if slot["value"] == 0.45:
+            slot["value"] = 0.13
+    system = planned(remaining=0.0, soc=(20.0, 20.0),
+                     **{CONF_EXPENSIVE_HOURS: 0})
+    system.hass.states.set(PRICES, 0.13, flat)
+
+    await system.coordinator._async_tick(None)
+
+    assert system.coordinator.active_policy != POLICY_DYNAMIC_CHARGE
