@@ -988,10 +988,22 @@ decides **when** it may buy, never how much.
 reading that as a level to stop at would mean "buy nothing", which is the fault
 it was reported alongside. With no floor stated, nothing is lowered.
 
-There is deliberately no move in the other direction — a dearer tomorrow does
-not raise the ceiling. It would override both *Only top up below* and the solar
-headroom on most autumn days, and buying room the sun was going to fill does
-not make tomorrow cheaper; it exports the afternoon instead of storing it.
+### Filling up before a dearer day
+
+The other direction is a setting rather than a behaviour, because it overrides
+*Only top up below* — a threshold somebody chose — and that should be opted
+into rather than arrive with an update.
+
+**Fill up before a dearer day** (off by default, under *Configure*): when
+tomorrow's cheap hours are clearly dearer than what is left of today, buy to
+*Buy at most to* instead of stopping at *Only top up below*.
+
+It **never buys room the sun is expected to fill**. That is not caution, it is
+arithmetic: that energy is free, and buying it does not make tomorrow cheaper —
+it exports the afternoon instead of storing it. So it only lifts a ceiling the
+plain SoC threshold was holding down, never one the sun was, and with a solar
+forecast configured it changes little. *Buy at most to* is still the last word
+on how full.
 
 ### Bounding it by hand
 

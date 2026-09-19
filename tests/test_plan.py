@@ -18,6 +18,7 @@ from custom_components.battery_management.const import (
     CONF_EXPENSIVE_HOURS,
     CONF_FULL_CHARGE_MINUTES,
     CONF_PRICE_SENSOR,
+    CONF_FILL_BEFORE_DEAR_DAY,
     CONF_SOLAR_FORECAST_MAX,
     CONF_SOLAR_FORECAST_SENSORS,
     MODE_DYNAMIC,
@@ -866,3 +867,69 @@ def test_with_no_forecast_at_all_the_reason_is_neither(planned):
     system = planned(**{CONF_FULL_CHARGE_MINUTES: 0})
 
     assert system.coordinator._buy_ceiling()[1] is None
+
+
+# -- filling up before a dearer day -------------------------------------------
+#
+# Asked for, then asked to be optional: "het moet wel een optie zijn of je dat
+# wilt". Off by default, because it overrides "only top up below" - a threshold
+# somebody chose - and a setting like that should be opted into rather than
+# arrive with an update.
+#
+# The safety is that it only acts where `reason is None`: the bare SoC
+# threshold is holding the ceiling, not the sun. Room the roof is expected to
+# fill is free energy, and buying it because tomorrow looks dear does not make
+# tomorrow cheaper - it exports the afternoon instead of storing it.
+
+
+def dear_tomorrow(planned, **options):
+    """Today cheap, tomorrow dearer, and no solar forecast to speak for it."""
+    system = planned(**{CONF_FULL_CHARGE_MINUTES: 120, CONF_CHARGE_BELOW_SOC: 40,
+                        **options})
+    system.hass.states.set(FORECAST, "unknown")
+    system.hass.states.set(PRICES, 0.10, two_days(0.10, 0.40))
+    return system
+
+
+def test_off_by_default_the_threshold_still_holds(planned):
+    system = dear_tomorrow(planned)
+
+    assert system.coordinator.next_day_step() < 0
+    assert system.coordinator._buy_ceiling() == (40.0, None)
+
+
+def test_switched_on_it_fills_before_the_dearer_day(planned):
+    system = dear_tomorrow(planned, **{CONF_FILL_BEFORE_DEAR_DAY: True})
+
+    assert system.coordinator._buy_ceiling() == (100.0, None)
+
+
+def test_it_never_buys_the_room_the_sun_was_going_to_fill(planned):
+    """The line that does not move. 7 kWh of sun into 14 kWh of packs leaves
+    the ceiling at 50, and a dear tomorrow is not a reason to buy the other
+    half - that half is free."""
+    system = planned(**{CONF_FILL_BEFORE_DEAR_DAY: True})
+    system.hass.states.set(FORECAST, 7.0)
+    system.hass.states.set(PRICES, 0.10, two_days(0.10, 0.40))
+
+    ceiling, reason = system.coordinator._buy_ceiling()
+
+    assert system.coordinator.next_day_step() < 0
+    assert (ceiling, reason) == (50.0, POLICY_SOLAR_HEADROOM)
+
+
+def test_a_similar_tomorrow_does_not_set_it_off(planned):
+    system = planned(**{CONF_FULL_CHARGE_MINUTES: 120, CONF_CHARGE_BELOW_SOC: 40,
+                        CONF_FILL_BEFORE_DEAR_DAY: True})
+    system.hass.states.set(FORECAST, "unknown")
+    system.hass.states.set(PRICES, 0.30, two_days(0.30, 0.31))
+
+    assert system.coordinator._buy_ceiling() == (40.0, None)
+
+
+def test_it_is_capped_by_the_hand_set_maximum(planned):
+    """"Buy at most to" is still the last word on how full."""
+    system = dear_tomorrow(planned, **{CONF_FILL_BEFORE_DEAR_DAY: True})
+    system.coordinator.buy_ceiling_max = 80.0
+
+    assert system.coordinator._buy_ceiling()[0] == 80.0

@@ -22,6 +22,7 @@ from .const import (
     CONF_DEADBAND,
     CONF_DEVICE,
     CONF_FAST_CHARGE_HOLD,
+    CONF_FILL_BEFORE_DEAR_DAY,
     CONF_BATTERY_POWER_SENSOR,
     CONF_CHARGE_BELOW_SOC,
     CONF_CHEAP_HOURS,
@@ -70,6 +71,7 @@ from .const import (
     DEFAULT_DEADBAND,
     DEFAULT_DISCHARGE_RECOVERY,
     DEFAULT_FAST_CHARGE_HOLD,
+    DEFAULT_FILL_BEFORE_DEAR_DAY,
     DEFAULT_CHARGE_BELOW_SOC,
     DEFAULT_CHEAP_HOURS,
     DEFAULT_PRICE_MARGIN,
@@ -226,6 +228,12 @@ def _options_schema(defaults: dict) -> vol.Schema:
             vol.Optional(
                 CONF_FAST_CHARGE_HOLD,
                 default=defaults.get(CONF_FAST_CHARGE_HOLD, DEFAULT_FAST_CHARGE_HOLD),
+            ): bool,
+            vol.Optional(
+                CONF_FILL_BEFORE_DEAR_DAY,
+                default=defaults.get(
+                    CONF_FILL_BEFORE_DEAR_DAY, DEFAULT_FILL_BEFORE_DEAR_DAY
+                ),
             ): bool,
             vol.Optional(
                 CONF_FULL_CHARGE_MINUTES,
