@@ -1011,7 +1011,8 @@ The other direction is a setting rather than a behaviour, because it overrides
 *Buy up to (fallback)* — a threshold somebody chose — and that should be opted
 into rather than arrive with an update.
 
-**Fill up before a dearer day** (off by default, under *Configure*): when
+**Fill up before a dearer day** (off by default, under *Configure → Dynamic
+tariff*): when
 tomorrow's cheap hours are clearly dearer than what is left of today, buy to
 *Buy up to: at most* instead of stopping at *Buy up to (fallback)*.
 
