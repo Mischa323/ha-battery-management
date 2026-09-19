@@ -80,6 +80,7 @@ from .const import (
     CONF_TRACE,
     CONF_TRACE_DAYS,
     CONF_FAST_CHARGE_HOLD,
+    CONF_FILL_BEFORE_DEAR_DAY,
     CONF_BATTERY_POWER_SENSOR,
     CONF_CHARGE_BELOW_SOC,
     CONF_CHEAP_HOURS,
@@ -103,6 +104,7 @@ from .const import (
     DEFAULT_DRY_RUN,
     DEFAULT_EXTERNAL_TIMEOUT,
     DEFAULT_FAST_CHARGE_HOLD,
+    DEFAULT_FILL_BEFORE_DEAR_DAY,
     DEFAULT_CHARGE_BELOW_SOC,
     DEFAULT_CHEAP_HOURS,
     DEFAULT_PRICE_MARGIN,
@@ -361,6 +363,12 @@ class BatteryCoordinator:
         self._unit_ceiling: float = float(data.get(CONF_UNIT_MAX, DEFAULT_UNIT_MAX))
         self._fast_charge_hold: bool = bool(
             data.get(CONF_FAST_CHARGE_HOLD, DEFAULT_FAST_CHARGE_HOLD)
+        )
+        #: Off by default: it overrides the plain "only top up below" threshold,
+        #: which is a setting somebody chose, so it is opted into rather than
+        #: arriving with an update.
+        self._fill_before_dear_day: bool = bool(
+            data.get(CONF_FILL_BEFORE_DEAR_DAY, DEFAULT_FILL_BEFORE_DEAR_DAY)
         )
         self._full_charge_minutes: float = float(
             data.get(CONF_FULL_CHARGE_MINUTES, DEFAULT_FULL_CHARGE_MINUTES)
@@ -1635,18 +1643,11 @@ class BatteryCoordinator:
 
         # How full, given what the far side of the peak costs. Not *whether* -
         # that is settled by the hours before the peak, whatever tomorrow does.
-        # Only downwards, and only against a floor the owner has stated. A
-        # cheaper day coming is a reason to take just what tonight needs and
-        # top up then; it is not a reason to buy nothing, and "buy at least to"
-        # ships at 0 - reading that as a level to stop at is how the packs came
-        # to be flat at breakfast. No floor, no lowering.
-        #
-        # Deliberately nothing in the other direction. Raising the ceiling on a
-        # dearer tomorrow would override both `charge_below_soc` and the solar
-        # headroom on most autumn days, and buying room the sun was going to
-        # fill does not make tomorrow cheaper - it exports the afternoon
-        # instead of storing it. That half is worth having and worth asking
-        # about first.
+        # Downwards: only against a floor the owner has stated. A cheaper day
+        # coming is a reason to take just what tonight needs and top up then;
+        # it is not a reason to buy nothing, and "buy at least to" ships at 0 -
+        # reading that as a level to stop at is how the packs came to be flat
+        # at breakfast. No floor, no lowering.
         step = self.next_day_step()
         if (
             step is not None
@@ -1663,6 +1664,23 @@ class BatteryCoordinator:
             if lowered < ceiling:
                 reason = POLICY_CHEAPER_TOMORROW
             ceiling = lowered
+        elif (
+            step is not None
+            and step <= -self._price_margin
+            and self._fill_before_dear_day
+            # `reason is None` is the whole safety of this: it means the bare
+            # SoC threshold is what is holding the ceiling down, not the sun.
+            # Room the roof is expected to fill is free energy, and buying it
+            # because tomorrow looks dear does not make tomorrow cheaper - it
+            # exports the afternoon instead of storing it. Where the sun has a
+            # ceiling it keeps it, and this does nothing at all.
+            and reason is None
+        ):
+            ceiling = max(ceiling, self.buy_ceiling_max)
+            # deliberately not renamed: `reason` is read for *refusals*, and
+            # raising the ceiling never causes one. Leaving it None also keeps
+            # `_sun_is_enough` consulted, which is the only sun check left on
+            # this path and must not be skipped just because tomorrow is dear.
         return self._bound_ceiling(ceiling), reason
 
     def hours_of_charge_needed(self, online: dict | None = None) -> float | None:
@@ -2111,6 +2129,7 @@ class BatteryCoordinator:
                 "solar_produced_sensor": self._solar_produced_sensor,
                 "solar_forecast_max": self._solar_forecast_max,
                 "expensive_hours": self._expensive_hours,
+                "fill_before_dear_day": self._fill_before_dear_day,
                 "discharge_recovery": self._discharge_recovery,
                 "phase_sensors": self._phase_sensors,
                 "phase_limit_amps": self._phase_amps,

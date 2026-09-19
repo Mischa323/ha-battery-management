@@ -89,47 +89,108 @@
       "init": {
         "title": "Battery Management",
         "menu_options": {
-          "tuning": "Regelparameters",
-          "units": "Entiteiten van de accu-units",
+          "control": "Regelen",
+          "battery": "Accu's",
           "dynamic": "Dynamisch tarief",
-          "shadow": "Schaduwdraaien",
-          "phases": "Zekeringbewaking per fase"
+          "solar": "Zon",
+          "phases": "Zekeringbewaking per fase",
+          "units": "Entiteiten van de accu-units",
+          "logging": "Logboek en vangnetten",
+          "shadow": "Schaduwdraaien"
         }
       },
-      "tuning": {
-        "title": "Coördinator afstellen",
-        "description": "Opslaan herlaadt de integratie. Elke unit wordt even losgelaten voor zover dat kan, daarna hervat de coördinator vanzelf met het setpoint dat hij had.",
+      "control": {
+        "title": "Regelen",
+        "description": "Hoe hard en hoe vaak de packs worden bijgestuurd om de meter op nul te houden. Meer is hier niet nodig: wanneer er ingekocht wordt staat bij Dynamisch tarief, hoeveel de packs aankunnen bij Accu's.\n\nOpslaan herlaadt de integratie. Elke unit wordt even losgelaten voor zover dat kan, daarna hervat de coördinator vanzelf met het setpoint dat hij had.",
         "data": {
           "bias": "Import-marge (W)",
           "deadband": "Deadband (W)",
           "kp": "Versterking (Kp)",
-          "interval": "Regelinterval (seconden)",
-          "min_output": "Minimaal vermogen (W)",
-          "unit_max": "Maximaal vermogen per unit (W)",
-          "fast_charge_hold": "Accu's vol houden na snelladen",
-          "full_charge_minutes": "Minuten van leeg naar vol op vol vermogen",
-          "external_timeout": "Minuten dat een extern setpoint geldig blijft",
-          "discharge_recovery": "Eerst zover terugladen voordat hij weer ontlaadt (%)",
           "kp_return": "Terugregelfactor",
-          "trace": "Logboekbestand schrijven",
-          "trace_days": "Bewaren",
-          "grid_max_age": "Meter negeren na (seconden)"
+          "interval": "Regelinterval (seconden)",
+          "min_output": "Minimaal vermogen (W)"
         },
         "data_description": {
           "bias": "Streef naar zoveel afname in plaats van precies nul, zodat een kleine doorschieter alsnog niets teruglevert.",
           "deadband": "Negeer afwijkingen kleiner dan dit, anders jagen de packs op elke waterkoker. Kost een blijvende afwijking van hoogstens marge + deadband.",
           "kp": "Hoe hard hij per tick corrigeert: nieuw setpoint = oud + Kp x afwijking. Hoger reageert sneller en schiet eerder door. 0,25 bij 15 s is hier stabiel gebleken.",
-          "interval": "Seconden tussen beslissingen. Ga niet onder 15: de Modbus-sensoren lopen 10-30 s achter, en bij 10 s liepen beide packs op en ontlaadden ze in een teruglevering.",
-          "min_output": "Het kleinste vermogen dat een accu ooit krijgt. Het wordt nooit gesplitst in twee aandelen hieronder, nooit lager uitgedeeld, en er wordt nooit minder gevraagd - zo'n kleine waarde regelt een accu niet nauwkeurig en zijn eigen firmware zegt dat ook. Kleine vraag gaat naar één accu; onder driekwart van deze waarde stoppen ze helemaal, zodat een setpoint vlak bij de grens ze niet elke tick aan en uit zet. Het setpoint blijft ondertussen integreren, dus een aanhoudende kleine afname klimt er vanzelf overheen. Meet hem voor jouw hardware.",
-          "unit_max": "Harde bovengrens per pack, nodig omdat het maximum dat de doel-entiteit zelf meldt onbetrouwbaar is - een unit hier meldt 10000 voor een 3500 W-apparaat.",
-          "fast_charge_hold": "Aan: de schakelaar blijft aan bij vol en houdt ze daar tot jij hem uitzet. Uit: hij schakelt zichzelf uit en je modus ontlaadt ze weer.",
-          "full_charge_minutes": "Eenmalig gemeten, per pack. Levert zowel de minuten-tot-vol-schatting als de bruikbare capaciteit die het zon-plafond nodig heeft. 0 verbergt beide in plaats van te gokken.",
-          "external_timeout": "In de modus Extern plan: komt er binnen deze tijd geen nieuw plan, dan gaat de sturing terug naar de meter volgen in plaats van te bevriezen op het laatste commando.",
-          "discharge_recovery": "Zodra een accu leeg is, wacht hij tot hij dit aantal procentpunten boven zijn ondergrens zit voordat hij weer ontlaadt. Zonder dit wordt een accu die door de zon van 5 % naar 6 % gaat meteen weer naar 5 % ontladen, keer op keer - en onderin de accu is cyclen het duurst. Geteld bóven de ondergrens, dus hij volgt je SoC-reserve en de eigen ontlaadlimiet van elke accu. Opladen wordt nooit geblokkeerd, en een accu die van vol naar beneden komt loopt gewoon door tot zijn limiet. 0 zet het uit.",
           "kp_return": "Hoe snel de opdracht weer wordt afgebouwd. Bewust hoger dan de factor hierboven: teruggaan kan niet gaan slingeren, en het is precies wat voorkomt dat de accus terugleveren aan een verbruik dat al weg is. Zet hem gelijk aan de factor hierboven voor het oude, symmetrische gedrag.",
-          "trace": "Eén CSV-regel per tick in config/battery_management_trace/, zodat een vraag over vorige week nog te beantwoorden is. Kost ongeveer 2 MB per dag.",
-          "trace_days": "Hele dagen ouder dan dit worden verwijderd.",
-          "grid_max_age": "Stop met regelen zodra de meter zo lang niets meer heeft gemeld, in plaats van door te rekenen op een getal dat stilstaat. Een bevroren meting blijft gewoon leesbaar, dus niets anders merkt het op: het setpoint loopt naar volle ontlading en blijft daar. 0 vertrouwt de meting ongeacht zijn leeftijd."
+          "interval": "Seconden tussen beslissingen. Ga niet onder 15: de Modbus-sensoren lopen 10-30 s achter, en bij 10 s liepen beide packs op en ontlaadden ze in een teruglevering.",
+          "min_output": "Het kleinste vermogen dat een accu ooit krijgt. Het wordt nooit gesplitst in twee aandelen hieronder, nooit lager uitgedeeld, en er wordt nooit minder gevraagd - zo'n kleine waarde regelt een accu niet nauwkeurig en zijn eigen firmware zegt dat ook. Kleine vraag gaat naar één accu; onder driekwart van deze waarde stoppen ze helemaal, zodat een setpoint vlak bij de grens ze niet elke tick aan en uit zet. Het setpoint blijft ondertussen integreren, dus een aanhoudende kleine afname klimt er vanzelf overheen. Meet hem voor jouw hardware."
+        }
+      },
+      "battery": {
+        "title": "Accu's",
+        "description": "Wat de packs zelf aankunnen, en wat er aan de uitersten gebeurt. Dit vul je één keer in en verandert daarna niet meer zolang de hardware dezelfde blijft - anders dan de regelparameters, waar je aan draait terwijl je de meter bekijkt.\n\nOpslaan herlaadt de integratie.",
+        "data": {
+          "unit_max": "Maximaal vermogen per unit (W)",
+          "full_charge_minutes": "Minuten van leeg naar vol op vol vermogen",
+          "discharge_recovery": "Eerst zover terugladen voordat hij weer ontlaadt (%)",
+          "fast_charge_hold": "Accu's vol houden na snelladen"
+        },
+        "data_description": {
+          "unit_max": "Harde bovengrens per pack, nodig omdat het maximum dat de doel-entiteit zelf meldt onbetrouwbaar is - een unit hier meldt 10000 voor een 3500 W-apparaat.",
+          "full_charge_minutes": "Eenmalig gemeten, per pack. Levert zowel de minuten-tot-vol-schatting als de bruikbare capaciteit die het zon-plafond nodig heeft. 0 verbergt beide in plaats van te gokken.",
+          "discharge_recovery": "Zodra een accu leeg is, wacht hij tot hij dit aantal procentpunten boven zijn ondergrens zit voordat hij weer ontlaadt. Zonder dit wordt een accu die door de zon van 5 % naar 6 % gaat meteen weer naar 5 % ontladen, keer op keer - en onderin de accu is cyclen het duurst. Geteld bóven de ondergrens, dus hij volgt je SoC-reserve en de eigen ontlaadlimiet van elke accu. Opladen wordt nooit geblokkeerd, en een accu die van vol naar beneden komt loopt gewoon door tot zijn limiet. 0 zet het uit.",
+          "fast_charge_hold": "Aan: de schakelaar blijft aan bij vol en houdt ze daar tot jij hem uitzet. Uit: hij schakelt zichzelf uit en je modus ontlaadt ze weer."
+        }
+      },
+      "dynamic": {
+        "title": "Dynamisch tarief",
+        "description": "Optioneel. Zonder prijssensor verschijnt de modus Dynamisch niet en verandert er verder niets. Beursprijzen volstaan: belasting en opslag verschuiven elk uur even veel, dus de volgorde van goedkoop naar duur blijft gelijk.\n\nHoe vol inkopen de accu's mag maken staat op drie plekken, in oplopende volgorde van gezag: het terugval-plafond hieronder, daarboven het gemeten zon-plafond, en daaromheen de twee schuiven \"Inkopen tot: minstens\" en \"Inkopen tot: hoogstens\" op de apparaatpagina - die zijn entiteiten, zodat je ze kunt bijstellen zonder herladen.",
+        "data": {
+          "price_source": "Waar de prijzen vandaan komen",
+          "price_resolution": "Hoe de prijzen gelezen worden",
+          "cheap_hours": "Uren per dag om op in te kopen",
+          "price_margin": "Minimale besparing",
+          "expensive_hours": "Uren per dag om als duur te markeren",
+          "charge_below_soc": "Inkopen tot (terugval, %)",
+          "fill_before_dear_day": "Vol maken voor een dure dag"
+        },
+        "data_description": {
+          "price_source": "Zelf ophalen scheelt het installeren van een tweede custom integratie, en dat telt bij een huis waar je niet woont. Frank Energie publiceert zijn marktprijzen openbaar, dus inloggen is niet nodig - en de prijs die gebruikt wordt is de all-in prijs, inclusief belasting en opslag, niet de kale beursprijs. Kies de sensor-optie voor elke andere leverancier: Nord Pool, ENTSO-e, EnergyZero, Tibber en de rest worden op vorm herkend.",
+          "price_resolution": "De markt rekent af per kwartier en leveranciers gaan zo publiceren. Nemen zoals gepubliceerd is het nauwkeurigst - de coördinator koopt dan gerust op één goedkoop kwartier. Per uur leest makkelijker: 24 staafjes in plaats van 96, maar de uitschieters binnen een uur middelen weg. Wat je kiest geldt voor de beslissingen én de grafiek, zodat die het nooit oneens kunnen zijn.",
+          "cheap_hours": "Hoeveel van de goedkoopste momenten van de komende dag gebruikt mogen worden om van het net te laden. Gerangschikt over een rollende 24 uur, niet over alles wat gepubliceerd is.",
+          "price_margin": "Koop alleen van het net als het uur minstens dit bedrag per kWh goedkoper is dan de dure uren waarvoor bewaard wordt. Dekt het rendementsverlies (~12%) plus slijtage, en voorkomt dat \"de 3 goedkoopste resterende uren\" het duurste uur van de dag goedkoop noemt. 0 = alleen rangschikken.",
+          "expensive_hours": "Kleurt alleen de prijsgrafiek: dit zijn de uren die als duurste worden getoond. Het houdt de packs niet tegen met ontladen - grid-nul is in elke modus de vloer, dus de packs dekken het huis ongeacht wat het uur kost. 0 verbergt de kleuring.",
+          "charge_below_soc": "Terugval-plafond: hoe vol inkopen de accu's hoogstens mag maken zolang de laadduur ongemeten is. Zodra die gemeten is neemt het zon-plafond het over, en dat blijft binnen de twee schuiven \"Inkopen tot: minstens\" en \"Inkopen tot: hoogstens\" op de apparaatpagina.",
+          "fill_before_dear_day": "Standaard uit. Aan: als de goedkope uren van morgen duidelijk duurder zijn dan wat er van vandaag over is, koopt hij door tot \"Inkopen tot: hoogstens\" in plaats van te stoppen bij het plafond dat er anders zou gelden. Hij koopt nooit ruimte die de zon nog zou vullen - die stroom is gratis, en inkopen betekent dat je de middag exporteert in plaats van opslaat - dus met een zonvoorspelling ingesteld verandert dit weinig."
+        }
+      },
+      "solar": {
+        "title": "Zon",
+        "description": "Wat de zon vandaag nog gaat brengen. Hier laat het laadplafond ruimte voor: wat de zon vanmiddag gratis levert wil je vannacht niet inkopen, want dan exporteer je die middag in plaats van hem op te slaan.\n\nLeeg laten kan gewoon - dan heeft het plafond niets om op te rekenen en gelden alleen de grenzen die je zelf zet. Hoeveel van de voorspelling er werkelijk in de accu's landt wordt over de afgelopen twee weken gemeten, dus een dak dat structureel mee- of tegenvalt corrigeert zichzelf.",
+        "data": {
+          "solar_forecast_sensors": "Zonverwachting-sensoren",
+          "solar_produced_sensor": "Vandaag al geproduceerd",
+          "solar_forecast_max": "Terugval: niet inkopen boven zoveel kWh verwacht"
+        },
+        "data_description": {
+          "solar_forecast_sensors": "Kies elk dakvlak; ze worden opgeteld. Liefst de 'resterend vandaag'-varianten - een dagtotaal klopt om 02:00 en niet om 17:00.",
+          "solar_produced_sensor": "Alleen nodig als hierboven een dagtotaal staat: dit wordt eraf getrokken, zodat overblijft wat er nog komt.",
+          "solar_forecast_max": "Alleen gebruikt zolang de laadduur ongemeten is, want zonder capaciteit is kWh niet in procenten om te rekenen. 0 negeert de verwachting."
+        }
+      },
+      "phases": {
+        "title": "Zekeringbewaking per fase",
+        "description": "De accu's zijn eenfasig en de regellus kent alleen het totaal van het huis. Een accu die 3500 W bijlaadt op een fase die al 20 A trekt, brengt die fase op 35 A - terwijl de andere twee half stil staan en het totaal er keurig uitziet.\n\nWijs hier de vermogenssensoren per fase aan, in de volgorde L1, L2, L3, en dan krijgt elke fase zijn eigen plafond. Laat de lijst leeg en er verandert niets.\n\nWelke accu op welke fase zit wordt gemeten, niet ingesteld: één accu krijgt opdracht terwijl de rest stil blijft, en de fase die meebeweegt is het antwoord.",
+        "data": {
+          "phase_power_sensors": "Vermogenssensoren per fase (L1, L2, L3)",
+          "phase_limit_amps": "Hoofdzekering per fase (A)",
+          "phase_voltage": "Nominale spanning (V)",
+          "phase_margin": "Marge die vrij blijft (%)",
+          "phase_detect": "Zelf uitzoeken welke accu op welke fase zit",
+          "phase_redetect": "Opnieuw meten na een herstart",
+          "phase_probe_seconds": "Meetduur (s)"
+        },
+        "data_description": {
+          "phase_power_sensors": "In de volgorde L1, L2, L3 - die volgorde bepaalt welke fase welke is. Zelfde teken als de hoofdmeter: + afname, - teruglevering. Leeg schakelt de hele bewaking uit. Eén sensor betekent een eenfase-aansluiting, en dan zit alles op die fase.",
+          "phase_limit_amps": "Waar je hoofdzekering per fase op staat, in Nederland meestal 25 of 35. Lees het af van de zekering zelf, niet van je contract.",
+          "phase_voltage": "Alleen gebruikt om ampères naar watt om te rekenen. 230 tenzij je beter weet.",
+          "phase_margin": "Blijft ongebruikt, voor de waterkoker die iemand aanzet terwijl wij aan het beslissen zijn. Tien procent van 25 A is 2,5 A speling. Een zekering is geen klif, maar hem tot de laatste ampère volzetten laat niets over voor de rest van het huis.",
+          "phase_detect": "Nergens in de Modbus-gegevens staat hoe de kabels lopen, dus het wordt gemeten: één accu krijgt opdracht terwijl de andere op 0 blijven, en de fase die meebeweegt is het antwoord. Duurt ongeveer een minuut per accu, en zolang regelen de accu's niet. Zet het uit als je de fases liever zelf invult bij elke unit.",
+          "phase_redetect": "Standaard aan: een integratie die uit heeft gestaan kan niet weten wat er ondertussen veranderd is. Zet het uit zodra de bedrading bekend en stabiel is - anders staan de accu's na elke herstart een minuut stil.",
+          "phase_probe_seconds": "Hoe lang één accu op vermogen wordt gehouden voordat de fases worden afgelezen. Langer is betrouwbaarder en storender; de accu's reageren pas na een paar seconden en de meter nog wat later."
         }
       },
       "units": {
@@ -158,30 +219,20 @@
           "power_sensor": "De eigen vermogensmeting van de accu. Wordt nooit gebruikt om te sturen - hij loopt 10-30 s achter - maar hiermee laat het logboek zien wat de accu werkelijk deed naast wat hij opgedragen kreeg."
         }
       },
-      "dynamic": {
-        "title": "Dynamisch tarief",
-        "description": "Optioneel. Zonder prijssensor verschijnt de modus Dynamisch niet en verandert er verder niets. Beursprijzen volstaan: belasting en opslag verschuiven elk uur even veel, dus de volgorde van goedkoop naar duur blijft gelijk.",
+      "logging": {
+        "title": "Logboek en vangnetten",
+        "description": "Het logboekbestand, plus de twee tijdslimieten die voorkomen dat een meting of een plan dat stil is blijven staan, behandeld wordt alsof hij vers is. Een bevroren waarde blijft namelijk gewoon leesbaar, dus niets anders merkt het op.\n\nOpslaan herlaadt de integratie.",
         "data": {
-          "price_source": "Waar de prijzen vandaan komen",
-          "cheap_hours": "Uren per dag om op in te kopen",
-          "charge_below_soc": "Alleen inkopen onder deze SoC (%)",
-          "solar_forecast_max": "Terugval: niet inkopen boven zoveel kWh verwacht",
-          "expensive_hours": "Uren per dag om als duur te markeren",
-          "solar_forecast_sensors": "Zonverwachting-sensoren",
-          "solar_produced_sensor": "Vandaag al geproduceerd",
-          "price_resolution": "Hoe de prijzen gelezen worden",
-          "price_margin": "Minimale besparing"
+          "trace": "Logboekbestand schrijven",
+          "trace_days": "Bewaren",
+          "grid_max_age": "Meter negeren na (seconden)",
+          "external_timeout": "Minuten dat een extern setpoint geldig blijft"
         },
         "data_description": {
-          "price_source": "Zelf ophalen scheelt het installeren van een tweede custom integratie, en dat telt bij een huis waar je niet woont. Frank Energie publiceert zijn marktprijzen openbaar, dus inloggen is niet nodig - en de prijs die gebruikt wordt is de all-in prijs, inclusief belasting en opslag, niet de kale beursprijs. Kies de sensor-optie voor elke andere leverancier: Nord Pool, ENTSO-e, EnergyZero, Tibber en de rest worden op vorm herkend.",
-          "cheap_hours": "Hoeveel van de goedkoopste momenten van de komende dag gebruikt mogen worden om van het net te laden. Gerangschikt over een rollende 24 uur, niet over alles wat gepubliceerd is.",
-          "charge_below_soc": "Terugval-plafond, alleen gebruikt zolang de laadduur ongemeten is. Daarna neemt het zon-plafond het over.",
-          "solar_forecast_max": "Alleen gebruikt zolang de laadduur ongemeten is, want zonder capaciteit is kWh niet in procenten om te rekenen. 0 negeert de verwachting.",
-          "expensive_hours": "Kleurt alleen de prijsgrafiek: dit zijn de uren die als duurste worden getoond. Het houdt de packs niet tegen met ontladen - grid-nul is in elke modus de vloer, dus de packs dekken het huis ongeacht wat het uur kost. 0 verbergt de kleuring.",
-          "solar_forecast_sensors": "Kies elk dakvlak; ze worden opgeteld. Liefst de 'resterend vandaag'-varianten - een dagtotaal klopt om 02:00 en niet om 17:00.",
-          "solar_produced_sensor": "Alleen nodig als hierboven een dagtotaal staat: dit wordt eraf getrokken, zodat overblijft wat er nog komt.",
-          "price_resolution": "De markt rekent af per kwartier en leveranciers gaan zo publiceren. Nemen zoals gepubliceerd is het nauwkeurigst - de coördinator koopt dan gerust op één goedkoop kwartier. Per uur leest makkelijker: 24 staafjes in plaats van 96, maar de uitschieters binnen een uur middelen weg. Wat je kiest geldt voor de beslissingen én de grafiek, zodat die het nooit oneens kunnen zijn.",
-          "price_margin": "Koop alleen van het net als het uur minstens dit bedrag per kWh goedkoper is dan de dure uren waarvoor bewaard wordt. Dekt het rendementsverlies (~12%) plus slijtage, en voorkomt dat \"de 3 goedkoopste resterende uren\" het duurste uur van de dag goedkoop noemt. 0 = alleen rangschikken."
+          "trace": "Eén CSV-regel per tick in config/battery_management_trace/, zodat een vraag over vorige week nog te beantwoorden is. Kost ongeveer 2 MB per dag.",
+          "trace_days": "Hele dagen ouder dan dit worden verwijderd.",
+          "grid_max_age": "Stop met regelen zodra de meter zo lang niets meer heeft gemeld, in plaats van door te rekenen op een getal dat stilstaat. Een bevroren meting blijft gewoon leesbaar, dus niets anders merkt het op: het setpoint loopt naar volle ontlading en blijft daar. 0 vertrouwt de meting ongeacht zijn leeftijd.",
+          "external_timeout": "In de modus Extern plan: komt er binnen deze tijd geen nieuw plan, dan gaat de sturing terug naar de meter volgen in plaats van te bevriezen op het laatste commando."
         }
       },
       "shadow": {
@@ -206,28 +257,6 @@
         "data_description": {
           "mode_control": "De stand waar deze pack in moet staan voordat hij opdrachten aanneemt. Meestal third_party_control.",
           "mode_safe": "Waar hij naartoe gezet wordt als je uitschakelt of Home Assistant afsluit. Leeg laten bij een pack zonder eigen meter: die krijgt dan alleen 0 W en zijn modus blijft ongemoeid, wat een veilige ruststand is."
-        }
-      },
-      "phases": {
-        "title": "Zekeringbewaking per fase",
-        "description": "De accu's zijn eenfasig en de regellus kent alleen het totaal van het huis. Een accu die 3500 W bijlaadt op een fase die al 20 A trekt, brengt die fase op 35 A - terwijl de andere twee half stil staan en het totaal er keurig uitziet.\n\nWijs hier de vermogenssensoren per fase aan, in de volgorde L1, L2, L3, en dan krijgt elke fase zijn eigen plafond. Laat de lijst leeg en er verandert niets.\n\nWelke accu op welke fase zit wordt gemeten, niet ingesteld: één accu krijgt opdracht terwijl de rest stil blijft, en de fase die meebeweegt is het antwoord.",
-        "data": {
-          "phase_power_sensors": "Vermogenssensoren per fase (L1, L2, L3)",
-          "phase_limit_amps": "Hoofdzekering per fase (A)",
-          "phase_voltage": "Nominale spanning (V)",
-          "phase_margin": "Marge die vrij blijft (%)",
-          "phase_detect": "Zelf uitzoeken welke accu op welke fase zit",
-          "phase_redetect": "Opnieuw meten na een herstart",
-          "phase_probe_seconds": "Meetduur (s)"
-        },
-        "data_description": {
-          "phase_power_sensors": "In de volgorde L1, L2, L3 - die volgorde bepaalt welke fase welke is. Zelfde teken als de hoofdmeter: + afname, - teruglevering. Leeg schakelt de hele bewaking uit. Eén sensor betekent een eenfase-aansluiting, en dan zit alles op die fase.",
-          "phase_limit_amps": "Waar je hoofdzekering per fase op staat, in Nederland meestal 25 of 35. Lees het af van de zekering zelf, niet van je contract.",
-          "phase_voltage": "Alleen gebruikt om ampères naar watt om te rekenen. 230 tenzij je beter weet.",
-          "phase_margin": "Blijft ongebruikt, voor de waterkoker die iemand aanzet terwijl wij aan het beslissen zijn. Tien procent van 25 A is 2,5 A speling. Een zekering is geen klif, maar hem tot de laatste ampère volzetten laat niets over voor de rest van het huis.",
-          "phase_detect": "Nergens in de Modbus-gegevens staat hoe de kabels lopen, dus het wordt gemeten: één accu krijgt opdracht terwijl de andere op 0 blijven, en de fase die meebeweegt is het antwoord. Duurt ongeveer een minuut per accu, en zolang regelen de accu's niet. Zet het uit als je de fases liever zelf invult bij elke unit.",
-          "phase_redetect": "Standaard aan: een integratie die uit heeft gestaan kan niet weten wat er ondertussen veranderd is. Zet het uit zodra de bedrading bekend en stabiel is - anders staan de accu's na elke herstart een minuut stil.",
-          "phase_probe_seconds": "Hoe lang één accu op vermogen wordt gehouden voordat de fases worden afgelezen. Langer is betrouwbaarder en storender; de accu's reageren pas na een paar seconden en de meter nog wat later."
         }
       },
       "price_entity": {
@@ -330,16 +359,30 @@
       }
     },
     "switch": {
+      "coordinator_enabled": {
+        "name": "Coördinator ingeschakeld"
+      },
       "dry_run": {
         "name": "Proefdraaien"
+      },
+      "fast_charge": {
+        "name": "Snelladen (noodgeval)"
       }
     },
     "number": {
+      "soc_reserve": {
+        "name": "SoC-reserve"
+      },
       "buy_ceiling_min": {
-        "name": "Minstens inkopen tot"
+        "name": "Inkopen tot: minstens"
       },
       "buy_ceiling_max": {
-        "name": "Hoogstens inkopen tot"
+        "name": "Inkopen tot: hoogstens"
+      }
+    },
+    "button": {
+      "detect_phases": {
+        "name": "Fases detecteren"
       }
     }
   },

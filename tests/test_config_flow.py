@@ -28,7 +28,9 @@ from custom_components.battery_management.const import (  # noqa: E402
     CONF_PRICE_SENSOR,
     CONF_SOC_SENSOR,
     CONF_TARGET_NUMBER,
+    CONF_TRACE_DAYS,
     CONF_UNIT_COUNT,
+    CONF_UNIT_MAX,
     CONF_UNIT_NAME,
     CONF_PHASE_DETECT,
     CONF_SHADOW_SIMULATE,
@@ -182,10 +184,13 @@ async def test_options_menu_offers_every_section(hass: HomeAssistant):
 
     assert result["type"] is FlowResultType.MENU
     assert set(result["menu_options"]) == {
-        "tuning",
-        "units",
+        "control",
+        "battery",
         "dynamic",
+        "solar",
         "phases",
+        "units",
+        "logging",
         "shadow",
     }
 
@@ -235,13 +240,13 @@ async def test_options_dynamic_can_clear_the_price_sensor_again(hass: HomeAssist
     assert not entry.options.get(CONF_PRICE_SENSOR)
 
 
-async def test_options_tuning_saves_without_touching_the_units(hass: HomeAssistant):
+async def test_options_control_saves_without_touching_the_units(hass: HomeAssistant):
     entry = await _create_entry(hass)
     original_units = entry.data[CONF_UNITS]
 
     result = await hass.config_entries.options.async_init(entry.entry_id)
     result = await hass.config_entries.options.async_configure(
-        result["flow_id"], {"next_step_id": "tuning"}
+        result["flow_id"], {"next_step_id": "control"}
     )
     result = await hass.config_entries.options.async_configure(
         result["flow_id"], {CONF_KP: 0.4}
@@ -478,7 +483,7 @@ async def test_switching_to_a_supplier_clears_the_old_sensor(hass: HomeAssistant
 async def test_saving_one_section_does_not_erase_the_others(hass: HomeAssistant):
     """Home Assistant replaces the whole options dict, so a step that hands back
     only its own fields deletes every other section - silently. That is how a
-    tuning save wiped the solar sensors at the primary site."""
+    control-parameter save wiped the solar sensors at the primary site."""
     entry = await _create_entry(hass)
     hass.config_entries.async_update_entry(
         entry,
@@ -491,7 +496,9 @@ async def test_saving_one_section_does_not_erase_the_others(hass: HomeAssistant)
 
     # every screen that can be saved on its own, one at a time
     for section, payload in (
-        ("tuning", {CONF_KP: 0.3}),
+        ("control", {CONF_KP: 0.3}),
+        ("battery", {CONF_UNIT_MAX: 3500}),
+        ("logging", {CONF_TRACE_DAYS: 7}),
         ("phases", {CONF_PHASE_LIMIT_AMPS: 40}),
         ("shadow", {CONF_SHADOW_SIMULATE: False}),
     ):

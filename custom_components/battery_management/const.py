@@ -91,7 +91,8 @@ PRICE_TIMEOUT = 20
 # but a stale cache should not linger in the diagnostics looking authoritative.
 MAX_PRICE_AGE = 36 * 3600
 CONF_CHEAP_HOURS = "cheap_hours"                # hours per day to grid-charge on
-CONF_CHARGE_BELOW_SOC = "charge_below_soc"      # only top up when emptier than this
+CONF_CHARGE_BELOW_SOC = "charge_below_soc"      # buy up to here while unmeasured
+CONF_FILL_BEFORE_DEAR_DAY = "fill_before_dear_day"  # buy to the max before a dearer day
 # The reference a rank does not have. "The cheapest three hours of what is
 # left" always finds three, however dear they are - at 22:00 with only today
 # published it returned the most expensive hour of the day and the dashboard
@@ -131,6 +132,10 @@ DEFAULT_BUY_CEILING_MAX = 100
 
 DEFAULT_CHEAP_HOURS = 3
 DEFAULT_CHARGE_BELOW_SOC = 40
+#: Off. It overrides the plain "only top up below" threshold, which is a
+#: setting somebody chose, so it is opted into rather than arriving with an
+#: update. It never overrides the solar ceiling - see `_buy_ceiling`.
+DEFAULT_FILL_BEFORE_DEAR_DAY = False
 DEFAULT_SOLAR_FORECAST_MAX = 0        # 0 = ignore the forecast entirely
 # Rank the cheap hours over a rolling window rather than everything published:
 # with tomorrow already known, a 48 h ranking can decide nothing today is worth

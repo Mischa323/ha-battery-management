@@ -22,6 +22,7 @@ from .const import (
     CONF_DEADBAND,
     CONF_DEVICE,
     CONF_FAST_CHARGE_HOLD,
+    CONF_FILL_BEFORE_DEAR_DAY,
     CONF_BATTERY_POWER_SENSOR,
     CONF_CHARGE_BELOW_SOC,
     CONF_CHEAP_HOURS,
@@ -70,6 +71,7 @@ from .const import (
     DEFAULT_DEADBAND,
     DEFAULT_DISCHARGE_RECOVERY,
     DEFAULT_FAST_CHARGE_HOLD,
+    DEFAULT_FILL_BEFORE_DEAR_DAY,
     DEFAULT_CHARGE_BELOW_SOC,
     DEFAULT_CHEAP_HOURS,
     DEFAULT_PRICE_MARGIN,
@@ -190,7 +192,12 @@ def _mode_schema(options: list[str], defaults: dict) -> vol.Schema:
     return vol.Schema(schema)
 
 
-def _options_schema(defaults: dict) -> vol.Schema:
+def _control_schema(defaults: dict) -> vol.Schema:
+    """How the loop chases the meter. Nothing here knows about prices or sun.
+
+    These are the numbers that decide how hard and how often the packs are
+    corrected, and they are the ones worth leaving alone once a site is stable.
+    """
     return vol.Schema(
         {
             vol.Optional(CONF_BIAS, default=defaults.get(CONF_BIAS, DEFAULT_BIAS)): int,
@@ -204,19 +211,27 @@ def _options_schema(defaults: dict) -> vol.Schema:
                 ),
             ): vol.Coerce(float),
             vol.Optional(CONF_INTERVAL, default=defaults.get(CONF_INTERVAL, DEFAULT_INTERVAL)): int,
-            vol.Optional(
-                CONF_GRID_MAX_AGE,
-                default=defaults.get(CONF_GRID_MAX_AGE, DEFAULT_GRID_MAX_AGE),
-            ): int,
             vol.Optional(CONF_MIN_OUTPUT, default=defaults.get(CONF_MIN_OUTPUT, DEFAULT_MIN_OUTPUT)): int,
+        }
+    )
+
+
+def _battery_schema(defaults: dict) -> vol.Schema:
+    """What the packs themselves can do, and what happens at the extremes.
+
+    Split out of the control settings because these are properties of the
+    hardware - measured once, then left - rather than knobs you tune while
+    watching the meter.
+    """
+    return vol.Schema(
+        {
             vol.Optional(CONF_UNIT_MAX, default=defaults.get(CONF_UNIT_MAX, DEFAULT_UNIT_MAX)): int,
             vol.Optional(
-                CONF_TRACE, default=defaults.get(CONF_TRACE, DEFAULT_TRACE)
-            ): bool,
-            vol.Optional(
-                CONF_TRACE_DAYS,
-                default=defaults.get(CONF_TRACE_DAYS, DEFAULT_TRACE_DAYS),
-            ): _amount(1, 90, "dagen"),
+                CONF_FULL_CHARGE_MINUTES,
+                default=defaults.get(
+                    CONF_FULL_CHARGE_MINUTES, DEFAULT_FULL_CHARGE_MINUTES
+                ),
+            ): int,
             vol.Optional(
                 CONF_DISCHARGE_RECOVERY,
                 default=defaults.get(
@@ -227,11 +242,25 @@ def _options_schema(defaults: dict) -> vol.Schema:
                 CONF_FAST_CHARGE_HOLD,
                 default=defaults.get(CONF_FAST_CHARGE_HOLD, DEFAULT_FAST_CHARGE_HOLD),
             ): bool,
+        }
+    )
+
+
+def _logging_schema(defaults: dict) -> vol.Schema:
+    """The trace file, and the two timeouts that stop a stale input being acted
+    on as though it were fresh."""
+    return vol.Schema(
+        {
             vol.Optional(
-                CONF_FULL_CHARGE_MINUTES,
-                default=defaults.get(
-                    CONF_FULL_CHARGE_MINUTES, DEFAULT_FULL_CHARGE_MINUTES
-                ),
+                CONF_TRACE, default=defaults.get(CONF_TRACE, DEFAULT_TRACE)
+            ): bool,
+            vol.Optional(
+                CONF_TRACE_DAYS,
+                default=defaults.get(CONF_TRACE_DAYS, DEFAULT_TRACE_DAYS),
+            ): _amount(1, 90, "dagen"),
+            vol.Optional(
+                CONF_GRID_MAX_AGE,
+                default=defaults.get(CONF_GRID_MAX_AGE, DEFAULT_GRID_MAX_AGE),
             ): int,
             vol.Optional(
                 CONF_EXTERNAL_TIMEOUT,
@@ -244,7 +273,12 @@ def _options_schema(defaults: dict) -> vol.Schema:
 def _dynamic_schema(defaults: dict) -> vol.Schema:
     """Everything the Dynamic mode needs. All optional - without a price sensor
     the mode is simply not offered, and the rest of the integration is
-    unaffected."""
+    unaffected.
+
+    The solar questions used to live here too, which put the two halves of one
+    decision on one long screen: these fields say *when* to buy, the solar ones
+    say *how much room to leave the sun*. They are their own section now.
+    """
     return vol.Schema(
         {
             vol.Required(
@@ -275,10 +309,6 @@ def _dynamic_schema(defaults: dict) -> vol.Schema:
                 default=defaults.get(CONF_CHEAP_HOURS, DEFAULT_CHEAP_HOURS),
             ): vol.Coerce(float),
             vol.Optional(
-                CONF_CHARGE_BELOW_SOC,
-                default=defaults.get(CONF_CHARGE_BELOW_SOC, DEFAULT_CHARGE_BELOW_SOC),
-            ): int,
-            vol.Optional(
                 CONF_PRICE_MARGIN,
                 default=defaults.get(CONF_PRICE_MARGIN, DEFAULT_PRICE_MARGIN),
             ): vol.Coerce(float),
@@ -286,6 +316,30 @@ def _dynamic_schema(defaults: dict) -> vol.Schema:
                 CONF_EXPENSIVE_HOURS,
                 default=defaults.get(CONF_EXPENSIVE_HOURS, DEFAULT_EXPENSIVE_HOURS),
             ): vol.Coerce(float),
+            # the third of the three "how full does buying fill them" settings.
+            # The other two are entities, so that they can be moved while you
+            # watch what yesterday actually did; this one is a fallback for
+            # before the capacity has been measured, so it belongs with the
+            # rest of the buying rules rather than on a screen of its own.
+            vol.Optional(
+                CONF_CHARGE_BELOW_SOC,
+                default=defaults.get(CONF_CHARGE_BELOW_SOC, DEFAULT_CHARGE_BELOW_SOC),
+            ): int,
+            vol.Optional(
+                CONF_FILL_BEFORE_DEAR_DAY,
+                default=defaults.get(
+                    CONF_FILL_BEFORE_DEAR_DAY, DEFAULT_FILL_BEFORE_DEAR_DAY
+                ),
+            ): bool,
+        }
+    )
+
+
+def _solar_schema(defaults: dict) -> vol.Schema:
+    """What the sun is expected to bring, which is what the buy ceiling leaves
+    room for. Empty here simply means the ceiling has nothing to go on."""
+    return vol.Schema(
+        {
             # several: Forecast.Solar publishes one sensor per roof plane
             vol.Optional(
                 CONF_SOLAR_FORECAST_SENSORS,
@@ -545,27 +599,78 @@ class BatteryManagementOptionsFlow(OptionsFlow):
         return self.async_create_entry(title="", data=self._merged(user_input, *clears))
 
     async def async_step_init(self, user_input: dict | None = None) -> ConfigFlowResult:
+        """One screen per question somebody actually has.
+
+        This was three screens, one of which - "tuning" - had collected
+        everything that did not obviously belong anywhere else: the gain of the
+        control loop next to how long a trace file is kept. Sections are cheap
+        and scrolling past fourteen unrelated fields to find one is not, so they
+        are split by what the setting is *about*, in the order you would meet
+        them: regulate, then the packs, then prices, then sun, then the
+        protections, then the plumbing.
+        """
         return self.async_show_menu(
             step_id="init",
-            menu_options=["tuning", "units", "dynamic", "phases", "shadow"],
+            menu_options=[
+                "control",
+                "battery",
+                "dynamic",
+                "solar",
+                "phases",
+                "units",
+                "logging",
+                "shadow",
+            ],
         )
 
-    async def async_step_tuning(self, user_input: dict | None = None) -> ConfigFlowResult:
+    async def async_step_control(
+        self, user_input: dict | None = None
+    ) -> ConfigFlowResult:
         if user_input is not None:
             return self._save(user_input)
         defaults = {**self._entry.data, **self._entry.options}
         return self.async_show_form(
-            step_id="tuning", data_schema=_options_schema(defaults)
+            step_id="control", data_schema=_control_schema(defaults)
+        )
+
+    async def async_step_battery(
+        self, user_input: dict | None = None
+    ) -> ConfigFlowResult:
+        if user_input is not None:
+            return self._save(user_input)
+        defaults = {**self._entry.data, **self._entry.options}
+        return self.async_show_form(
+            step_id="battery", data_schema=_battery_schema(defaults)
+        )
+
+    async def async_step_logging(
+        self, user_input: dict | None = None
+    ) -> ConfigFlowResult:
+        if user_input is not None:
+            return self._save(user_input)
+        defaults = {**self._entry.data, **self._entry.options}
+        return self.async_show_form(
+            step_id="logging", data_schema=_logging_schema(defaults)
+        )
+
+    async def async_step_solar(
+        self, user_input: dict | None = None
+    ) -> ConfigFlowResult:
+        if user_input is not None:
+            # an emptied picker must actually clear, not fall back to the old one
+            return self._save(
+                user_input, CONF_SOLAR_FORECAST_SENSORS, CONF_SOLAR_PRODUCED_SENSOR
+            )
+        defaults = {**self._entry.data, **self._entry.options}
+        return self.async_show_form(
+            step_id="solar", data_schema=_solar_schema(defaults)
         )
 
     async def async_step_dynamic(
         self, user_input: dict | None = None
     ) -> ConfigFlowResult:
         if user_input is not None:
-            # an emptied picker must actually clear, not fall back to the old one
-            merged = self._merged(
-                user_input, CONF_SOLAR_FORECAST_SENSORS, CONF_SOLAR_PRODUCED_SENSOR
-            )
+            merged = self._merged(user_input)
             # Which price source, then which supplier or which sensor. Only the
             # sensor route needs a second screen; asking anyway would be a form
             # with one disabled field on it.

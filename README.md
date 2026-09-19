@@ -52,6 +52,23 @@ Manual install: copy `custom_components/battery_management` into your HA
 
 ## Tunables (Configure)
 
+*Configure* opens a menu, one entry per question somebody actually has. Every
+field carries its own explanation underneath it in Home Assistant, so this is
+only a map of where to look:
+
+| Screen | What lives there |
+| --- | --- |
+| **Regulating** | How hard and how often the packs are corrected: bias, deadband, the two gains, the tick interval, the minimum output. |
+| **The packs** | What the hardware can take: max per unit, minutes from empty to full, the discharge-recovery band, whether a fast charge holds. |
+| **Dynamic tariff** | When to buy and what counts as dear — including the fallback buy ceiling and *fill up before a dearer day*. |
+| **Solar** | The forecast sensors, and the fallback kWh limit. This is what the buy ceiling leaves room for. |
+| **Fuse protection per phase** | The per-leg sensors and the limit under them. |
+| **Battery unit entities** | Correcting a mis-picked entity on a pack, without deleting the entry. |
+| **Logging and safety nets** | The trace file, and the two staleness timeouts. |
+| **Shadow running** | Only relevant while *Dry run* is on. |
+
+The regulating defaults:
+
 | Option | Default | Meaning |
 | --- | --- | --- |
 | Import bias | 30 W | aim for a tiny import so you never export |
@@ -60,7 +77,7 @@ Manual install: copy `custom_components/battery_management` into your HA
 | Return gain | 2 × Kp | how fast the command is wound back *down* (see below) |
 | Interval | 15 s | control tick period |
 | Min output | 150 W | below this a unit is idled (avoids micro-cycling) |
-| Max per unit | 3500 W | hard ceiling per unit |
+| Max per unit | 3500 W | hard ceiling per unit (under *The packs*) |
 
 ### Why the two gains differ
 
@@ -757,8 +774,8 @@ they never sit idle merely because they are inside a window.
 | Number | What it does |
 | --- | --- |
 | **SoC reserve** | Charge held back, in every mode. Raises each pack's *own* discharge floor rather than clamping the pair, so the split tapers towards it and a fuller pack carries the load alone. 0 = off. |
-| **Buy at least to** | Floor under the computed charge ceiling. Use it when the solar forecast is too gloomy to trust. |
-| **Buy at most to** | Cap on the computed charge ceiling. Use it when the forecast under-reads, which would otherwise let it buy more than needed. |
+| **Buy up to: at least** | Floor under the computed charge ceiling. Use it when the solar forecast is too gloomy to trust. |
+| **Buy up to: at most** | Cap on the computed charge ceiling. Use it when the forecast under-reads, which would otherwise let it buy more than needed. |
 
 The last two bound grid buying only. Charging from your own surplus is never
 capped — that would be throwing sun away.
@@ -972,7 +989,7 @@ question for tomorrow's prices to answer: with a much cheaper day coming there
 is no sense filling to the brim tonight.
 
 So when the cheap hours beyond local midnight are cheaper than the rest of
-today by more than the margin, the ceiling drops to **Buy at least to** — take
+today by more than the margin, the ceiling drops to **Buy up to: at least** — take
 what tonight needs, top up on the cheap day. That comparison is made across the
 day boundary rather than across the peak: everything beyond a peak is dearer
 than the cheap hour before it on every ordinary day, so that comparison fires
@@ -984,19 +1001,32 @@ packs that hold exactly that much means buy nothing, peak ahead or not; half a
 day of sun means buy to half and leave the rest to the roof. The peak boundary
 decides **when** it may buy, never how much.
 
-**This does nothing until you set a floor.** *Buy at least to* ships at 0, and
+**This does nothing until you set a floor.** *Buy up to: at least* ships at 0, and
 reading that as a level to stop at would mean "buy nothing", which is the fault
 it was reported alongside. With no floor stated, nothing is lowered.
 
-There is deliberately no move in the other direction — a dearer tomorrow does
-not raise the ceiling. It would override both *Only top up below* and the solar
-headroom on most autumn days, and buying room the sun was going to fill does
-not make tomorrow cheaper; it exports the afternoon instead of storing it.
+### Filling up before a dearer day
+
+The other direction is a setting rather than a behaviour, because it overrides
+*Buy up to (fallback)* — a threshold somebody chose — and that should be opted
+into rather than arrive with an update.
+
+**Fill up before a dearer day** (off by default, under *Configure → Dynamic
+tariff*): when
+tomorrow's cheap hours are clearly dearer than what is left of today, buy to
+*Buy up to: at most* instead of stopping at *Buy up to (fallback)*.
+
+It **never buys room the sun is expected to fill**. That is not caution, it is
+arithmetic: that energy is free, and buying it does not make tomorrow cheaper —
+it exports the afternoon instead of storing it. So it only lifts a ceiling the
+plain SoC threshold was holding down, never one the sun was, and with a solar
+forecast configured it changes little. *Buy up to: at most* is still the last word
+on how full.
 
 ### Bounding it by hand
 
 Two sliders bound the computed ceiling, because it is only as good as the solar
-forecast behind it: **Buy at least to** and **Buy at most to**. Leave them at
+forecast behind it: **Buy up to: at least** and **Buy up to: at most**. Leave them at
 0 and 100 and the calculation passes through untouched. They only limit buying
 from the grid — charging from your own surplus is never capped, since that would
 be throwing sun away.

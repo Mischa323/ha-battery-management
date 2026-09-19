@@ -31,7 +31,6 @@ class ModeSelect(SelectEntity):
 
     _attr_has_entity_name = True
     _attr_should_poll = False
-    _attr_name = "Mode"
     _attr_icon = "mdi:tune-variant"
     _attr_translation_key = "mode"
 

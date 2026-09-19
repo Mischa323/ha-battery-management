@@ -6,6 +6,7 @@ meant has already happened once.
 """
 from __future__ import annotations
 
+import ast
 import json
 import pathlib
 import re
@@ -155,12 +156,100 @@ def test_every_policy_and_detection_state_is_named(path):
     assert set(PHASE_DETECT_STATES) <= set(sensors["phase_detection"]["state"])
 
 
-def test_translated_entities_are_reached_by_a_translation_key():
-    """`_attr_name` bypasses the translation file entirely, so a state listed
-    here would never be applied and the dashboard would show the raw slug."""
-    source = (COMPONENT / "sensor.py").read_text(encoding="utf-8")
-    keys = set(re.findall(r'_attr_translation_key = "([^"]+)"', source))
+def translation_keys(domain: str) -> set[str]:
+    source = (COMPONENT / f"{domain}.py").read_text(encoding="utf-8")
+    return set(re.findall(r'_attr_translation_key = "([^"]+)"', source))
 
-    for key, entity in load(FILES[0])["entity"]["sensor"].items():
-        if "state" in entity:
-            assert key in keys, f"{key} has state translations but no entity uses it"
+
+@pytest.mark.parametrize("path", FILES, ids=lambda p: p.name)
+def test_translated_entities_are_reached_by_a_translation_key(path):
+    """A translation nothing points at is a translation nobody ever sees.
+
+    Home Assistant finds an entity's name and its states by its
+    `translation_key`. An entity that does not set one is simply not looked up,
+    and the file below can say whatever it likes: the dashboard keeps showing
+    the English `_attr_name`, or the bare state slug. Both halves of the price
+    ceiling were named in Dutch here for months and neither name ever appeared.
+    """
+    for domain, entities in load(path)["entity"].items():
+        keys = translation_keys(domain)
+        for key in entities:
+            assert key in keys, f"{domain}.{key} is translated but nothing uses it"
+
+
+def test_no_entity_names_itself_past_its_translation():
+    """`_attr_name` wins over the translation, so setting both is setting none.
+
+    This is the exact shape of that months-long bug: the key was there, the
+    Dutch name was there, and one line of `_attr_name` above it meant Home
+    Assistant never asked.
+    """
+    for path in sorted(COMPONENT.glob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.ClassDef):
+                continue
+            assigned = {
+                target.id
+                for statement in node.body
+                if isinstance(statement, ast.Assign)
+                for target in statement.targets
+                if isinstance(target, ast.Name)
+            }
+            assert not {"_attr_name", "_attr_translation_key"} <= assigned, (
+                f"{path.name}:{node.name} names itself past its translation"
+            )
+
+
+#: which options screen each schema fills in. Written out rather than derived,
+#: so that moving a field between screens has to be a deliberate edit here too.
+SCHEMAS = {
+    "_control_schema": "control",
+    "_battery_schema": "battery",
+    "_logging_schema": "logging",
+    "_dynamic_schema": "dynamic",
+    "_solar_schema": "solar",
+    "_phases_schema": "phases",
+    "_price_entity_schema": "price_entity",
+    "_shadow_schema": "shadow",
+}
+
+
+def schema_fields() -> dict[str, set[str]]:
+    """Step -> the option keys its schema actually asks for.
+
+    Read out of the source and resolved through `const`, so a field renamed on
+    one side and not the other is a failure rather than a blank label.
+    """
+    from custom_components.battery_management import const
+
+    tree = ast.parse((COMPONENT / "config_flow.py").read_text(encoding="utf-8"))
+    functions = {
+        node.name: node for node in tree.body if isinstance(node, ast.FunctionDef)
+    }
+
+    fields: dict[str, set[str]] = {}
+    for name, step in SCHEMAS.items():
+        assert name in functions, f"no {name} to fill in the {step} screen"
+        fields[step] = {
+            getattr(const, node.args[0].id)
+            for node in ast.walk(functions[name])
+            if isinstance(node, ast.Call)
+            and getattr(node.func, "attr", "") in ("Optional", "Required")
+            and node.args
+            and isinstance(node.args[0], ast.Name)
+            and node.args[0].id.startswith("CONF_")
+        }
+    return fields
+
+
+@pytest.mark.parametrize("path", FILES, ids=lambda p: p.name)
+def test_every_field_on_a_screen_is_named_and_explained(path):
+    """A field with no label renders as its raw key, an explanation with no
+    field renders as nothing at all. Splitting one long screen into several is
+    exactly where a field goes missing from both."""
+    steps = load(path)["options"]["step"]
+
+    for step, fields in schema_fields().items():
+        assert fields == set(steps[step]["data"]), step
+        assert fields == set(steps[step]["data_description"]), step

@@ -43,7 +43,7 @@ class _BaseSwitch(SwitchEntity):
 
 
 class CoordinatorEnableSwitch(_BaseSwitch):
-    _attr_name = "Coordinator enabled"
+    _attr_translation_key = "coordinator_enabled"
     _attr_icon = "mdi:solar-power-variant"
 
     def __init__(self, coordinator, entry) -> None:
@@ -74,7 +74,7 @@ class DryRunSwitch(_BaseSwitch):
     the comparison accumulates in long-term statistics on its own.
     """
 
-    _attr_name = "Dry run"
+    _attr_translation_key = "dry_run"
     _attr_icon = "mdi:test-tube"
     _attr_entity_category = EntityCategory.CONFIG
 
@@ -99,7 +99,7 @@ class DryRunSwitch(_BaseSwitch):
 
 
 class FastChargeSwitch(_BaseSwitch):
-    _attr_name = "Fast charge (emergency)"
+    _attr_translation_key = "fast_charge"
     _attr_icon = "mdi:battery-charging-high"
 
     def __init__(self, coordinator, entry) -> None:
