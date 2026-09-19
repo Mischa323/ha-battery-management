@@ -154,3 +154,94 @@ def test_the_plan_carries_it(site):
 
     assert plan["expected"]["grid_kwh"] == pytest.approx(4.2)
     assert plan["expected"]["solar_kwh"] == pytest.approx(7.0)
+
+
+# -- the sun the house will not take first -----------------------------------
+#
+# The ceiling reserves room for the sun still to come, scaled by the share that
+# history says reaches the packs (see test_solar_headroom.py). The split has to
+# be read off that same scaled number: reading it off the bare forecast would
+# have the card promise sun the ceiling had already written off, and the two
+# numbers on the dashboard would quietly disagree about the same day.
+
+
+def measured(system, share_days):
+    """Closed days that make `solar_capture` return a known share."""
+    history = system.coordinator.periods["day"]["history"]
+    history.clear()
+    for index, (produced, charged) in enumerate(share_days):
+        history[f"2026-08-{index + 1:02d}"] = {
+            "produced_kwh": produced,
+            "charged_kwh": charged,
+            "grid_kwh": 0.0,
+        }
+
+
+def test_the_split_is_read_off_the_sun_expected_not_the_sun_forecast(site):
+    """A fifth of the sun has been reaching the packs, so a 7 kWh afternoon is
+    1.4 kWh of charge - and the ceiling was set from that, not from 7."""
+    system = site(soc=(50.0, 50.0), sun=7.0)
+    measured(system, [(10, 2)] * 3)
+
+    expected = system.coordinator.expected_charge()
+
+    assert expected["solar_remaining_kwh"] == pytest.approx(7.0)
+    assert expected["solar_expected_kwh"] == pytest.approx(1.4)
+    assert expected["solar_kwh"] == pytest.approx(1.4)
+
+
+def test_the_two_sun_figures_are_both_published(site):
+    """Showing only the scaled one would look like the forecast was wrong; only
+    the forecast is what emptied the packs. The card needs both to say why."""
+    system = site(sun=7.0)
+    measured(system, [(10, 2)] * 3)
+
+    expected = system.coordinator.expected_charge()
+
+    assert expected["solar_capture_share"] == pytest.approx(0.2)
+    assert expected["solar_capture_days"] == 3
+
+
+def test_without_a_measured_share_the_split_is_the_bare_forecast(site):
+    """Exactly as it read before any of this existed."""
+    system = site(soc=(50.0, 50.0), sun=7.0)
+
+    expected = system.coordinator.expected_charge()
+
+    assert expected["solar_capture_share"] is None
+    assert expected["solar_expected_kwh"] == pytest.approx(7.0)
+    assert expected["solar_kwh"] == pytest.approx(7.0)
+
+
+def test_a_bounded_ceiling_does_not_promise_sun_that_is_not_coming(site):
+    """The case where reading the split off the wrong number actually shows.
+
+    Unbounded, `room_kwh` is itself derived from the ceiling, so it clamps the
+    figure to the same answer either way and the bug hides. Put a bound on the
+    ceiling and the room opens wider than the sun reserved for it - and then
+    the bare forecast would have the card promise 5.6 kWh of sun into packs
+    that are only going to see 1.4.
+    """
+    system = site(soc=(50.0, 50.0), sun=7.0)
+    system.coordinator.buy_ceiling_max = 60.0
+    measured(system, [(10, 2)] * 3)
+
+    expected = system.coordinator.expected_charge()
+
+    assert expected["room_for_solar_kwh"] == pytest.approx(5.6)
+    assert expected["solar_kwh"] == pytest.approx(1.4)
+
+
+def test_the_split_and_the_ceiling_cannot_disagree(site):
+    """The one property worth pinning: both are read off `solar_expected`, so
+    the room the ceiling leaves open and the sun the card promises are the same
+    statement. They drifted apart the moment the ceiling started scaling and
+    the split did not."""
+    system = site(soc=(20.0, 20.0), sun=7.0)
+    for days in ([(10, 2)] * 3, [(10, 5)] * 3, [(10, 9)] * 3, []):
+        measured(system, days)
+        expected = system.coordinator.expected_charge()
+        ceiling = system.coordinator.charge_ceiling()
+        # the room held open above the ceiling, in kWh of the 14 kWh packs
+        room = (100.0 - ceiling) / 100.0 * 14.0
+        assert expected["solar_expected_kwh"] == pytest.approx(room, abs=0.01)

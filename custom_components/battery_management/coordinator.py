@@ -1335,8 +1335,13 @@ class BatteryCoordinator:
             room_kwh += (
                 max(unit.charge_limit - max(unit.soc, target), 0.0) / 100.0 * capacity
             )
+        # The expected arrival, not the bare forecast: the ceiling above it was
+        # set from that number, so reading the split off the other one would
+        # have the card promise sun the ceiling had already written off.
         remaining = self.solar_remaining()
-        solar_kwh = room_kwh if remaining is None else min(remaining, room_kwh)
+        expected = self.solar_expected()
+        solar_kwh = room_kwh if expected is None else min(expected, room_kwh)
+        share, days = self.solar_capture()
         return {
             "known": True,
             "grid_kwh": round(grid_kwh, 2),
@@ -1344,7 +1349,13 @@ class BatteryCoordinator:
             # what the sun is short of the room being held for it, so "why is
             # the solar figure lower than the space" has an answer on the card
             "room_for_solar_kwh": round(room_kwh, 2),
+            # both halves of the sun: what the panels will make, and what is
+            # expected to get past the house. A card showing only the second
+            # would look like the forecast was wrong.
             "solar_remaining_kwh": None if remaining is None else round(remaining, 2),
+            "solar_expected_kwh": None if expected is None else round(expected, 2),
+            "solar_capture_share": None if share is None else round(share, 3),
+            "solar_capture_days": days,
             "ceiling": round(ceiling, 1),
         }
 
@@ -1501,6 +1512,24 @@ class BatteryCoordinator:
                 total += unit.unit_max * self._full_charge_minutes / 60.0 / 1000.0
         return total or None
 
+    def solar_expected(self) -> float | None:
+        """How much of the sun still to come is expected to reach the packs.
+
+        `solar_remaining` is what the panels will make. This is the part the
+        house is not going to take on the way past, which is a different
+        number and the one every decision here actually wants.
+
+        They are kept apart rather than one replacing the other: the forecast
+        figure is the one a reader recognises from their solar integration, and
+        a card showing a number that disagrees with it without saying why is
+        how this went wrong in the first place.
+        """
+        remaining = self.solar_remaining()
+        if remaining is None:
+            return None
+        share, _days = self.solar_capture()
+        return remaining if share is None else remaining * share
+
     def _solar_headroom_ceiling(self) -> float | None:
         """How full it is worth buying to, given the sun still coming.
 
@@ -1508,19 +1537,16 @@ class BatteryCoordinator:
         to put the day's production, while at 17:00 there is nothing left to
         wait for and topping up is exactly right.
         """
-        remaining = self.solar_remaining()
+        # Only the share history says will actually arrive. Since that share
+        # never exceeds 1, this ceiling is never lower than the one the bare
+        # forecast would give: the measurement can talk the packs into buying
+        # more, never into buying less, so it cannot invent a new way to be
+        # caught empty.
+        expected = self.solar_expected()
         capacity = self.usable_capacity_kwh()
-        if remaining is None or capacity is None or capacity <= 0:
+        if expected is None or capacity is None or capacity <= 0:
             return None
-        share, _days = self.solar_capture()
-        if share is not None:
-            # Only the share that history says will actually arrive. Since the
-            # share never exceeds 1, this ceiling is never lower than the one
-            # the bare forecast would give: the measurement can talk the packs
-            # into buying more, never into buying less, so it cannot invent a
-            # new way to be caught empty.
-            remaining *= share
-        return max(0.0, min(100.0, 100.0 - remaining / capacity * 100.0))
+        return max(0.0, min(100.0, 100.0 - expected / capacity * 100.0))
 
     def _sun_is_enough(self) -> bool:
         """Fallback for when the capacity is not known yet: a plain threshold."""

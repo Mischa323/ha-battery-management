@@ -907,7 +907,19 @@ cannot say "buy to full" on the morning of a blazing day.
 
 `sensor.battery_management_charge_ceiling` carries `solar_capture_share` and
 `solar_capture_days` in its attributes, so what it learned is visible rather
-than implied.
+than implied. The **Plan card** says it in words under the split:
+
+> Er komt nog 7.4 kWh zon; daarvan belandt naar verwachting 1.7 kWh in de
+> accu's (23 %, gemeten over 14 dagen). De rest gaat rechtstreeks het huis in.
+
+and while it is still unmeasured, says *that* instead — room is being held for
+the whole forecast, which is the assumption worth seeing rather than hiding.
+
+The Plan sensor's `expected` block publishes both figures: `solar_remaining_kwh`
+is what the panels will make and `solar_expected_kwh` what is expected to get
+past the house. The split shown on the card is read off the second, the same
+number the ceiling was set from — reading it off the first would have the card
+promise sun the ceiling had already written off.
 
 ### Bounding it by hand
 
