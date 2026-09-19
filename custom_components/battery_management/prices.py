@@ -182,14 +182,24 @@ def to_hourly(slots: list[Slot]) -> list[Slot]:
     return folded
 
 def slots_in_window(
-    slots: list[Slot], now: datetime, window_hours: float = 24.0
+    slots: list[Slot],
+    now: datetime,
+    window_hours: float = 24.0,
+    until: datetime | None = None,
 ) -> list[Slot]:
     """The slots the ranking actually considers: still running, and near enough.
 
     Both rankings and the chart have to agree on this set, or a bar would be
     coloured by a decision it was never part of.
+
+    `until` closes the window early. It is how "do not rank across the peak"
+    is expressed: energy bought now serves what comes before it is used, so a
+    cheap hour on the far side of an expensive stretch is not an alternative to
+    one on this side. They are not substitutes and must not be ranked together.
     """
     horizon = now + timedelta(hours=window_hours)
+    if until is not None and until < horizon:
+        horizon = until
     return sorted(
         (slot for slot in slots if slot.end > now and slot.start < horizon),
         key=lambda slot: slot.start,
@@ -201,6 +211,7 @@ def pick_cheapest(
     cheap_hours: float,
     min_margin: float = 0.0,
     include_ties: bool = False,
+    reference: float | None = None,
 ) -> list[Slot]:
     """The cheapest `cheap_hours` worth of an already-chosen candidate set.
 
@@ -236,11 +247,17 @@ def pick_cheapest(
         picked = [slot for slot in ranked if slot.price <= cutoff]
 
     if min_margin > 0:
-        # what charging then would displace: the dearest hours of the same set.
-        # The *cheapest* of those is the reference, because that is the weakest
-        # hour the stored energy would actually be replacing.
-        dearest = sorted(candidates, key=lambda slot: -slot.price)[: max(1, wanted)]
-        reference = min(slot.price for slot in dearest)
+        if reference is None:
+            # what charging then would displace: the dearest hours of the same
+            # set. The *cheapest* of those is the reference, because that is the
+            # weakest hour the stored energy would actually be replacing.
+            dearest = sorted(candidates, key=lambda slot: -slot.price)[: max(1, wanted)]
+            reference = min(slot.price for slot in dearest)
+        # Handed in when the candidates have been cut short of the hours they
+        # are saving for. Measuring the margin against a truncated set would
+        # compare the cheap hours with each other and rule them all out - the
+        # expensive stretch is exactly what was removed, and it is exactly what
+        # the margin is about.
         picked = [slot for slot in picked if slot.price + min_margin <= reference]
     return sorted(picked, key=lambda slot: slot.start)
 
@@ -319,6 +336,7 @@ def cheapest_slots(
     cheap_hours: float,
     window_hours: float = 24.0,
     min_margin: float = 0.0,
+    until: datetime | None = None,
 ) -> list[Slot]:
     """Slots worth *buying* on in the window ahead.
 
@@ -338,10 +356,22 @@ def cheapest_slots(
     cover the round trip - roughly 12 % of these packs, plus something for the
     wear. Below that margin nothing qualifies, which is the correct answer for
     a flat day and for the tail end of an expensive one.
+
+    `until` cuts the ranking short of an expensive stretch - see
+    `slots_in_window`. The margin is still measured against the *whole* window,
+    deliberately: what was cut off is the dear hours this buying is for, and
+    ranking the cheap hours against each other would rule every one of them out.
     """
-    return pick_cheapest(
-        slots_in_window(slots, now, window_hours), cheap_hours, min_margin
-    )
+    candidates = slots_in_window(slots, now, window_hours, until)
+    reference = None
+    if until is not None and min_margin > 0:
+        whole = slots_in_window(slots, now, window_hours)
+        if whole:
+            span = min((s.end - s.start).total_seconds() / 60 for s in whole)
+            wanted = max(1, round(cheap_hours * 60 / span))
+            dearest = sorted(whole, key=lambda slot: -slot.price)[:wanted]
+            reference = min(slot.price for slot in dearest)
+    return pick_cheapest(candidates, cheap_hours, min_margin, reference=reference)
 
 
 def dearest_slots(
@@ -349,6 +379,83 @@ def dearest_slots(
 ) -> list[Slot]:
     """The most expensive `hours` worth of slots in the window ahead."""
     return pick_dearest(slots_in_window(slots, now, window_hours), hours)
+
+
+def next_dear_start(
+    slots: list[Slot],
+    now: datetime,
+    expensive_hours: float,
+    window_hours: float = 24.0,
+) -> datetime | None:
+    """When the next expensive stretch begins, or None if none is ahead.
+
+    The boundary the buying must not rank across. Stored energy serves what
+    comes after it is bought and before it is spent, so the hours on this side
+    of the peak are the only ones that are alternatives to each other. Ranking
+    them against tomorrow morning - which arrives *after* the peak - is
+    comparing things that cannot stand in for one another, and it is how the
+    packs came to be sitting at 32 % with an evening peak ahead and a negative
+    market price going by unused.
+    """
+    if expensive_hours <= 0:
+        return None
+    dear = pick_dearest(slots_in_window(slots, now, window_hours), expensive_hours)
+    ahead = [slot.start for slot in dear if slot.start > now]
+    return min(ahead) if ahead else None
+
+
+def cheap_mean(candidates: list[Slot], hours: float) -> float | None:
+    """What the cheapest `hours` worth of a set costs on average.
+
+    No margin: this is for comparing one stretch with another, not for deciding
+    whether either is worth buying on.
+    """
+    picked = pick_cheapest(candidates, hours)
+    if not picked:
+        return None
+    return sum(slot.price for slot in picked) / len(picked)
+
+
+def cheaper_next_day(
+    slots: list[Slot],
+    now: datetime,
+    boundary: datetime,
+    cheap_hours: float,
+    window_hours: float = 24.0,
+) -> float | None:
+    """How much cheaper the far side of `boundary` is than this side, per kWh.
+
+    Positive means the next day buys cheaper; negative means today is the cheap
+    one. `boundary` is midnight in the reader's own clock, handed in rather than
+    worked out here so this file stays free of timezones.
+
+    The comparison is deliberately *not* made across the peak. Everything after
+    an expensive stretch begins is dearer than the cheap hour before it, on
+    every ordinary day - so that comparison fires constantly and says nothing.
+    Across the day boundary it answers the question actually being asked: is
+    tomorrow a cheaper day than the rest of today.
+
+    None when either side is too thin to judge. A sliver of tomorrow inside the
+    window - two night hours seen from 02:00 - is not a day, and the cheap night
+    it happens to contain would read as a bargain every single night.
+
+    This does not decide whether to buy. That is settled by the hours before the
+    peak, whatever tomorrow does. It decides *how full*.
+    """
+    ahead = slots_in_window(slots, now, window_hours)
+    today = [slot for slot in ahead if slot.start < boundary]
+    tomorrow = [slot for slot in ahead if slot.start >= boundary]
+    if not today or not tomorrow:
+        return None
+    span = min((slot.end - slot.start).total_seconds() / 3600 for slot in ahead)
+    enough = max(1, round(cheap_hours / span))
+    if len(today) < enough or len(tomorrow) < enough:
+        return None
+    here = cheap_mean(today, cheap_hours)
+    there = cheap_mean(tomorrow, cheap_hours)
+    if here is None or there is None:
+        return None
+    return here - there
 
 
 def is_cheap_now(
@@ -374,6 +481,7 @@ def slots_to_buy(
     window_hours: float = 24.0,
     min_margin: float = 0.0,
     needed_hours: float | None = None,
+    until: datetime | None = None,
 ) -> list[Slot]:
     """Of the hours cheap enough to buy on, the cheapest few actually needed.
 
@@ -394,7 +502,9 @@ def slots_to_buy(
     nothing to buy, and saying otherwise would paint hours on a dashboard that
     no charging is planned for.
     """
-    candidates = cheapest_slots(slots, now, cheap_hours, window_hours, min_margin)
+    candidates = cheapest_slots(
+        slots, now, cheap_hours, window_hours, min_margin, until
+    )
     if needed_hours is None or not candidates:
         return candidates
     if needed_hours <= 0:

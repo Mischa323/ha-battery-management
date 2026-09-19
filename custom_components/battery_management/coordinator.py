@@ -38,7 +38,9 @@ from .suppliers import FETCHERS, SOURCE_ENTITY, SOURCE_NONE
 from .trace import Trace
 from .prices import (
     cheapest_slots,
+    cheaper_next_day,
     dearest_slots,
+    next_dear_start,
     pick_cheapest,
     pick_dearest,
     parse_forecast,
@@ -1131,11 +1133,22 @@ class BatteryCoordinator:
         return int(round(longest)) if longest is not None else None
 
     def charge_ceiling(self) -> float | None:
-        """How full it is worth buying to right now, after the user's bounds."""
-        computed = self._solar_headroom_ceiling()
-        if computed is None:
+        """How full it is worth buying to right now, after every adjustment.
+
+        The published figure and the one buying stops at have to be the same
+        number, so this reads it out of `_buy_ceiling` rather than recomputing
+        a simpler version. It skipped the next-day step the first time round,
+        which would have put a ceiling on the card that the packs were not
+        actually stopping at.
+
+        None where there is no solar ceiling at all - then the sensor is
+        unavailable rather than reporting the bare SoC threshold, which is a
+        different thing and would read as a forecast that exists.
+        """
+        if self._solar_headroom_ceiling() is None:
             return None
-        return self._bound_ceiling(computed)
+        ceiling, _ = self._buy_ceiling()
+        return ceiling
 
     def current_price(self) -> dict | None:
         """What this hour costs, and what the next one does.
@@ -1248,6 +1261,7 @@ class BatteryCoordinator:
         return slot in slots_to_buy(
             forecast, now, self._cheap_hours, PRICE_WINDOW_HOURS,
             self._price_margin, self.hours_of_charge_needed(),
+            until=self._buy_before(),
         )
 
     def remember_price_verdict(self, bought: bool = False) -> None:
@@ -1384,7 +1398,7 @@ class BatteryCoordinator:
         # for, ranked over the rolling window the coordinator decides on.
         buying = slots_to_buy(
             slots, now, self._cheap_hours, PRICE_WINDOW_HOURS, self._price_margin,
-            self.hours_of_charge_needed(),
+            self.hours_of_charge_needed(), until=self._buy_before(),
         ) if slots else []
 
         # The band is ranked per calendar day instead, so it holds still. See
@@ -1557,6 +1571,44 @@ class BatteryCoordinator:
             return False  # no forecast is not a reason to skip a cheap hour
         return remaining >= self._solar_forecast_max
 
+    def _buy_before(self):
+        """The moment the buying must be done by: the next expensive stretch.
+
+        Energy bought now serves what comes after it is bought and before it is
+        spent, so only the hours on this side of the peak are alternatives to
+        each other. Ranked across it, tomorrow morning wins on price and the
+        packs go into tonight on whatever they happen to hold - which is how
+        they came to be at 32 % with the peak ahead and a negative market price
+        going by unused.
+        """
+        return next_dear_start(
+            self._price_forecast() or [], dt_util.utcnow(), self._expensive_hours,
+            PRICE_WINDOW_HOURS,
+        )
+
+    def next_day_step(self) -> float | None:
+        """How much cheaper tomorrow is than the rest of today, per kWh.
+
+        Positive: a cheaper day is coming. Negative: today is the cheap one.
+        None when either side is too thin a slice to judge.
+
+        Measured across local midnight, not across the coming peak. Everything
+        beyond a peak is dearer than the cheap hour before it on every ordinary
+        day, so that comparison fires constantly and means nothing.
+        """
+        # Both ends off one clock. Reading the date from `now()` while the
+        # ranking runs on `utcnow()` is two sources that only agree by luck -
+        # they came apart the moment a test froze one of them, and a frozen
+        # clock is the mildest way for that to surface.
+        now = dt_util.utcnow()
+        midnight = dt_util.start_of_local_day(
+            dt_util.as_local(now) + timedelta(days=1)
+        )
+        return cheaper_next_day(
+            self._price_forecast() or [], now, midnight,
+            self._cheap_hours, PRICE_WINDOW_HOURS,
+        )
+
     def _buy_ceiling(self) -> tuple[float, bool]:
         """How full it is worth buying to, and whether the sun is the reason.
 
@@ -1571,6 +1623,29 @@ class BatteryCoordinator:
         blame_the_sun = ceiling is not None
         if ceiling is None:
             ceiling = self._charge_below_soc
+
+        # How full, given what the far side of the peak costs. Not *whether* -
+        # that is settled by the hours before the peak, whatever tomorrow does.
+        # Only downwards, and only against a floor the owner has stated. A
+        # cheaper day coming is a reason to take just what tonight needs and
+        # top up then; it is not a reason to buy nothing, and "buy at least to"
+        # ships at 0 - reading that as a level to stop at is how the packs came
+        # to be flat at breakfast. No floor, no lowering.
+        #
+        # Deliberately nothing in the other direction. Raising the ceiling on a
+        # dearer tomorrow would override both `charge_below_soc` and the solar
+        # headroom on most autumn days, and buying room the sun was going to
+        # fill does not make tomorrow cheaper - it exports the afternoon
+        # instead of storing it. That half is worth having and worth asking
+        # about first.
+        step = self.next_day_step()
+        if (
+            step is not None
+            and step >= self._price_margin
+            and self.buy_ceiling_min > 0
+        ):
+            ceiling = min(ceiling, self.buy_ceiling_min)
+            blame_the_sun = False
         return self._bound_ceiling(ceiling), blame_the_sun
 
     def hours_of_charge_needed(self, online: dict | None = None) -> float | None:
@@ -1633,7 +1708,7 @@ class BatteryCoordinator:
             return True
         return current in slots_to_buy(
             slots, now, self._cheap_hours, PRICE_WINDOW_HOURS, self._price_margin,
-            self.hours_of_charge_needed(online),
+            self.hours_of_charge_needed(online), until=self._buy_before(),
         )
 
     def _dynamic_should_charge(self, online: dict) -> tuple[bool, str | None]:

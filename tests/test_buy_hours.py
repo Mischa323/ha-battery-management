@@ -14,10 +14,14 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
 from custom_components.battery_management.prices import (
     Slot,
+    cheaper_next_day,
     cheapest_on_day,
     cheapest_slots,
+    next_dear_start,
     pick_cheapest,
     slots_to_buy,
 )
@@ -276,3 +280,112 @@ def test_a_flat_day_is_still_painted_nothing():
     )
 
     assert drawn == []
+
+
+# -- not ranking across the peak ----------------------------------------------
+#
+# Reported on 2026-09-19. The packs sat at 5 % for four and a quarter hours,
+# charged for 75 minutes, and stopped at 31 % on a quarter boundary with the
+# price unchanged, the ceiling at 79 % and the market price at -0.0012. No dear
+# quarter had happened yet that day, so the peak was still ahead.
+#
+# `slots_to_buy` ranked over the whole 24-hour window. Tomorrow's cheaper
+# quarters took the budget - and tomorrow arrives *after* tonight's peak, so
+# that energy cannot serve it. The two were never substitutes and should never
+# have been ranked against each other.
+
+
+def peak_day():
+    """Cheap now, a peak this evening, and a cheaper day after it."""
+    return series(
+        [0.13] * 4      # 12:00-16:00, cheap, and before the peak
+        + [0.45] * 4    # 16:00-20:00, the peak
+        + [0.20] * 4    # 20:00-24:00
+        + [0.08] * 12   # tomorrow, cheaper than anything today
+    )
+
+
+def test_it_does_not_defer_past_the_peak():
+    """The reported fault. Unbounded, the budget goes to tomorrow's 0.08 and
+    nothing is bought before a peak the packs have to cover."""
+    slots = peak_day()
+
+    unbounded = slots_to_buy(slots, NOON, cheap_hours=5, needed_hours=2)
+    assert hours_of(unbounded) == [0, 1]  # tomorrow, after the peak
+
+    cutoff = next_dear_start(slots, NOON, expensive_hours=4)
+    bounded = slots_to_buy(slots, NOON, cheap_hours=5, needed_hours=2, until=cutoff)
+    assert hours_of(bounded) == [12, 13]  # today, before it
+
+
+def test_the_peak_boundary_is_where_the_dear_hours_start():
+    cutoff = next_dear_start(peak_day(), NOON, expensive_hours=4)
+
+    assert cutoff == NOON + timedelta(hours=4)
+
+
+def test_no_peak_ahead_leaves_the_window_alone():
+    """A flat day has nothing to be caught short of."""
+    assert next_dear_start(series([0.20] * 24), NOON, expensive_hours=0) is None
+
+
+def test_the_margin_is_still_measured_against_the_peak_it_saves_for():
+    """The interaction that would have made this worse than the fault.
+
+    Cutting the window short removes the dear hours - which are exactly what
+    the margin compares against. Measured against what is left, the cheap hours
+    are only being compared with each other, every one fails the margin, and
+    the packs buy nothing at all before the peak.
+    """
+    slots = peak_day()
+    cutoff = next_dear_start(slots, NOON, expensive_hours=4)
+
+    picked = slots_to_buy(
+        slots, NOON, cheap_hours=5, min_margin=0.05, needed_hours=2, until=cutoff
+    )
+
+    # 0.13 + 0.05 clears the 0.45 peak it is bought for
+    assert hours_of(picked) == [12, 13]
+
+
+def test_a_cheap_stretch_that_beats_nothing_still_fails_the_margin():
+    """The bound must not turn the margin off, only point it at the right set."""
+    flat = series([0.20] * 4 + [0.21] * 20)
+    cutoff = next_dear_start(flat, NOON, expensive_hours=4)
+
+    picked = slots_to_buy(
+        flat, NOON, cheap_hours=5, min_margin=0.05, needed_hours=2, until=cutoff
+    )
+
+    assert picked == []
+
+
+# -- is the next day cheaper --------------------------------------------------
+
+
+def test_a_cheaper_tomorrow_reads_positive():
+    slots = series([0.30] * 12 + [0.10] * 12)
+    step = cheaper_next_day(slots, NOON, NOON + timedelta(hours=12), cheap_hours=4)
+
+    assert step == pytest.approx(0.20)
+
+
+def test_a_dearer_tomorrow_reads_negative():
+    slots = series([0.10] * 12 + [0.30] * 12)
+    step = cheaper_next_day(slots, NOON, NOON + timedelta(hours=12), cheap_hours=4)
+
+    assert step == pytest.approx(-0.20)
+
+
+def test_a_sliver_of_tomorrow_is_not_a_day():
+    """Seen from 02:00 the window holds two hours of tomorrow, and the cheap
+    night they fall in would read as a bargain every single night."""
+    slots = series([0.30] * 22 + [0.10] * 2)
+    step = cheaper_next_day(slots, NOON, NOON + timedelta(hours=22), cheap_hours=4)
+
+    assert step is None
+
+
+def test_nothing_to_compare_on_one_side_is_not_a_verdict():
+    slots = series([0.30] * 24)
+    assert cheaper_next_day(slots, NOON, NOON + timedelta(hours=48), 4) is None
