@@ -16,7 +16,9 @@ from datetime import datetime, timedelta, timezone
 
 from custom_components.battery_management.prices import (
     Slot,
+    cheapest_on_day,
     cheapest_slots,
+    pick_cheapest,
     slots_to_buy,
 )
 
@@ -134,3 +136,143 @@ def test_the_chosen_hours_come_back_in_time_order():
 
 def test_an_empty_forecast_is_not_a_reason_to_buy():
     assert slots_to_buy([], NOON, 4.0, needed_hours=2.0) == []
+
+
+# -- when two hours cost exactly the same -------------------------------------
+#
+# Asked by the owner on 2026-09-19, looking at a day with 0.129 at 05:00 and
+# 0.129 again at 11:00, six such hours in all against a budget of four. A rank
+# has to break that tie somehow, and "somehow" is the word worth removing: an
+# order nobody chose is an order that can change under a refactor without a
+# single test noticing.
+#
+# The rule is the earliest of the tied slots. Energy in the packs sooner covers
+# more of whatever the day turns out to hold, and the buy ceiling - low in the
+# morning, when most of the sun is still to come - is what stops that filling
+# them before the sun can.
+
+
+def test_slots_that_cost_the_same_are_taken_earliest_first():
+    prices = [0.20, 0.10, 0.30, 0.10, 0.40, 0.10]
+
+    assert hours_of(cheapest_slots(series(prices), NOON, cheap_hours=2)) == [13, 15]
+
+
+def test_the_earlier_block_is_filled_before_the_later_one_is_touched():
+    """The owner's day: two blocks at an identical price, the budget smaller
+    than the two together. The first is spent whole, the second takes the
+    remainder - rather than four hours spread evenly across both."""
+    # three hours at 0.129, three dear, three more at 0.129, then dear
+    prices = [0.129] * 3 + [0.25] * 3 + [0.129] * 3 + [0.42] * 15
+
+    picked = hours_of(cheapest_slots(series(prices), NOON, cheap_hours=4))
+
+    assert picked == [12, 13, 14, 18]
+
+
+def test_the_need_takes_the_earliest_of_the_tied_hours():
+    """And once the need is known it is the front of that block, not a sample
+    from across it."""
+    prices = [0.129] * 3 + [0.25] * 3 + [0.129] * 3 + [0.42] * 15
+
+    picked = slots_to_buy(series(prices), NOON, cheap_hours=4, needed_hours=2)
+
+    assert hours_of(picked) == [12, 13]
+
+
+def test_a_missed_block_is_not_lost_because_the_window_rolls():
+    """The point that makes earliest-first safe rather than greedy: if the
+    packs were not empty enough at 05:00, the 11:00 block is still there when
+    the window has moved past the first one."""
+    prices = [0.129] * 3 + [0.25] * 3 + [0.129] * 3 + [0.42] * 15
+    slots = series(prices)
+    later = NOON + timedelta(hours=6)  # the first block has gone
+
+    picked = slots_to_buy(slots, later, cheap_hours=4, needed_hours=2)
+
+    assert hours_of(picked) == [18, 19]
+
+
+def test_the_tie_is_broken_on_time_and_not_on_the_order_they_arrived():
+    """The rule has to be the slots' own doing, not the caller's.
+
+    `slots_in_window` happens to hand them over in time order, so a rank on
+    price alone would look identical through that path and the tie-break would
+    be resting on a coincidence. `pick_cheapest` is also called directly - by
+    the chart - so it is pinned here on its own, with the slots shuffled.
+    """
+    prices = [0.20, 0.10, 0.30, 0.10, 0.40, 0.10]
+    shuffled = list(reversed(series(prices)))
+
+    assert hours_of(pick_cheapest(shuffled, cheap_hours=2)) == [13, 15]
+
+
+def test_a_flat_day_is_simply_taken_from_the_front():
+    """Every hour identical: nothing distinguishes them but when they are."""
+    picked = cheapest_slots(series([0.2] * 24), NOON, cheap_hours=3)
+
+    assert hours_of(picked) == [12, 13, 14]
+
+
+# -- drawing a tie, without spending one --------------------------------------
+#
+# Asked for straight after the tie rule above: with six hours at 0.129 against
+# a budget of four, the chart painted four green and two grey at an identical
+# price. Nothing told them apart but where the count ran out, and the band is
+# worded as a statement about prices - "bij de goedkoopste uren van vandaag" -
+# so splitting a tie makes it say something the prices do not.
+#
+# The band may therefore run wider than the configured hours. What must not is
+# the buying: those hours are what the owner agreed to spend.
+
+
+def test_the_drawn_band_does_not_split_a_tie():
+    prices = [0.129] * 3 + [0.25] * 3 + [0.129] * 3 + [0.42] * 15
+    day = series(prices)
+
+    drawn = cheapest_on_day(day, NOON, NOON + timedelta(hours=24), cheap_hours=4)
+
+    # all six, not the four the budget would have stopped at
+    assert hours_of(drawn) == [12, 13, 14, 18, 19, 20]
+
+
+def test_but_the_budget_is_still_the_budget_when_buying():
+    """The same day, the same tie, through the deciding path: four hours were
+    agreed to and four is what comes back."""
+    prices = [0.129] * 3 + [0.25] * 3 + [0.129] * 3 + [0.42] * 15
+
+    assert len(cheapest_slots(series(prices), NOON, cheap_hours=4)) == 4
+
+
+def test_a_band_with_no_tie_at_its_edge_is_unchanged():
+    """Distinct prices: the band is exactly the hours configured, as before."""
+    prices = [0.10, 0.12, 0.14, 0.16, 0.50] + [0.60] * 19
+    day = series(prices)
+
+    drawn = cheapest_on_day(day, NOON, NOON + timedelta(hours=24), cheap_hours=3)
+
+    assert hours_of(drawn) == [12, 13, 14]
+
+
+def test_a_tie_below_the_edge_does_not_drag_dearer_hours_in():
+    """Only the price the count stopped on is kept whole - an hour costing more
+    is still out, however close."""
+    prices = [0.10, 0.10, 0.10, 0.11, 0.11] + [0.60] * 19
+    day = series(prices)
+
+    drawn = cheapest_on_day(day, NOON, NOON + timedelta(hours=24), cheap_hours=2)
+
+    assert hours_of(drawn) == [12, 13, 14]
+
+
+def test_a_flat_day_is_still_painted_nothing():
+    """Every hour ties with every other, so keeping ties would paint the lot.
+    The margin is what stops it, and this is the case that proves it still does.
+    """
+    day = series([0.25] * 24)
+
+    drawn = cheapest_on_day(
+        day, NOON, NOON + timedelta(hours=24), cheap_hours=4, min_margin=0.05
+    )
+
+    assert drawn == []

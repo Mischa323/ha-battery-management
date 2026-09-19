@@ -452,12 +452,25 @@ them** above.
 It draws **the whole day** — one bar per hour, from midnight, coloured by the
 decision that hour belongs to. Hours that have already gone are drawn faint and
 carry no colour of their own: the ranking looks forward, so calling a past hour
-"cheap" would be inventing a decision that was never made. Green
-is **not** "a low number" — it is the hours the coordinator will actually buy
-on, and red the hours it is keeping the charge for. Those are computed by the
+"cheap" would be inventing a decision that was never made.
+
+**Green and red are about prices; the blue ring is about the plan.** Green
+marks today's cheapest hours and red its dearest — both ranked over the
+calendar day, so the band is a stable statement rather than one that creeps as
+a rolling window slides. What the coordinator will actually buy on is the blue
+ring, a separate channel drawn on top, because the plan is a *subset* of the
+cheap band and a bar cannot be two fills at once. Everything else stays grey:
+following the meter, no price decision involved. All of it is computed by the
 integration, so the chart cannot draw a different plan than the one being
-executed; a card picking its own threshold could. Everything else stays grey:
-following the meter, no price decision involved.
+executed; a card picking its own threshold could.
+
+The green band **will not split a tie**. Where more hours share the cheapest
+price than the configured hours allow — six at €0.129 against a budget of four
+— all six are drawn green, because nothing but the count tells them apart and
+the band is a claim about price. The budget still binds what gets *bought*:
+that is hours you agreed to spend, and they are spent earliest-first among
+equals. A flat day is painted nothing at all, since the margin rules out a day
+with nothing to choose between.
 
 The two hues clear a colourblind-separation check on both a light and a dark
 card (CVD ΔE 9.7, contrast ≥ 3:1 on both), but colour never carries the meaning
