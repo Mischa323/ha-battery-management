@@ -525,11 +525,21 @@ never be able to disagree about what "cheap" meant.
 That setting is about the **decisions**. How many bars you care to look at is a
 separate question, so the chart has its own zoom.
 
-**Pinch it with two fingers**, the way you would anything else. Dragging with
-one finger scrolls through the day and is left entirely to the browser, so it
-keeps its momentum and its rubber-band. A trackpad pinch (ctrl+wheel) does the
-same thing, and **−** / **+** under the day picker are there for a mouse, a
-keyboard, or a hand that is already full.
+**Pinch it with two fingers**, the way you would anything else. One spread of
+the fingers covers the whole range — from the fitted day to the last quarter —
+and one pinch back returns; the travel is squared, so a comfortable 2.8× spread
+does what a straight mapping would have needed eight times the reach for.
+Dragging with one finger scrolls through the day and is left entirely to the
+browser, so it keeps its momentum and its rubber-band. A trackpad pinch
+(ctrl+wheel) does the same thing, and **−** / **+** under the day picker are
+there for a mouse, a keyboard, or a hand that is already full.
+
+While the fingers are down the bars are only re-widened, not rebuilt: within
+one resolution they are the same bars at a new width, and a width is a CSS
+variable. Rebuilding ninety-six elements per touch event is what made the zoom
+arrive in steps. The bars are rebuilt where they genuinely differ — crossing
+between hours and quarters — and once more when the fingers lift, which is what
+puts the axis labels back at the right spacing.
 
 Zoom is one continuous number rather than two settings: `1` fits the day to the
 width, `4` draws it four times as wide and scrolls. The resolution then falls
