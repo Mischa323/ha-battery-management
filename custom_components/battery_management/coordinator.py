@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import statistics
 import time
 from collections import deque
 from dataclasses import dataclass
@@ -142,6 +143,10 @@ from .const import (
     MAX_ENERGY_GAP_INTERVALS,
     PERIOD_DAY,
     PERIOD_HISTORY,
+    SOLAR_CAPTURE_DAYS,
+    SOLAR_CAPTURE_FLOOR,
+    SOLAR_CAPTURE_MIN_DAYS,
+    SOLAR_CAPTURE_MIN_KWH,
     PERIOD_MONTH,
     PERIOD_WEEK,
     PERIODS,
@@ -500,9 +505,21 @@ class BatteryCoordinator:
         #: carries the periods that have already closed, so the packs can be
         #: looked back on without a per-site helper.
         self.periods: dict[str, dict] = {
-            name: {"key": None, "charged_wh": 0.0, "grid_wh": 0.0, "history": {}}
+            name: {
+                "key": None,
+                "charged_wh": 0.0,
+                "grid_wh": 0.0,
+                # what the panels made, as opposed to `charged_wh` - what
+                # reached a pack. The gap between the two is the house, and
+                # measuring it is the whole point of `solar_capture`.
+                "produced_wh": 0.0,
+                "history": {},
+            }
             for name in PERIODS
         }
+        #: last reading of the cumulative "produced today" sensor, so
+        #: production is counted as a delta rather than a level
+        self._solar_produced_seen: float | None = None
         #: when the counters were last advanced, so the elapsed time is
         #: measured rather than assumed - a tick can be late
         self._charged_at: float | None = None
@@ -611,6 +628,7 @@ class BatteryCoordinator:
                 name: {
                     "key": state["key"],
                     "charged_wh": state["charged_wh"],
+                    "produced_wh": state["produced_wh"],
                     "grid_wh": state["grid_wh"],
                     "history": dict(state["history"]),
                 }
@@ -1494,6 +1512,14 @@ class BatteryCoordinator:
         capacity = self.usable_capacity_kwh()
         if remaining is None or capacity is None or capacity <= 0:
             return None
+        share, _days = self.solar_capture()
+        if share is not None:
+            # Only the share that history says will actually arrive. Since the
+            # share never exceeds 1, this ceiling is never lower than the one
+            # the bare forecast would give: the measurement can talk the packs
+            # into buying more, never into buying less, so it cannot invent a
+            # new way to be caught empty.
+            remaining *= share
         return max(0.0, min(100.0, 100.0 - remaining / capacity * 100.0))
 
     def _sun_is_enough(self) -> bool:
@@ -1997,6 +2023,11 @@ class BatteryCoordinator:
                 "solar_breakdown": self.solar_breakdown(),
                 "usable_capacity_kwh": self.usable_capacity_kwh(),
                 "solar_headroom_ceiling_soc": self._solar_headroom_ceiling(),
+                # what share of the sun history says reaches the packs, and how
+                # many measured days that rests on. None means the ceiling is
+                # still reserving room for the whole forecast.
+                "solar_capture_share": self.solar_capture()[0],
+                "solar_capture_days": self.solar_capture()[1],
                 "buy_ceiling_min": self.buy_ceiling_min,
                 "buy_ceiling_max": self.buy_ceiling_max,
                 "external_setpoint_w": self.external_setpoint,
@@ -2293,7 +2324,7 @@ class BatteryCoordinator:
                 continue
             if entry.get("key"):
                 state["key"] = str(entry["key"])
-            for field in ("charged_wh", "grid_wh"):
+            for field in ("charged_wh", "grid_wh", "produced_wh"):
                 if entry.get(field) is not None:
                     state[field] = float(entry[field])
             for key, figures in (entry.get("history") or {}).items():
@@ -2301,6 +2332,10 @@ class BatteryCoordinator:
                     state["history"][key] = {
                         "charged_kwh": float(figures.get("charged_kwh") or 0.0),
                         "grid_kwh": float(figures.get("grid_kwh") or 0.0),
+                        # absent on every day recorded before production was
+                        # measured; those days simply do not count towards the
+                        # share rather than counting as a day of no sun
+                        "produced_kwh": float(figures.get("produced_kwh") or 0.0),
                     }
 
     def _roll_periods(self) -> None:
@@ -2334,12 +2369,14 @@ class BatteryCoordinator:
                 state["history"][state["key"]] = {
                     "charged_kwh": round(state["charged_wh"] / 1000.0, 3),
                     "grid_kwh": round(state["grid_wh"] / 1000.0, 3),
+                    "produced_kwh": round(state["produced_wh"] / 1000.0, 3),
                 }
                 for old in sorted(state["history"])[: -PERIOD_HISTORY[name]]:
                     del state["history"][old]
             state["key"] = key
             state["charged_wh"] = 0.0
             state["grid_wh"] = 0.0
+            state["produced_wh"] = 0.0
 
     def period_started_at(self, name: str):
         """When the period in progress began, as local midnight.
@@ -2486,6 +2523,7 @@ class BatteryCoordinator:
         # its own boundary even across a tick that counts nothing - an outage,
         # an unreadable meter, or simply no charging power sensor configured.
         self._roll_periods()
+        self._accumulate_solar()
 
         now = time.time()
         previous, self._charged_at = self._charged_at, now
@@ -2518,6 +2556,66 @@ class BatteryCoordinator:
         for state in self.periods.values():
             state["charged_wh"] += total
             state["grid_wh"] += bought
+
+    def _accumulate_solar(self) -> None:
+        """Count what the panels made, beside what reached the packs.
+
+        A delta of the cumulative "produced today" sensor rather than the
+        reading itself. That is what lets this survive a sensor whose day does
+        not start when the period does: one site's inverter rolls its total
+        over at 01:00 local, an hour out of step with the day it is credited
+        to, and as a delta the reset is simply a drop - and a drop is not
+        production, so it is skipped rather than counted as negative sun.
+        """
+        if not self._solar_produced_sensor:
+            return
+        reading = self._read_float(self._solar_produced_sensor)
+        if reading is None:
+            return
+        previous, self._solar_produced_seen = self._solar_produced_seen, reading
+        if previous is None:
+            return
+        gained = reading - previous
+        if gained <= 0:
+            return
+        for state in self.periods.values():
+            state["produced_wh"] += gained * 1000.0
+
+    def solar_capture(self) -> tuple[float | None, int]:
+        """What share of the sun's output actually landed in the packs, lately.
+
+        The buy ceiling reserves room for the sun still to come. Reserving room
+        for all of it assumes every kilowatt hour the panels make reaches a
+        pack - but the house is first in the queue, and at most sites it takes
+        the larger share. One owner's packs saw 1.7 kWh of a 7.4 kWh afternoon
+        while the ceiling held buying back as though all 7.4 were coming; the
+        packs were flat by morning, in the middle of a cheap night it had
+        declined to use.
+
+        So the reservation is scaled by what recent days actually delivered.
+        Returns `(share, days behind it)`, or `(None, 0)` while there is too
+        little history - and then the ceiling behaves exactly as it did before
+        any of this existed.
+
+        The median rather than the mean: a fortnight contains the odd day away
+        from home or with a car on the charger, and one of those must not move
+        a number the packs are steered by. Days with no sun worth speaking of
+        are skipped as noise. So are days that recorded no charging at all -
+        the charge-power sensors are optional, and a day without them means
+        "not measured here", not "the sun delivered nothing".
+        """
+        shares: list[float] = []
+        recent = sorted(self.periods[PERIOD_DAY]["history"].items())
+        for _key, figures in recent[-SOLAR_CAPTURE_DAYS:]:
+            produced = float(figures.get("produced_kwh") or 0.0)
+            charged = float(figures.get("charged_kwh") or 0.0)
+            grid = float(figures.get("grid_kwh") or 0.0)
+            if produced < SOLAR_CAPTURE_MIN_KWH or charged <= 0:
+                continue
+            shares.append(max(0.0, min(1.0, (charged - grid) / produced)))
+        if len(shares) < SOLAR_CAPTURE_MIN_DAYS:
+            return None, 0
+        return max(SOLAR_CAPTURE_FLOOR, statistics.median(shares)), len(shares)
 
     def _grid_age(self) -> float | None:
         """How long since the meter last reported anything at all.

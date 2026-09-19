@@ -76,10 +76,24 @@ const [, PricesCard] = new Function(
   src + ";return [BatteryManagementCard, BatteryManagementPricesCard];"
 )();
 
-/** A full quarter-hourly day, as Frank publishes it: 96 slots from 22:00 UTC. */
+/** Local midnight today.
+ *
+ * Today, not a fixed date: the card draws whichever day `chartSlots` is asked
+ * for, and that defaults to today. A day baked into the test is a day the card
+ * stops being able to find - this file was written on 11 September and every
+ * assertion in it went hollow on the 12th, drawing nought bars and reporting
+ * it as a wiring failure.
+ */
+function midnight() {
+  const start = new Date();
+  start.setHours(0, 0, 0, 0);
+  return start.getTime();
+}
+
+/** A full quarter-hourly day, as Frank publishes it: 96 slots from midnight. */
 function quarterDay() {
   const hours = [];
-  const base = Date.UTC(2026, 8, 10, 22, 0);
+  const base = midnight();
   for (let i = 0; i < 96; i++) {
     const from = base + i * 900000;
     hours.push({
@@ -188,7 +202,7 @@ const hourly = new PricesCard();
 hourly.setConfig({ type: "x", prices: "sensor.plan" });
 const flat = [];
 for (let i = 0; i < 24; i++) {
-  const from = Date.UTC(2026, 8, 10, 22) + i * 3600000;
+  const from = midnight() + i * 3600000;
   flat.push({
     start: new Date(from).toISOString(),
     end: new Date(from + 3600000).toISOString(),

@@ -177,3 +177,142 @@ def test_the_breakdown_survives_nothing_being_configured(build_system):
     assert parts["forecast_per_sensor"] == {}
     assert parts["forecast_total_kwh"] is None
     assert parts["produced_today_kwh"] is None
+
+
+# -- how much of the sun actually arrives ------------------------------------
+#
+# The ceiling above reserves room for the sun still to come. It assumed all of
+# it reaches a pack. It does not: the house is first in the queue, and at this
+# owner's site it takes the larger share. On 18 September the ceiling held
+# buying back at 45 % because the forecast promised ~15 kWh more sun; 7.4 kWh
+# arrived and 1.7 kWh of that reached the packs. They were flat by 08:00 the
+# next morning, having skipped a five-hour cheap window at EUR 0.129.
+#
+# So the reservation is scaled by what recent days actually delivered.
+
+
+def day(produced, charged, grid=0.0):
+    """One closed day, as `_roll_periods` writes it."""
+    return {"produced_kwh": produced, "charged_kwh": charged, "grid_kwh": grid}
+
+
+def with_days(system, *days):
+    """Give the coordinator a run of closed days, oldest first."""
+    history = system.coordinator.periods["day"]["history"]
+    history.clear()
+    for index, figures in enumerate(days):
+        history[f"2026-09-{index + 1:02d}"] = figures
+    return system.coordinator
+
+
+def test_without_enough_history_it_reserves_for_the_whole_forecast(build_system):
+    """Which is exactly how it behaved before any of this existed."""
+    system = build_system(**THREE_PLANES, **MEASURED)
+    set_forecast(system, 3.5, 3.5, 0)
+    with_days(system, day(10, 2), day(10, 2))
+
+    assert system.coordinator.solar_capture() == (None, 0)
+    assert system.coordinator._solar_headroom_ceiling() == pytest.approx(50.0)
+
+
+def test_three_days_are_enough_to_start_scaling(build_system):
+    system = build_system(**THREE_PLANES, **MEASURED)
+    set_forecast(system, 3.5, 3.5, 0)
+    with_days(system, day(10, 2), day(10, 2), day(10, 2))
+
+    share, days = system.coordinator.solar_capture()
+
+    assert (share, days) == (pytest.approx(0.2), 3)
+    # 7 kWh forecast, but only a fifth of it has been arriving: reserve 1.4 kWh
+    # of the 14 kWh packs rather than all 7
+    assert system.coordinator._solar_headroom_ceiling() == pytest.approx(90.0)
+
+
+def test_the_bought_half_is_not_counted_as_sun(build_system):
+    """`charged_kwh` includes grid buying; only the remainder is the sun's."""
+    system = build_system(**THREE_PLANES, **MEASURED)
+    with_days(system, *[day(10, 8, grid=6)] * 3)
+
+    assert system.coordinator.solar_capture()[0] == pytest.approx(0.2)
+
+
+def test_one_odd_day_cannot_move_it(build_system):
+    """A median, because a fortnight contains the odd day away from home."""
+    system = build_system(**THREE_PLANES, **MEASURED)
+    with_days(system, day(10, 2), day(10, 2), day(10, 9), day(10, 2), day(10, 2))
+
+    # the mean would be 0.34, dragged up by the one strange day
+    assert system.coordinator.solar_capture()[0] == pytest.approx(0.2)
+
+
+def test_a_day_with_no_sun_says_nothing_and_is_skipped(build_system):
+    system = build_system(**THREE_PLANES, **MEASURED)
+    with_days(system, day(0.4, 0), day(10, 2), day(10, 2), day(10, 2))
+
+    assert system.coordinator.solar_capture() == (pytest.approx(0.2), 3)
+
+
+def test_a_day_that_measured_no_charging_is_not_a_day_of_zero_capture(build_system):
+    """The charge-power sensors are optional. A day without them means "not
+    measured here", and reading it as "the sun delivered nothing" would drive
+    the ceiling to 100 % on the strength of missing data."""
+    system = build_system(**THREE_PLANES, **MEASURED)
+    with_days(system, day(10, 0), day(10, 0), day(10, 2), day(10, 2), day(10, 2))
+
+    assert system.coordinator.solar_capture() == (pytest.approx(0.2), 3)
+
+
+def test_it_looks_back_a_fortnight_and_no_further(build_system):
+    """Older days are still stored - 62 of them - but a share measured in July
+    should not steer the packs in October."""
+    system = build_system(**THREE_PLANES, **MEASURED)
+    # twenty days: the oldest six would halve the answer if they counted
+    with_days(system, *([day(10, 9)] * 6 + [day(10, 2)] * 14))
+
+    assert system.coordinator.solar_capture() == (pytest.approx(0.2), 14)
+
+
+def test_the_share_never_reserves_nothing_at_all(build_system):
+    """A fortnight of cloud would otherwise say "buy to full" on the morning of
+    a blazing day."""
+    system = build_system(**THREE_PLANES, **MEASURED)
+    set_forecast(system, 7.0, 7.0, 0)
+    with_days(system, *[day(10, 0.01)] * 3)
+
+    assert system.coordinator.solar_capture()[0] == pytest.approx(0.05)
+    assert system.coordinator._solar_headroom_ceiling() == pytest.approx(95.0)
+
+
+def test_the_measurement_can_only_raise_the_ceiling(build_system):
+    """The safety property worth stating out loud: the share never exceeds 1,
+    so this can talk the packs into buying more but never into buying less. It
+    cannot invent a new way to be caught empty."""
+    system = build_system(**THREE_PLANES, **MEASURED)
+    set_forecast(system, 3.5, 3.5, 0)
+    bare = 50.0  # 7 kWh of 14 kWh capacity
+
+    for charged in (2, 5, 9, 10, 14):
+        with_days(system, *[day(10, charged)] * 3)
+        assert system.coordinator._solar_headroom_ceiling() >= bare
+
+
+def test_a_day_that_captured_everything_leaves_the_ceiling_where_it_was(build_system):
+    system = build_system(**THREE_PLANES, **MEASURED)
+    set_forecast(system, 3.5, 3.5, 0)
+    with_days(system, *[day(10, 12)] * 3)
+
+    assert system.coordinator.solar_capture()[0] == pytest.approx(1.0)
+    assert system.coordinator._solar_headroom_ceiling() == pytest.approx(50.0)
+
+
+def test_the_ceiling_sensor_says_what_it_is_reserving_for(build_system):
+    """The bare number reads as a setting; these two say it is a forecast being
+    trusted, and how much measurement is behind that trust."""
+    system = build_system(**THREE_PLANES, **MEASURED)
+    set_forecast(system, 3.5, 3.5, 0)
+    with_days(system, *[day(10, 2)] * 3)
+
+    report = system.coordinator.diagnostics()["state"]
+
+    assert report["solar_capture_share"] == pytest.approx(0.2)
+    assert report["solar_capture_days"] == 3
