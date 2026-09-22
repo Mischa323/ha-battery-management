@@ -827,6 +827,8 @@ capped — that would be throwing sun away.
 | Measuring which pack is on which phase | A detection run is in progress; the packs hold at 0 for about a minute |
 | Buying now, prices are low | A cheap hour, packs low, little sun coming |
 | Holding the charge for dearer hours | Refusing to discharge now so the kWh go to the peak |
+| Holding back, a cheaper day is coming | Tomorrow buys cheaper, so tonight takes only what the floor asks for |
+| Holding back, cheaper later today | A cheaper window follows the coming peak; buying stops at the floor until then |
 | Not buying, the sun still fits | What is coming free would not fit if it bought now |
 | Dynamic, but no prices available | The mode is on but the price sensor is mute |
 | Following an external plan | EMHASS or similar is driving |
@@ -981,6 +983,45 @@ The margin is still measured against the *whole* window, deliberately. What the
 bound cuts off is the dear hours the buying is for, and comparing the cheap
 hours only with each other would rule every one of them out and buy nothing at
 all.
+
+### How much, when a cheaper window follows the peak
+
+Stopping the ranking at the peak fixed *when* it buys, and quietly broke *how
+much*. Whatever is cheapest of what is left on this side wins by default —
+however dear it has become in absolute terms — and as the genuinely cheap
+quarters go by, "cheapest of what remains" climbs.
+
+Reported on the morning of 2026-09-22: 6.1 kWh bought overnight at an average
+of €0.337 with the packs already at 77 %, hours before an afternoon a third
+cheaper that they held far more than enough charge to reach. The last four
+purchases were at €0.348, €0.363, €0.369 and €0.398 — each one the cheapest
+thing still left before the peak.
+
+So the deadline stays and the *amount* now looks past it. When the cheap hours
+on the far side of the coming peak are cheaper than this side by more than the
+margin, the ceiling before the peak is **Buy up to: at least** — take the
+bridge, fill in the cheaper window.
+
+**This does nothing until you set a floor.** With *Buy up to: at least* at 0
+the rule would read as "buy nothing before a peak", which is exactly the fault
+above arriving from the other direction, so with no floor stated nothing is
+held back. With one, it says something stronger than it first looks: before any
+peak with a cheaper window behind it, buy the bridge you asked for and no more.
+On an ordinary day that is most evenings — which is the intended shape, because
+the filling belongs in the cheap window and not in the run-up to a peak.
+
+### Resting on the ceiling
+
+The packs report whole percentage points. A bank sitting on a ceiling of 90.9
+therefore reads 90 and 91 in alternate ticks, and each 90 used to restart a
+purchase at full power that each 91 then stopped. Going out is immediate and
+coming back is integrated, so each one cost some 45 seconds of importing at
+7 kW.
+
+Anything within two percentage points of the ceiling now counts as *at* it.
+Both halves measure that room through one helper on purpose: when the
+earmarking and the draw disagreed, an hour was marked for buying that the tick
+then refused, which is the flapping itself.
 
 ### How full, when tomorrow is cheaper
 

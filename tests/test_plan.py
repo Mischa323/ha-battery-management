@@ -1036,16 +1036,39 @@ async def test_a_far_side_within_the_margin_is_not_a_cheaper_window(planned):
 
 
 async def test_with_no_peak_ahead_there_is_nothing_to_hold_back_from(planned):
-    """The comparison needs two sides. Take the peak away and the whole window
-    is already one ranking, which is what it is for."""
-    flat = morning_of_the_22nd()
-    for slot in flat["raw_today"]:
-        if slot["value"] == 0.48:
-            slot["value"] = 0.33
+    """The comparison needs a boundary. Take the peak away and the whole window
+    is already one ranking, which is what it is for.
+
+    `expensive_hours` at 0 is what actually removes it. Flattening the prices
+    is not enough and this test said it was for a while: `pick_dearest` breaks
+    a tie on the earliest slot, so a flat day still has a "peak" - it just
+    lands close enough to now that the near side is too thin to judge, which
+    is a different answer arrived at down a different path. The one below pins
+    that path on purpose.
+    """
+    system = before_the_peak(planned, soc=77.0, **{CONF_EXPENSIVE_HOURS: 0})
+
+    assert system.coordinator._buy_before() is None
+    assert system.coordinator.after_peak_step() is None
+    assert system.coordinator._buy_ceiling()[0] == 100.0
+
+
+async def test_a_peak_too_close_to_judge_from_holds_nothing_back(planned):
+    """A peak in the very next hour leaves no near side worth comparing.
+
+    Two hours seen from just before them are not a window, and calling them
+    dear or cheap either way would move the ceiling on noise.
+    """
+    soon = morning_of_the_22nd()
+    for slot in soon["raw_today"]:
+        start = datetime.fromisoformat(slot["start"])
+        if start.day == NOW.day and start.hour >= NOW.hour:
+            slot["value"] = 0.48 if start.hour < NOW.hour + 2 else 0.20
     system = planned(remaining=0.0, soc=(77.0, 77.0))
-    system.hass.states.set(PRICES, 0.33, flat)
+    system.hass.states.set(PRICES, 0.33, soon)
     system.coordinator.buy_ceiling_min = 30.0
 
+    assert system.coordinator._buy_before() is not None
     assert system.coordinator.after_peak_step() is None
     assert system.coordinator._buy_ceiling()[0] == 100.0
 
