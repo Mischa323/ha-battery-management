@@ -305,6 +305,7 @@
           "external_stale": "Extern plan is stilgevallen, regelt zelf",
           "solar_headroom": "Koopt niet in, de zon past er nog in",
           "cheaper_tomorrow": "Houdt in, er komt een goedkopere dag aan",
+          "cheaper_later": "Houdt in, later vandaag goedkoper",
           "phase_limit": "Afgeremd door de hoofdzekering",
           "phase_detect": "Meten welke accu op welke fase zit",
           "recovering": "Eerst terugladen voordat hij weer ontlaadt",

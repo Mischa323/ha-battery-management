@@ -38,7 +38,7 @@ from .suppliers import FETCHERS, SOURCE_ENTITY, SOURCE_NONE
 from .trace import Trace
 from .prices import (
     cheapest_slots,
-    cheaper_next_day,
+    cheaper_beyond,
     dearest_slots,
     next_dear_start,
     pick_cheapest,
@@ -147,6 +147,7 @@ from .const import (
     MAX_ENERGY_GAP_INTERVALS,
     PERIOD_DAY,
     PERIOD_HISTORY,
+    BUY_CEILING_BAND,
     SOLAR_CAPTURE_DAYS,
     SOLAR_CAPTURE_FLOOR,
     SOLAR_CAPTURE_MIN_DAYS,
@@ -168,6 +169,7 @@ from .const import (
     POLICY_MIN_OUTPUT,
     POLICY_DISABLED,
     POLICY_BUY_WINDOW,
+    POLICY_CHEAPER_LATER,
     POLICY_CHEAPER_TOMORROW,
     POLICY_DYNAMIC_CHARGE,
     POLICY_SOLAR_HEADROOM,
@@ -1613,8 +1615,42 @@ class BatteryCoordinator:
         midnight = dt_util.start_of_local_day(
             dt_util.as_local(now) + timedelta(days=1)
         )
-        return cheaper_next_day(
+        return cheaper_beyond(
             self._price_forecast() or [], now, midnight,
+            self._cheap_hours, PRICE_WINDOW_HOURS,
+        )
+
+    def after_peak_step(self) -> float | None:
+        """How much cheaper the far side of the coming peak is, per kWh.
+
+        The question `next_day_step` cannot answer. That one asks whether
+        *tomorrow* is a cheaper day; this one asks whether there is a cheaper
+        window still to come **today**, on the other side of the expensive
+        stretch the buying is currently racing to beat.
+
+        The two are opposites in effect and that is the point. `_buy_before`
+        confines the ranking to the hours before the peak, so that the packs
+        meet the peak charged rather than spending the night ranked against a
+        cheap tomorrow morning. But confining the *horizon* also confines the
+        *comparison*: whatever is cheapest of what is left before the peak wins
+        by default, however dear it has become in absolute terms. On the
+        morning of 2026-09-22 that bought 6.1 kWh at an average of EUR 0.337
+        with the packs already at 77 %, while the afternoon on the far side of
+        the peak was a third cheaper and the packs held far more than enough to
+        reach it.
+
+        So the horizon still stops at the peak - the deadline is real - but how
+        much is bought before it is now allowed to depend on what comes after.
+
+        None when either side is too thin a slice to judge, and None when no
+        expensive stretch is coming at all: with nothing to race, there is
+        nothing to hold back from.
+        """
+        peak = self._buy_before()
+        if peak is None:
+            return None
+        return cheaper_beyond(
+            self._price_forecast() or [], dt_util.utcnow(), peak,
             self._cheap_hours, PRICE_WINDOW_HOURS,
         )
 
@@ -1681,7 +1717,60 @@ class BatteryCoordinator:
             # raising the ceiling never causes one. Leaving it None also keeps
             # `_sun_is_enough` consulted, which is the only sun check left on
             # this path and must not be skipped just because tomorrow is dear.
+
+        # Last, and on purpose: a cheaper window still to come *today* outranks
+        # everything above it. Filling before the peak is worth doing when the
+        # packs would otherwise meet it empty; it is not worth doing merely
+        # because the deadline exists, and the branches above cannot tell the
+        # difference because they never look past the peak. This one does.
+        #
+        # Reported 2026-09-22: 6.1 kWh bought overnight at EUR 0.337 with the
+        # packs at 77 %, hours before an afternoon a third cheaper. The floor
+        # is what keeps this from meaning "buy nothing" - it is the owner's own
+        # "buy at least to", which is exactly the charge they want in hand
+        # before a peak, and `_bound_ceiling` raises anything under it back up.
+        later = self.after_peak_step()
+        if (
+            later is not None
+            and later >= self._price_margin
+            # Same guard as the branch above, and for the same reason: with no
+            # floor stated this would read as "buy nothing before a peak", and
+            # the packs would meet every expensive evening on whatever they
+            # happened to hold. That is the fault #7 was opened for, and two
+            # tests in `test_plan.py` go red the moment this is dropped.
+            #
+            # With a floor it says something quite different, and stronger than
+            # it first looks: before any peak with a cheaper window behind it,
+            # buy the bridge the owner asked for and no more. On an ordinary
+            # day that is most evenings, which is the intended shape - the
+            # filling belongs in the cheap window, not in the run-up to a peak.
+            and self.buy_ceiling_min > 0
+        ):
+            held = min(ceiling, self.buy_ceiling_min)
+            if held < ceiling:
+                reason = POLICY_CHEAPER_LATER
+            ceiling = held
         return self._bound_ceiling(ceiling), reason
+
+    def _room_to_buy(self, soc: float, limit: float, ceiling: float) -> float:
+        """Percentage points of this pack still worth buying into.
+
+        Zero once it is within `BUY_CEILING_BAND` of the ceiling, which is the
+        whole reason this exists rather than a bare subtraction: the packs
+        report whole percentage points, so a bank resting on a ceiling of 90.9
+        reads 90 and 91 on alternate ticks. Without a band each 90 started a
+        purchase at full power and each 91 stopped it, and because going out is
+        immediate while coming back is integrated, one misread tick cost some
+        45 seconds of importing at 7 kW.
+
+        One helper for both callers. `hours_of_charge_needed` decides which
+        hours get earmarked and `_dynamic_should_charge` decides whether to
+        draw right now; if they measured the room differently, an hour would be
+        earmarked that the tick then refuses - which is precisely the flapping
+        this is here to stop.
+        """
+        room = min(ceiling, limit) - soc
+        return room if room > BUY_CEILING_BAND else 0.0
 
     def hours_of_charge_needed(self, online: dict | None = None) -> float | None:
         """How long on the grid the packs still need to reach the buy ceiling.
@@ -1706,7 +1795,7 @@ class BatteryCoordinator:
         ceiling, _ = self._buy_ceiling()
         longest = 0.0
         for snap in online.values():
-            missing = max(min(ceiling, snap.charge_limit) - snap.soc, 0.0)
+            missing = self._room_to_buy(snap.soc, snap.charge_limit, ceiling)
             longest = max(longest, missing / 100.0 * self._full_charge_minutes)
         return longest / 60.0
 
@@ -1775,7 +1864,10 @@ class BatteryCoordinator:
         if ceiling <= 0:
             # more sun coming than the packs could hold: buying nothing is right
             return False, reason
-        if not any(s.soc < min(ceiling, s.charge_limit) for s in online.values()):
+        if not any(
+            self._room_to_buy(s.soc, s.charge_limit, ceiling) > 0
+            for s in online.values()
+        ):
             return False, reason
         self._buying_slot = _slot_key(current)
         return True, POLICY_DYNAMIC_CHARGE

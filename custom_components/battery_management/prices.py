@@ -416,7 +416,7 @@ def cheap_mean(candidates: list[Slot], hours: float) -> float | None:
     return sum(slot.price for slot in picked) / len(picked)
 
 
-def cheaper_next_day(
+def cheaper_beyond(
     slots: list[Slot],
     now: datetime,
     boundary: datetime,
@@ -425,22 +425,20 @@ def cheaper_next_day(
 ) -> float | None:
     """How much cheaper the far side of `boundary` is than this side, per kWh.
 
-    Positive means the next day buys cheaper; negative means today is the cheap
-    one. `boundary` is midnight in the reader's own clock, handed in rather than
-    worked out here so this file stays free of timezones.
+    Positive means the far side buys cheaper; negative means this side is the
+    cheap one. Both sides are judged by their own cheapest hours, not their
+    average: what a side would actually be bought on is what it is worth.
 
-    The comparison is deliberately *not* made across the peak. Everything after
-    an expensive stretch begins is dearer than the cheap hour before it, on
-    every ordinary day - so that comparison fires constantly and says nothing.
-    Across the day boundary it answers the question actually being asked: is
-    tomorrow a cheaper day than the rest of today.
+    `boundary` is handed in rather than worked out here, which keeps this file
+    free of both timezones and of any opinion about *which* boundary matters.
+    Two callers ask two different questions of the same arithmetic - across
+    local midnight, "is tomorrow a cheaper day"; across the next expensive
+    stretch, "is there a cheaper window later today" - and the answers mean
+    opposite things, so each caller says which it means and why.
 
-    None when either side is too thin to judge. A sliver of tomorrow inside the
-    window - two night hours seen from 02:00 - is not a day, and the cheap night
-    it happens to contain would read as a bargain every single night.
-
-    This does not decide whether to buy. That is settled by the hours before the
-    peak, whatever tomorrow does. It decides *how full*.
+    None when either side is too thin to judge. A sliver of the far side inside
+    the window - two night hours seen from 02:00 - is not a day, and the cheap
+    night it happens to contain would read as a bargain every single night.
     """
     ahead = slots_in_window(slots, now, window_hours)
     today = [slot for slot in ahead if slot.start < boundary]
