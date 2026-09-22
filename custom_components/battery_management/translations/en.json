@@ -305,6 +305,7 @@
           "external_stale": "External plan went quiet, regulating on its own",
           "solar_headroom": "Not buying, the sun still fits",
           "cheaper_tomorrow": "Holding back, a cheaper day is coming",
+          "cheaper_later": "Holding back, cheaper later today",
           "phase_limit": "Held back by the main fuse",
           "phase_detect": "Measuring which pack is on which phase",
           "recovering": "Charging back up before it discharges again",

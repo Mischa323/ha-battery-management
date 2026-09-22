@@ -18,7 +18,7 @@ import pytest
 
 from custom_components.battery_management.prices import (
     Slot,
-    cheaper_next_day,
+    cheaper_beyond,
     cheapest_on_day,
     cheapest_slots,
     next_dear_start,
@@ -365,14 +365,14 @@ def test_a_cheap_stretch_that_beats_nothing_still_fails_the_margin():
 
 def test_a_cheaper_tomorrow_reads_positive():
     slots = series([0.30] * 12 + [0.10] * 12)
-    step = cheaper_next_day(slots, NOON, NOON + timedelta(hours=12), cheap_hours=4)
+    step = cheaper_beyond(slots, NOON, NOON + timedelta(hours=12), cheap_hours=4)
 
     assert step == pytest.approx(0.20)
 
 
 def test_a_dearer_tomorrow_reads_negative():
     slots = series([0.10] * 12 + [0.30] * 12)
-    step = cheaper_next_day(slots, NOON, NOON + timedelta(hours=12), cheap_hours=4)
+    step = cheaper_beyond(slots, NOON, NOON + timedelta(hours=12), cheap_hours=4)
 
     assert step == pytest.approx(-0.20)
 
@@ -381,11 +381,11 @@ def test_a_sliver_of_tomorrow_is_not_a_day():
     """Seen from 02:00 the window holds two hours of tomorrow, and the cheap
     night they fall in would read as a bargain every single night."""
     slots = series([0.30] * 22 + [0.10] * 2)
-    step = cheaper_next_day(slots, NOON, NOON + timedelta(hours=22), cheap_hours=4)
+    step = cheaper_beyond(slots, NOON, NOON + timedelta(hours=22), cheap_hours=4)
 
     assert step is None
 
 
 def test_nothing_to_compare_on_one_side_is_not_a_verdict():
     slots = series([0.30] * 24)
-    assert cheaper_next_day(slots, NOON, NOON + timedelta(hours=48), 4) is None
+    assert cheaper_beyond(slots, NOON, NOON + timedelta(hours=48), 4) is None

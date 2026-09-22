@@ -278,6 +278,7 @@ POLICY_DYNAMIC_CHARGE = "dynamic_charge"      # buying now because it is cheap
 POLICY_BUY_WINDOW = "buy_window"              # a cheap hour: not selling what we came to buy
 POLICY_SOLAR_HEADROOM = "solar_headroom"      # not buying, the sun still fits
 POLICY_CHEAPER_TOMORROW = "cheaper_tomorrow"  # holding back, a cheaper day is coming
+POLICY_CHEAPER_LATER = "cheaper_later"        # holding back, a cheaper window today
 POLICY_EXTERNAL = "external_plan"             # following someone else's plan
 POLICY_EXTERNAL_STALE = "external_stale"      # plan went quiet, regulating ourselves
 POLICY_DYNAMIC_NO_PRICES = "dynamic_no_prices"  # dynamic, but the sensor is mute
@@ -300,6 +301,7 @@ POLICIES = [
     POLICY_BUY_WINDOW,
     POLICY_SOLAR_HEADROOM,
     POLICY_CHEAPER_TOMORROW,
+    POLICY_CHEAPER_LATER,
     POLICY_EXTERNAL,
     POLICY_EXTERNAL_STALE,
     POLICY_DYNAMIC_NO_PRICES,
@@ -499,6 +501,19 @@ SOLAR_CAPTURE_MIN_KWH = 1.0
 #: of cloud, a house that swallowed everything - the arithmetic would otherwise
 #: say "buy to full" on the morning of a blazing day.
 SOLAR_CAPTURE_FLOOR = 0.05
+
+#: How close to the buy ceiling counts as "there". Percentage points of state
+#: of charge, and it exists because the packs report whole ones: a bank sitting
+#: on a ceiling of 90.9 reads 90 and 91 in alternate ticks, and without a band
+#: each 90 restarted a full-power purchase that each 91 then stopped. On the
+#: morning of 2026-09-22 that fired four times between 05:18 and 06:17 local,
+#: every one of them dearer than the last, because the cheapest slot still left
+#: before a peak gets dearer as the cheap ones go by.
+#:
+#: Two points is a little over half a kilowatt hour on a 28 kWh bank - smaller
+#: than the reporting step it protects against is not worth having, and much
+#: larger would start leaving real room unbought.
+BUY_CEILING_BAND = 2.0
 
 PERIOD_HISTORY = {
     PERIOD_DAY: 62,

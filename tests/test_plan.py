@@ -22,6 +22,7 @@ from custom_components.battery_management.const import (
     CONF_SOLAR_FORECAST_MAX,
     CONF_SOLAR_FORECAST_SENSORS,
     MODE_DYNAMIC,
+    POLICY_CHEAPER_LATER,
     POLICY_CHEAPER_TOMORROW,
     POLICY_DYNAMIC_CHARGE,
     POLICY_SOLAR_HEADROOM,
@@ -933,3 +934,209 @@ def test_it_is_capped_by_the_hand_set_maximum(planned):
     system.coordinator.buy_ceiling_max = 80.0
 
     assert system.coordinator._buy_ceiling()[0] == 80.0
+
+
+# -- the morning of 2026-09-22 ------------------------------------------------
+
+
+def morning_of_the_22nd(after_peak: float = 0.20) -> dict:
+    """The reported day, in shape: dear run-up, a peak, a cheaper afternoon.
+
+    On 22 September the packs stood at 77 % at 03:15 local with 6.1 kWh bought
+    overnight at an average of EUR 0.337 - hours before an afternoon a third
+    cheaper, which they held far more than enough charge to reach.
+
+    Nothing was wrong with any single decision. The horizon stops at the peak,
+    so the cheapest slot still on this side of it wins by default however dear
+    it has become; and as the genuinely cheap ones go by, "cheapest of what is
+    left" climbs. The last four purchases that morning were at 0.348, 0.363,
+    0.369 and 0.398, each one the cheapest thing remaining.
+
+    Tomorrow is priced the same as today on purpose, so that `next_day_step`
+    has nothing to say and this can only be the peak comparison talking.
+    """
+    midnight = NOW.replace(hour=0, minute=0, second=0, microsecond=0)
+    slots = []
+    for i in range(48):
+        start = midnight + timedelta(hours=i)
+        if start.day != NOW.day:
+            price = 0.33
+        elif 16 <= start.hour < 19:
+            price = 0.48          # the peak being raced to beat
+        elif start.hour >= 19:
+            price = after_peak    # the window on the far side of it
+        else:
+            price = 0.33          # the run-up, where the buying happened
+        slots.append(
+            {
+                "start": start.isoformat(),
+                "end": (start + timedelta(hours=1)).isoformat(),
+                "value": price,
+            }
+        )
+    return {"raw_today": slots}
+
+
+def before_the_peak(planned, *, soc, floor=30.0, after_peak=0.20, **options):
+    system = planned(remaining=0.0, soc=(soc, soc), **options)
+    system.hass.states.set(PRICES, 0.33, morning_of_the_22nd(after_peak))
+    system.coordinator.buy_ceiling_min = floor
+    return system
+
+
+async def test_it_waits_for_the_cheaper_window_on_the_far_side(planned):
+    """The report itself: packs at 77 %, and a third off coming after the peak.
+
+    The deadline is real - the packs do have to meet the peak charged - but it
+    says nothing about buying more than they need to get there, and the branch
+    that sets the ceiling could not tell the difference because it never looked
+    past the peak.
+    """
+    system = before_the_peak(planned, soc=77.0)
+
+    ceiling, reason = system.coordinator._buy_ceiling()
+    await system.coordinator._async_tick(None)
+
+    assert (ceiling, reason) == (30.0, POLICY_CHEAPER_LATER)
+    assert system.coordinator.active_policy != POLICY_DYNAMIC_CHARGE
+    assert system.coordinator.setpoint >= 0
+
+
+async def test_it_still_buys_the_bridge_the_floor_asks_for(planned):
+    """Holding back is not refusing. Empty packs still meet the peak charged -
+    to the level the owner stated and no further, with the rest left to the
+    cheaper window."""
+    system = before_the_peak(planned, soc=20.0)
+
+    await system.coordinator._async_tick(None)
+
+    assert system.coordinator.charge_ceiling() == 30.0
+    assert system.coordinator.active_policy == POLICY_DYNAMIC_CHARGE
+    assert system.coordinator.setpoint < 0
+
+
+async def test_with_no_floor_stated_it_behaves_exactly_as_before(planned):
+    """`buy_ceiling_min` ships at 0, and reading that as a level to stop at
+    would mean "buy nothing before a peak" - which is the fault #7 was opened
+    for, arriving silently with an update. No floor, no holding back."""
+    system = before_the_peak(planned, soc=77.0, floor=0.0)
+
+    ceiling, reason = system.coordinator._buy_ceiling()
+
+    assert ceiling == 100.0
+    assert reason != POLICY_CHEAPER_LATER
+
+
+async def test_a_far_side_within_the_margin_is_not_a_cheaper_window(planned):
+    """A penny after the peak is not worth meeting it emptier for."""
+    system = before_the_peak(planned, soc=77.0, after_peak=0.30)
+
+    assert system.coordinator.after_peak_step() < system.coordinator._price_margin
+    assert system.coordinator._buy_ceiling()[0] == 100.0
+
+
+async def test_with_no_peak_ahead_there_is_nothing_to_hold_back_from(planned):
+    """The comparison needs a boundary. Take the peak away and the whole window
+    is already one ranking, which is what it is for.
+
+    `expensive_hours` at 0 is what actually removes it. Flattening the prices
+    is not enough and this test said it was for a while: `pick_dearest` breaks
+    a tie on the earliest slot, so a flat day still has a "peak" - it just
+    lands close enough to now that the near side is too thin to judge, which
+    is a different answer arrived at down a different path. The one below pins
+    that path on purpose.
+    """
+    system = before_the_peak(planned, soc=77.0, **{CONF_EXPENSIVE_HOURS: 0})
+
+    assert system.coordinator._buy_before() is None
+    assert system.coordinator.after_peak_step() is None
+    assert system.coordinator._buy_ceiling()[0] == 100.0
+
+
+async def test_the_hours_left_before_a_peak_are_never_too_few_to_count(planned):
+    """The near side is not a sample, it is the opportunity itself.
+
+    The first version of this required `cheap_hours` worth of slots on *both*
+    sides, copied from the day-boundary comparison where both sides genuinely
+    are samples. Approaching a peak the near side shrinks below any fixed bar,
+    and it shrinks fastest exactly when the question is sharpest - so on the
+    reported morning, with the peak four hours out and `cheap_hours` at five,
+    the new rule was silent through every purchase it was written to stop.
+
+    A worked example caught that; these tests did not, because the fixture
+    ranks over two cheap hours and the synthetic day left sixteen before its
+    peak. So this one sets both to the reported shape.
+    """
+    system = before_the_peak(planned, soc=77.0, **{CONF_CHEAP_HOURS: 5})
+
+    # four hours to the peak, ranked over five: thinner than the budget
+    assert system.coordinator._buy_before() == NOW + timedelta(hours=4)
+    assert system.coordinator.after_peak_step() >= system.coordinator._price_margin
+    assert system.coordinator._buy_ceiling() == (30.0, POLICY_CHEAPER_LATER)
+
+
+async def test_a_peak_in_the_next_quarter_holds_back_hardest(planned):
+    """The same rule at its limit. With minutes left there is nothing useful
+    left to buy on this side anyway, and the floor still guarantees the bridge
+    - so a much cheaper window after the peak wins outright."""
+    soon = morning_of_the_22nd()
+    for slot in soon["raw_today"]:
+        start = datetime.fromisoformat(slot["start"])
+        if start.day == NOW.day and start.hour >= NOW.hour:
+            slot["value"] = 0.48 if start.hour < NOW.hour + 2 else 0.20
+    system = planned(remaining=0.0, soc=(77.0, 77.0))
+    system.hass.states.set(PRICES, 0.33, soon)
+    system.coordinator.buy_ceiling_min = 30.0
+
+    assert system.coordinator._buy_before() is not None
+    assert system.coordinator._buy_ceiling() == (30.0, POLICY_CHEAPER_LATER)
+
+
+# -- the band on the ceiling --------------------------------------------------
+
+
+async def test_a_pack_resting_on_the_ceiling_does_not_restart_the_buying(planned):
+    """The four dearest purchases of 22 September, in one test.
+
+    The packs report whole percentage points and the ceiling was 90.9, so the
+    bank read 90 and 91 in alternate ticks. Each 90 started a purchase at full
+    power and each 91 stopped it - and because going out is immediate while
+    coming back is integrated, every one of them cost some 45 seconds of
+    importing at 7 kW, at a price that climbed all morning.
+    """
+    system = planned(remaining=1.0, soc=(92.0, 92.0))   # ceiling is 93
+
+    assert system.coordinator.hours_of_charge_needed() == 0
+    await system.coordinator._async_tick(None)
+
+    assert system.coordinator.active_policy != POLICY_DYNAMIC_CHARGE
+
+
+async def test_real_room_under_the_ceiling_is_still_bought(planned):
+    """The band is a band, not a new ceiling three points lower."""
+    system = planned(remaining=1.0, soc=(88.0, 88.0))
+
+    assert system.coordinator.hours_of_charge_needed() > 0
+    await system.coordinator._async_tick(None)
+
+    assert system.coordinator.active_policy == POLICY_DYNAMIC_CHARGE
+
+
+def test_the_two_halves_measure_the_room_the_same_way(planned):
+    """One helper, deliberately. When these disagreed, an hour was earmarked
+    that the tick then refused - which is the flapping itself."""
+    system = planned(remaining=1.0, soc=(92.0, 92.0))
+    online = {
+        unit.name: snap
+        for unit in system.coordinator._units
+        if (snap := system.coordinator._unit_snapshot(unit)).online
+    }
+    ceiling, _ = system.coordinator._buy_ceiling()
+
+    earmarked = system.coordinator.hours_of_charge_needed(online) > 0
+    would_draw = any(
+        system.coordinator._room_to_buy(s.soc, s.charge_limit, ceiling) > 0
+        for s in online.values()
+    )
+
+    assert earmarked == would_draw

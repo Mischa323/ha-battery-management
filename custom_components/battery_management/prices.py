@@ -416,31 +416,43 @@ def cheap_mean(candidates: list[Slot], hours: float) -> float | None:
     return sum(slot.price for slot in picked) / len(picked)
 
 
-def cheaper_next_day(
+def cheaper_beyond(
     slots: list[Slot],
     now: datetime,
     boundary: datetime,
     cheap_hours: float,
     window_hours: float = 24.0,
+    near_hours: float | None = None,
 ) -> float | None:
     """How much cheaper the far side of `boundary` is than this side, per kWh.
 
-    Positive means the next day buys cheaper; negative means today is the cheap
-    one. `boundary` is midnight in the reader's own clock, handed in rather than
-    worked out here so this file stays free of timezones.
+    Positive means the far side buys cheaper; negative means this side is the
+    cheap one. Both sides are judged by their own cheapest hours, not their
+    average: what a side would actually be bought on is what it is worth.
 
-    The comparison is deliberately *not* made across the peak. Everything after
-    an expensive stretch begins is dearer than the cheap hour before it, on
-    every ordinary day - so that comparison fires constantly and says nothing.
-    Across the day boundary it answers the question actually being asked: is
-    tomorrow a cheaper day than the rest of today.
+    `boundary` is handed in rather than worked out here, which keeps this file
+    free of both timezones and of any opinion about *which* boundary matters.
+    Two callers ask two different questions of the same arithmetic - across
+    local midnight, "is tomorrow a cheaper day"; across the next expensive
+    stretch, "is there a cheaper window later today" - and the answers mean
+    opposite things, so each caller says which it means and why.
 
-    None when either side is too thin to judge. A sliver of tomorrow inside the
-    window - two night hours seen from 02:00 - is not a day, and the cheap night
-    it happens to contain would read as a bargain every single night.
+    None when either side is too thin to judge. A sliver of the far side inside
+    the window - two night hours seen from 02:00 - is not a day, and the cheap
+    night it happens to contain would read as a bargain every single night.
 
-    This does not decide whether to buy. That is settled by the hours before the
-    peak, whatever tomorrow does. It decides *how full*.
+    `near_hours` is how much of *this* side must exist before the comparison is
+    made, and it defaults to the same test. That default is right when the two
+    sides are both samples - is tomorrow a cheaper day - and wrong when the near
+    side is not a sample but the opportunity itself. Approaching a peak, the
+    hours left before it shrink below any fixed bar, and they shrink *fastest*
+    as the deadline nears, which is when "buy now or wait for the far side"
+    matters most and not least. A caller in that position passes 0.
+
+    That was not a hypothetical: the first version of the peak comparison took
+    this default, and on the morning it was written to fix - the peak four
+    hours out, `cheap_hours` at five - it was silent for every purchase in the
+    report. A worked example is what caught it, not the tests.
     """
     ahead = slots_in_window(slots, now, window_hours)
     today = [slot for slot in ahead if slot.start < boundary]
@@ -449,7 +461,10 @@ def cheaper_next_day(
         return None
     span = min((slot.end - slot.start).total_seconds() / 3600 for slot in ahead)
     enough = max(1, round(cheap_hours / span))
-    if len(today) < enough or len(tomorrow) < enough:
+    near_enough = (
+        enough if near_hours is None else max(0, round(near_hours / span))
+    )
+    if len(today) < near_enough or len(tomorrow) < enough:
         return None
     here = cheap_mean(today, cheap_hours)
     there = cheap_mean(tomorrow, cheap_hours)
