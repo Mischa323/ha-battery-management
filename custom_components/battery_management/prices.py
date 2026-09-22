@@ -422,6 +422,7 @@ def cheaper_beyond(
     boundary: datetime,
     cheap_hours: float,
     window_hours: float = 24.0,
+    near_hours: float | None = None,
 ) -> float | None:
     """How much cheaper the far side of `boundary` is than this side, per kWh.
 
@@ -439,6 +440,19 @@ def cheaper_beyond(
     None when either side is too thin to judge. A sliver of the far side inside
     the window - two night hours seen from 02:00 - is not a day, and the cheap
     night it happens to contain would read as a bargain every single night.
+
+    `near_hours` is how much of *this* side must exist before the comparison is
+    made, and it defaults to the same test. That default is right when the two
+    sides are both samples - is tomorrow a cheaper day - and wrong when the near
+    side is not a sample but the opportunity itself. Approaching a peak, the
+    hours left before it shrink below any fixed bar, and they shrink *fastest*
+    as the deadline nears, which is when "buy now or wait for the far side"
+    matters most and not least. A caller in that position passes 0.
+
+    That was not a hypothetical: the first version of the peak comparison took
+    this default, and on the morning it was written to fix - the peak four
+    hours out, `cheap_hours` at five - it was silent for every purchase in the
+    report. A worked example is what caught it, not the tests.
     """
     ahead = slots_in_window(slots, now, window_hours)
     today = [slot for slot in ahead if slot.start < boundary]
@@ -447,7 +461,10 @@ def cheaper_beyond(
         return None
     span = min((slot.end - slot.start).total_seconds() / 3600 for slot in ahead)
     enough = max(1, round(cheap_hours / span))
-    if len(today) < enough or len(tomorrow) < enough:
+    near_enough = (
+        enough if near_hours is None else max(0, round(near_hours / span))
+    )
+    if len(today) < near_enough or len(tomorrow) < enough:
         return None
     here = cheap_mean(today, cheap_hours)
     there = cheap_mean(tomorrow, cheap_hours)

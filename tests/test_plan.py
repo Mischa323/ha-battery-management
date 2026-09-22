@@ -1053,12 +1053,32 @@ async def test_with_no_peak_ahead_there_is_nothing_to_hold_back_from(planned):
     assert system.coordinator._buy_ceiling()[0] == 100.0
 
 
-async def test_a_peak_too_close_to_judge_from_holds_nothing_back(planned):
-    """A peak in the very next hour leaves no near side worth comparing.
+async def test_the_hours_left_before_a_peak_are_never_too_few_to_count(planned):
+    """The near side is not a sample, it is the opportunity itself.
 
-    Two hours seen from just before them are not a window, and calling them
-    dear or cheap either way would move the ceiling on noise.
+    The first version of this required `cheap_hours` worth of slots on *both*
+    sides, copied from the day-boundary comparison where both sides genuinely
+    are samples. Approaching a peak the near side shrinks below any fixed bar,
+    and it shrinks fastest exactly when the question is sharpest - so on the
+    reported morning, with the peak four hours out and `cheap_hours` at five,
+    the new rule was silent through every purchase it was written to stop.
+
+    A worked example caught that; these tests did not, because the fixture
+    ranks over two cheap hours and the synthetic day left sixteen before its
+    peak. So this one sets both to the reported shape.
     """
+    system = before_the_peak(planned, soc=77.0, **{CONF_CHEAP_HOURS: 5})
+
+    # four hours to the peak, ranked over five: thinner than the budget
+    assert system.coordinator._buy_before() == NOW + timedelta(hours=4)
+    assert system.coordinator.after_peak_step() >= system.coordinator._price_margin
+    assert system.coordinator._buy_ceiling() == (30.0, POLICY_CHEAPER_LATER)
+
+
+async def test_a_peak_in_the_next_quarter_holds_back_hardest(planned):
+    """The same rule at its limit. With minutes left there is nothing useful
+    left to buy on this side anyway, and the floor still guarantees the bridge
+    - so a much cheaper window after the peak wins outright."""
     soon = morning_of_the_22nd()
     for slot in soon["raw_today"]:
         start = datetime.fromisoformat(slot["start"])
@@ -1069,8 +1089,7 @@ async def test_a_peak_too_close_to_judge_from_holds_nothing_back(planned):
     system.coordinator.buy_ceiling_min = 30.0
 
     assert system.coordinator._buy_before() is not None
-    assert system.coordinator.after_peak_step() is None
-    assert system.coordinator._buy_ceiling()[0] == 100.0
+    assert system.coordinator._buy_ceiling() == (30.0, POLICY_CHEAPER_LATER)
 
 
 # -- the band on the ceiling --------------------------------------------------

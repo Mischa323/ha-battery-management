@@ -1652,6 +1652,15 @@ class BatteryCoordinator:
         return cheaper_beyond(
             self._price_forecast() or [], dt_util.utcnow(), peak,
             self._cheap_hours, PRICE_WINDOW_HOURS,
+            # The hours left before the peak are not a sample of anything -
+            # they are the whole remaining opportunity, and there are fewest of
+            # them exactly when this question is sharpest. Requiring
+            # `cheap_hours` of them, as the day-boundary comparison rightly
+            # does, made this silent through every purchase it was written to
+            # stop: on 22 September the peak was four hours out and
+            # `cheap_hours` is five. The far side still has to be a window
+            # worth waiting for.
+            near_hours=0,
         )
 
     def _buy_ceiling(self) -> tuple[float, str | None]:
