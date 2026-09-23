@@ -642,7 +642,7 @@ async def test_the_period_attributes_keep_their_names(build_system, clock, wall_
         assert isinstance(attributes["history"], dict)
 
 
-async def test_a_closed_period_carries_all_four_figures(build_system, clock, wall_clock):
+async def test_a_closed_period_carries_all_five_figures(build_system, clock, wall_clock):
     """Two of these are easy to confuse and mean very different things.
 
     `solar_kwh` is the sun's share of what reached the *packs*. `produced_kwh`
@@ -650,6 +650,10 @@ async def test_a_closed_period_carries_all_four_figures(build_system, clock, wal
     The gap between them is what the buy ceiling learns from - see
     `solar_capture` - so they have to be separate figures rather than one
     number doing both jobs.
+
+    `produced_room_kwh` is the part of that production that fell while a pack
+    could take it, which is what the share is actually measured against. Sun
+    arriving at full packs is exported whatever the packs would have wanted.
     """
     system = build_system(grid=2000, charge_power=True)
     charging(system, 1500, 500)
@@ -659,7 +663,9 @@ async def test_a_closed_period_carries_all_four_figures(build_system, clock, wal
 
     closed = system.coordinator.period_attributes("month")["history"]["2026-08"]
 
-    assert set(closed) == {"charged_kwh", "grid_kwh", "solar_kwh", "produced_kwh"}
+    assert set(closed) == {
+        "charged_kwh", "grid_kwh", "solar_kwh", "produced_kwh", "produced_room_kwh",
+    }
 
 
 async def test_the_sun_share_is_the_remainder(build_system, clock, wall_clock):

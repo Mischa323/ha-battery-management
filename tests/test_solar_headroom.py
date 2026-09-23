@@ -191,9 +191,18 @@ def test_the_breakdown_survives_nothing_being_configured(build_system):
 # So the reservation is scaled by what recent days actually delivered.
 
 
-def day(produced, charged, grid=0.0):
-    """One closed day, as `_roll_periods` writes it."""
-    return {"produced_kwh": produced, "charged_kwh": charged, "grid_kwh": grid}
+def day(produced, charged, grid=0.0, room=None):
+    """One closed day, as `_roll_periods` writes it.
+
+    `room` is the part of `produced` that fell while a pack could take it, and
+    defaults to all of it: these days are about the share, not about fullness.
+    """
+    return {
+        "produced_kwh": produced,
+        "produced_room_kwh": produced if room is None else room,
+        "charged_kwh": charged,
+        "grid_kwh": grid,
+    }
 
 
 def with_days(system, *days):
