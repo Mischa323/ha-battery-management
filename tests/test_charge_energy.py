@@ -773,3 +773,123 @@ async def test_a_closed_day_keeps_what_the_panels_made(build_system, clock, wall
     assert list(closed.values())[0]["produced_kwh"] == pytest.approx(9.0)
     # and the new day starts from nought rather than carrying it forward
     assert system.coordinator.periods["day"]["produced_wh"] == 0.0
+
+
+# -- production with room, for the capture share ------------------------------
+#
+# Sun that falls while every pack is full is exported whatever the packs would
+# have wanted, so it cannot say what share of the sun a pack with room takes.
+# On 21 September 7.6 of 17.2 kWh arrived after the grid had filled the packs,
+# and counting it turned a measured 61 % into 32 % - which raised the ceiling,
+# which bought the packs full again.
+
+
+def socs(system, first, second) -> None:
+    system.hass.states.set("sensor.093_soc", first)
+    system.hass.states.set("sensor.052_soc", second)
+
+
+async def test_sun_with_room_is_counted_in_full(build_system, clock):
+    system = build_system(grid=0, **solar_config())
+    socs(system, 60.0, 50.0)
+    produced(system, 0.0)
+    await run(system, 1, advance=clock)
+    produced(system, 5.0)
+    await run(system, 1, advance=clock)
+
+    day = system.coordinator.periods["day"]
+    assert day["produced_wh"] == pytest.approx(5000)
+    assert day["produced_room_wh"] == pytest.approx(5000)
+
+
+async def test_sun_at_full_packs_is_production_but_not_room(build_system, clock):
+    system = build_system(grid=0, **solar_config())
+    socs(system, 99.0, 98.0)
+    produced(system, 0.0)
+    await run(system, 1, advance=clock)
+    produced(system, 5.0)
+    await run(system, 1, advance=clock)
+
+    day = system.coordinator.periods["day"]
+    assert day["produced_wh"] == pytest.approx(5000)
+    assert day["produced_room_wh"] == pytest.approx(0)
+
+
+async def test_one_pack_with_room_is_room(build_system, clock):
+    """The surplus goes to whichever pack can take it."""
+    system = build_system(grid=0, **solar_config())
+    socs(system, 100.0, 70.0)
+    produced(system, 0.0)
+    await run(system, 1, advance=clock)
+    produced(system, 2.0)
+    await run(system, 1, advance=clock)
+
+    assert system.coordinator.periods["day"]["produced_room_wh"] == pytest.approx(2000)
+
+
+async def test_a_step_is_shared_by_how_many_ticks_had_room(build_system, clock):
+    """The production sensor steps every few minutes, and the step covers every
+    tick since the last one. Crediting it to whichever tick saw it would decide
+    a quarter-hour of sun on fifteen seconds."""
+    system = build_system(grid=0, **solar_config())
+    produced(system, 0.0)
+    socs(system, 60.0, 60.0)
+    await run(system, 3, advance=clock)            # three ticks with room
+    socs(system, 99.0, 99.0)
+    await run(system, 2, advance=clock)            # two full ...
+    produced(system, 4.0)
+    await run(system, 1, advance=clock)            # ... and the step, full too
+
+    day = system.coordinator.periods["day"]
+    assert day["produced_wh"] == pytest.approx(4000)
+    assert day["produced_room_wh"] == pytest.approx(2000)     # 3 of 6 ticks
+
+
+async def test_the_rollover_starts_the_sharing_again(build_system, clock):
+    """The ticks before the daily reset belong to no step after it."""
+    system = build_system(grid=0, **solar_config())
+    socs(system, 99.0, 99.0)
+    produced(system, 14.0)
+    await run(system, 3, advance=clock)            # full all evening
+    produced(system, 0.0)                          # the inverter's own midnight
+    await run(system, 1, advance=clock)
+    socs(system, 40.0, 40.0)
+    produced(system, 1.0)
+    await run(system, 1, advance=clock)
+
+    assert system.coordinator.periods["day"]["produced_room_wh"] == pytest.approx(1000)
+
+
+async def test_a_day_already_under_way_when_this_arrived_is_not_measured(
+    build_system, clock, wall_clock
+):
+    """Upgrading at noon must not close the day on half its production. The
+    share of a partial day would read as a bumper one, so it has no answer."""
+    system = build_system(grid=0, **solar_config())
+    produced(system, 0.0)
+    await run(system, 1, advance=clock)
+    system.coordinator.periods["day"]["produced_room_wh"] = None   # as restored
+    produced(system, 6.0)
+    await run(system, 1, advance=clock)
+    wall_clock(2026, 9, 1)
+    await run(system, 1, advance=clock)
+
+    closed = list(system.coordinator.periods["day"]["history"].values())[0]
+    assert closed["produced_kwh"] == pytest.approx(6.0)
+    assert closed["produced_room_kwh"] is None
+    # and the next day is measured from its start
+    assert system.coordinator.periods["day"]["produced_room_wh"] == 0.0
+
+
+async def test_a_restored_period_without_the_figure_stays_unmeasured(build_system):
+    system = build_system(grid=0, **solar_config())
+    key = system.coordinator.periods["day"]["key"]
+    system.coordinator._restore_periods(
+        {"periods": {"day": {"key": key, "produced_wh": 3000.0,
+                             "history": {"2026-08-01": {"produced_kwh": 9.0}}}}}
+    )
+
+    assert system.coordinator.periods["day"]["produced_room_wh"] is None
+    assert system.coordinator.periods["day"]["history"]["2026-08-01"][
+        "produced_room_kwh"
+    ] is None
