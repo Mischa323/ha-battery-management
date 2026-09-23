@@ -191,9 +191,18 @@ def test_the_breakdown_survives_nothing_being_configured(build_system):
 # So the reservation is scaled by what recent days actually delivered.
 
 
-def day(produced, charged, grid=0.0):
-    """One closed day, as `_roll_periods` writes it."""
-    return {"produced_kwh": produced, "charged_kwh": charged, "grid_kwh": grid}
+def day(produced, charged, grid=0.0, room=None):
+    """One closed day, as `_roll_periods` writes it.
+
+    `room` is the part of `produced` that fell while a pack could take it, and
+    defaults to all of it: these days are about the share, not about fullness.
+    """
+    return {
+        "produced_kwh": produced,
+        "produced_room_kwh": produced if room is None else room,
+        "charged_kwh": charged,
+        "grid_kwh": grid,
+    }
 
 
 def with_days(system, *days):
@@ -316,3 +325,51 @@ def test_the_ceiling_sensor_says_what_it_is_reserving_for(build_system):
 
     assert report["solar_capture_share"] == pytest.approx(0.2)
     assert report["solar_capture_days"] == 3
+
+
+# -- measured only while a pack had room --------------------------------------
+
+
+def test_sun_after_the_packs_were_full_does_not_lower_the_share(build_system):
+    """21 September, in shape. 17.2 kWh made, 7.2 of it while a pack had room,
+    4.4 kWh of sun into the packs. Against everything made that is 26 % and
+    reads as "the sun barely arrives"; against the sun that could have
+    arrived it is 61 %. The first raises the ceiling and buys the packs full
+    again, which is what made the first number low in the first place."""
+    coordinator = with_days(
+        build_system(),
+        *[day(17.2, 14.4, grid=10.0, room=7.2)] * 3,
+    )
+
+    share, days = coordinator.solar_capture()
+
+    assert share == pytest.approx(4.4 / 7.2, abs=0.01)
+    assert days == 3
+
+
+def test_a_day_closed_before_room_was_measured_is_skipped(build_system):
+    """It cannot say what a pack with room takes - and the days it covers are
+    exactly the biased ones this was built to stop reading."""
+    old = {"produced_kwh": 17.2, "charged_kwh": 14.9, "grid_kwh": 9.4,
+           "produced_room_kwh": None}
+    coordinator = with_days(build_system(), old, old, old)
+
+    assert coordinator.solar_capture() == (None, 0)
+
+    coordinator = with_days(build_system(), old, old, *[day(10.0, 4.0)] * 3)
+    share, days = coordinator.solar_capture()
+    assert (share, days) == (pytest.approx(0.4), 3)
+
+
+def test_a_day_the_packs_spent_full_has_no_sun_to_judge(build_system):
+    """Full from sunrise: fifteen kWh made, half a kilowatt hour of it with
+    room. Too little to judge by, the same as a day with no sun at all."""
+    coordinator = with_days(
+        build_system(),
+        day(15.0, 0.5, room=0.5),
+        *[day(10.0, 4.0)] * 3,
+    )
+
+    share, days = coordinator.solar_capture()
+
+    assert (share, days) == (pytest.approx(0.4), 3)

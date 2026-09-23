@@ -172,6 +172,7 @@ def measured(system, share_days):
     for index, (produced, charged) in enumerate(share_days):
         history[f"2026-08-{index + 1:02d}"] = {
             "produced_kwh": produced,
+            "produced_room_kwh": produced,
             "charged_kwh": charged,
             "grid_kwh": 0.0,
         }

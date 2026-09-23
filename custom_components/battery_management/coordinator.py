@@ -151,6 +151,7 @@ from .const import (
     SOLAR_CAPTURE_DAYS,
     SOLAR_CAPTURE_FLOOR,
     SOLAR_CAPTURE_MIN_DAYS,
+    SOLAR_CAPTURE_ROOM_MARGIN,
     SOLAR_CAPTURE_MIN_KWH,
     PERIOD_MONTH,
     PERIOD_WEEK,
@@ -526,10 +527,22 @@ class BatteryCoordinator:
                 # reached a pack. The gap between the two is the house, and
                 # measuring it is the whole point of `solar_capture`.
                 "produced_wh": 0.0,
+                # the part of it that fell while a pack had room to take it -
+                # the only production a capture share can honestly be taken
+                # of. None means "not measured since this period began": a
+                # period already in progress when this counter arrived would
+                # otherwise close on a partial day and read as a bumper one.
+                "produced_room_wh": None,
                 "history": {},
             }
             for name in PERIODS
         }
+        #: ticks since the production sensor last moved, and how many of them
+        #: had room. The sensor steps every few minutes, so a step is shared
+        #: out over the ticks it covers rather than credited to whichever tick
+        #: happened to see it.
+        self._solar_ticks = 0
+        self._solar_room_ticks = 0
         #: last reading of the cumulative "produced today" sensor, so
         #: production is counted as a delta rather than a level
         self._solar_produced_seen: float | None = None
@@ -642,6 +655,7 @@ class BatteryCoordinator:
                     "key": state["key"],
                     "charged_wh": state["charged_wh"],
                     "produced_wh": state["produced_wh"],
+                    "produced_room_wh": state["produced_room_wh"],
                     "grid_wh": state["grid_wh"],
                     "history": dict(state["history"]),
                 }
@@ -2623,7 +2637,7 @@ class BatteryCoordinator:
                 continue
             if entry.get("key"):
                 state["key"] = str(entry["key"])
-            for field in ("charged_wh", "grid_wh", "produced_wh"):
+            for field in ("charged_wh", "grid_wh", "produced_wh", "produced_room_wh"):
                 if entry.get(field) is not None:
                     state[field] = float(entry[field])
             for key, figures in (entry.get("history") or {}).items():
@@ -2635,6 +2649,12 @@ class BatteryCoordinator:
                         # measured; those days simply do not count towards the
                         # share rather than counting as a day of no sun
                         "produced_kwh": float(figures.get("produced_kwh") or 0.0),
+                        # None on every day closed before room was measured:
+                        # those days cannot say what a pack with room takes
+                        "produced_room_kwh": (
+                            None if figures.get("produced_room_kwh") is None
+                            else float(figures["produced_room_kwh"])
+                        ),
                     }
 
     def _roll_periods(self) -> None:
@@ -2669,6 +2689,10 @@ class BatteryCoordinator:
                     "charged_kwh": round(state["charged_wh"] / 1000.0, 3),
                     "grid_kwh": round(state["grid_wh"] / 1000.0, 3),
                     "produced_kwh": round(state["produced_wh"] / 1000.0, 3),
+                    "produced_room_kwh": (
+                        None if state["produced_room_wh"] is None
+                        else round(state["produced_room_wh"] / 1000.0, 3)
+                    ),
                 }
                 for old in sorted(state["history"])[: -PERIOD_HISTORY[name]]:
                     del state["history"][old]
@@ -2676,6 +2700,7 @@ class BatteryCoordinator:
             state["charged_wh"] = 0.0
             state["grid_wh"] = 0.0
             state["produced_wh"] = 0.0
+            state["produced_room_wh"] = 0.0
 
     def period_started_at(self, name: str):
         """When the period in progress began, as local midnight.
@@ -2868,6 +2893,12 @@ class BatteryCoordinator:
         """
         if not self._solar_produced_sensor:
             return
+        # Every tick, before anything can return: a step of the sensor covers
+        # all the ticks since the last one, and it is shared out over them.
+        room = self._packs_have_room()
+        if room is not None:
+            self._solar_ticks += 1
+            self._solar_room_ticks += int(room)
         reading = self._read_float(self._solar_produced_sensor)
         if reading is None:
             return
@@ -2875,10 +2906,40 @@ class BatteryCoordinator:
         if previous is None:
             return
         gained = reading - previous
-        if gained <= 0:
+        if gained < 0:
+            # the daily rollover: the ticks before it belong to no step
+            self._solar_ticks = self._solar_room_ticks = 0
             return
+        if gained == 0:
+            return
+        with_room = (
+            self._solar_room_ticks / self._solar_ticks if self._solar_ticks else 0.0
+        )
+        self._solar_ticks = self._solar_room_ticks = 0
         for state in self.periods.values():
             state["produced_wh"] += gained * 1000.0
+            if state["produced_room_wh"] is not None:
+                state["produced_room_wh"] += gained * 1000.0 * with_room
+
+    def _packs_have_room(self) -> bool | None:
+        """Could the sun get into a pack right now?
+
+        Any online pack below its own charge limit, less a margin, counts: the
+        surplus goes to whichever has room. Against the pack's limit and not
+        the buy ceiling, because the ceiling bounds buying only - charging from
+        the roof is never capped by it.
+
+        None when nothing can be read, and then the tick counts towards
+        neither side rather than guessing.
+        """
+        snaps = [
+            snap for cfg in self._units if (snap := self._unit_snapshot(cfg)).online
+        ]
+        if not snaps:
+            return None
+        return any(
+            snap.soc < snap.charge_limit - SOLAR_CAPTURE_ROOM_MARGIN for snap in snaps
+        )
 
     def solar_capture(self) -> tuple[float | None, int]:
         """What share of the sun's output actually landed in the packs, lately.
@@ -2906,7 +2967,17 @@ class BatteryCoordinator:
         shares: list[float] = []
         recent = sorted(self.periods[PERIOD_DAY]["history"].items())
         for _key, figures in recent[-SOLAR_CAPTURE_DAYS:]:
-            produced = float(figures.get("produced_kwh") or 0.0)
+            # Only the sun that fell while a pack had room. Measured against
+            # everything the panels made, a day on which the grid had already
+            # filled the packs by noon read as "the sun delivers little" - and
+            # a low share raises the ceiling, which buys the packs full again.
+            # On 21 September that turned 61 % into 32 %: 7.6 of 17.2 kWh
+            # arrived after the packs were full, and 5.5 kWh went back out.
+            # A day closed before this was measured has no answer and is
+            # skipped - it cannot say what a pack with room would have taken.
+            produced = figures.get("produced_room_kwh")
+            if produced is None:
+                continue
             charged = float(figures.get("charged_kwh") or 0.0)
             grid = float(figures.get("grid_kwh") or 0.0)
             if produced < SOLAR_CAPTURE_MIN_KWH or charged <= 0:

@@ -501,6 +501,13 @@ SOLAR_CAPTURE_MIN_KWH = 1.0
 #: of cloud, a house that swallowed everything - the arithmetic would otherwise
 #: say "buy to full" on the morning of a blazing day.
 SOLAR_CAPTURE_FLOOR = 0.05
+#: A pack within this many percentage points of its own charge limit counts as
+#: full for the capture measurement. Sun that arrives while every pack is full
+#: says nothing about how much a pack with room would have taken - it is simply
+#: exported - and counting it drags the share down to what the grid left room
+#: for. The packs report whole points and taper near the top, so the last few
+#: are not room in any useful sense.
+SOLAR_CAPTURE_ROOM_MARGIN = 3.0
 
 #: How close to the buy ceiling counts as "there". Percentage points of state
 #: of charge, and it exists because the packs report whole ones: a bank sitting
