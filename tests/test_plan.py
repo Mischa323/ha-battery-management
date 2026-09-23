@@ -1010,7 +1010,9 @@ async def test_it_still_buys_the_bridge_the_floor_asks_for(planned):
 
     await system.coordinator._async_tick(None)
 
-    assert system.coordinator.charge_ceiling() == 30.0
+    # stops at the floor before the peak - the published ceiling is today's
+    assert system.coordinator._buy_ceiling()[0] == 30.0
+    assert system.coordinator.held_ceiling()["held_to"] == 30.0
     assert system.coordinator.active_policy == POLICY_DYNAMIC_CHARGE
     assert system.coordinator.setpoint < 0
 
@@ -1140,3 +1142,107 @@ def test_the_two_halves_measure_the_room_the_same_way(planned):
     )
 
     assert earmarked == would_draw
+
+
+# -- saying the same thing before and after the peak -------------------------
+
+
+def test_the_published_ceiling_is_todays_not_the_one_before_the_peak(planned):
+    """Reported on the morning of 23 September: the card said nothing would be
+    bought today, and once the peak had passed it listed noon.
+
+    Both halves were true of the moment they were read, and together they were
+    a contradiction. The hold moves *when* the packs are filled, not *how
+    full*, so the number a person reads as "today" has to be today's.
+    """
+    system = before_the_peak(planned, soc=77.0)
+
+    assert system.coordinator._buy_ceiling() == (30.0, POLICY_CHEAPER_LATER)
+    assert system.coordinator.charge_ceiling() == 100.0
+    assert system.coordinator.held_ceiling() == {
+        "held_to": 30.0,
+        "until": NOW + timedelta(hours=4),
+        "then_to": 100.0,
+    }
+
+
+def test_the_plan_says_what_the_hold_is_waiting_for(planned):
+    """An empty "when" read as "nothing to buy". It was waiting for 19:00."""
+    system = before_the_peak(planned, soc=77.0)
+
+    plan = system.coordinator.plan()
+
+    assert plan["buy_hours"] == []
+    assert plan["waiting"]["held_to"] == 30.0
+    assert plan["waiting"]["then_to"] == 100.0
+    assert plan["waiting"]["until"] == (NOW + timedelta(hours=4)).isoformat()
+    later = [h["start"] for h in plan["waiting"]["hours"]]
+    assert later == [(NOW + timedelta(hours=7)).isoformat()]   # 19:00, at 0.20
+
+
+def test_the_expected_hours_are_marked_as_expected_and_nothing_else_is(planned):
+    """Expected, not earmarked: the need is measured again when they arrive,
+    and a card calling them "gaat laden" would promise more than that."""
+    system = before_the_peak(planned, soc=77.0)
+
+    hours = system.coordinator.plan()["hours"]
+    expected = [h["start"] for h in hours if h["expected"]]
+
+    assert expected == [(NOW + timedelta(hours=7)).isoformat()]
+    assert not any(h["buy"] for h in hours if h["expected"])
+    assert not any(h["expected"] for h in hours if h["past"])
+
+
+def test_what_was_expected_in_the_morning_is_what_is_planned_after_the_peak(
+    planned, monkeypatch
+):
+    """The point of all of it, end to end: the card does not change its mind.
+
+    Before the peak it expects 19:00. Move the clock past the peak with the
+    packs where they were, and the plan proper - the one the buying follows -
+    lands on the same hour.
+    """
+    system = before_the_peak(planned, soc=77.0)
+    morning = [h["start"] for h in system.coordinator.plan()["waiting"]["hours"]]
+
+    after = NOW + timedelta(hours=7)
+    monkeypatch.setattr(coordinator_module.dt_util, "utcnow", lambda: after)
+    evening = system.coordinator.plan()
+
+    assert evening["waiting"] is None
+    assert [h["start"] for h in evening["buy_hours"]] == morning
+
+
+def test_with_nothing_held_there_is_nothing_to_wait_for(planned):
+    system = before_the_peak(planned, soc=77.0, floor=0.0)
+
+    plan = system.coordinator.plan()
+
+    assert system.coordinator.held_ceiling() is None
+    assert plan["waiting"] is None
+    assert not any(h["expected"] for h in plan["hours"])
+
+
+def test_every_expected_hour_lies_beyond_the_peak(planned):
+    """The hold says it will not buy before the peak, so no expected hour may.
+
+    Only visible once the need outgrows the cheap stretch on the far side:
+    ranked across the whole window, the second hour spills back into the
+    run-up - the very hours the hold refuses - and the card would list one of
+    them as "verwacht". Here the far side has a single cheap hour.
+    """
+    narrow = morning_of_the_22nd()
+    for slot in narrow["raw_today"]:
+        start = datetime.fromisoformat(slot["start"])
+        if start.day == NOW.day and start.hour > 19:
+            slot["value"] = 0.33
+    system = planned(remaining=0.0, soc=(40.0, 40.0))
+    system.hass.states.set(PRICES, 0.33, narrow)
+    system.coordinator.buy_ceiling_min = 30.0
+
+    waiting = system.coordinator.plan()["waiting"]
+    peak = datetime.fromisoformat(waiting["until"])
+    starts = [datetime.fromisoformat(h["start"]) for h in waiting["hours"]]
+
+    assert len(starts) == 2                       # the need outgrows 19:00
+    assert all(start >= peak for start in starts)

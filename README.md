@@ -1010,6 +1010,25 @@ peak with a cheaper window behind it, buy the bridge you asked for and no more.
 On an ordinary day that is most evenings — which is the intended shape, because
 the filling belongs in the cheap window and not in the run-up to a peak.
 
+### What the card says while it holds
+
+The hold changes *when* the packs are filled, not *how full*, and the card has
+to read that way from the first look in the morning. On 2026-09-23 it did not:
+before the peak it showed the floor the hold stops at as though it were the
+day's ceiling, and an empty hour list with "the packs reach the ceiling without
+the grid" — and after the peak, the real ceiling and noon. Both true of their
+moment; read an hour apart, a contradiction.
+
+So while a hold is on:
+
+- **Charge ceiling** (sensor and card) is *today's* target. The hold has its
+  own attributes on the sensor: `held_to` and `held_until`.
+- The card adds *"Vóór de piek van 07:45 hooguit tot 30 % — daarna is het
+  goedkoper."*
+- The hours it is waiting for are listed as **verwacht**, outlined rather than
+  filled: expected, not promised, because the need is measured again when they
+  arrive. Once the peak passes the same hours become *gaat laden*.
+
 ### Resting on the ceiling
 
 The packs report whole percentage points. A bank sitting on a ceiling of 90.9

@@ -337,6 +337,7 @@ def cheapest_slots(
     window_hours: float = 24.0,
     min_margin: float = 0.0,
     until: datetime | None = None,
+    since: datetime | None = None,
 ) -> list[Slot]:
     """Slots worth *buying* on in the window ahead.
 
@@ -361,10 +362,18 @@ def cheapest_slots(
     `slots_in_window`. The margin is still measured against the *whole* window,
     deliberately: what was cut off is the dear hours this buying is for, and
     ranking the cheap hours against each other would rule every one of them out.
+
+    `since` is the other end: only slots starting at or after it. It is how the
+    plan answers "and after the peak?" while a purchase is being held for the
+    cheaper side - the same ranking, the same margin against the same whole
+    window, just asked about the far half. A second planner with its own rules
+    would be one more thing to disagree with the decisions it describes.
     """
     candidates = slots_in_window(slots, now, window_hours, until)
+    if since is not None:
+        candidates = [slot for slot in candidates if slot.start >= since]
     reference = None
-    if until is not None and min_margin > 0:
+    if (until is not None or since is not None) and min_margin > 0:
         whole = slots_in_window(slots, now, window_hours)
         if whole:
             span = min((s.end - s.start).total_seconds() / 60 for s in whole)
@@ -497,6 +506,7 @@ def slots_to_buy(
     min_margin: float = 0.0,
     needed_hours: float | None = None,
     until: datetime | None = None,
+    since: datetime | None = None,
 ) -> list[Slot]:
     """Of the hours cheap enough to buy on, the cheapest few actually needed.
 
@@ -518,7 +528,7 @@ def slots_to_buy(
     no charging is planned for.
     """
     candidates = cheapest_slots(
-        slots, now, cheap_hours, window_hours, min_margin, until
+        slots, now, cheap_hours, window_hours, min_margin, until, since
     )
     if needed_hours is None or not candidates:
         return candidates

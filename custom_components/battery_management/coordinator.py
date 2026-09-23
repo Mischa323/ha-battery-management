@@ -1144,13 +1144,18 @@ class BatteryCoordinator:
         return int(round(longest)) if longest is not None else None
 
     def charge_ceiling(self) -> float | None:
-        """How full it is worth buying to right now, after every adjustment.
+        """How full buying will make the packs today, after every adjustment.
 
-        The published figure and the one buying stops at have to be the same
-        number, so this reads it out of `_buy_ceiling` rather than recomputing
-        a simpler version. It skipped the next-day step the first time round,
-        which would have put a ceiling on the card that the packs were not
-        actually stopping at.
+        Read out of `_buy_ceiling` rather than recomputed, so it cannot skip a
+        step the buying takes - it once skipped the next-day step, and the card
+        showed a ceiling the packs were not actually stopping at.
+
+        But *today's* ceiling, not the one holding before the coming peak.
+        While a cheaper window after the peak is holding the purchase back the
+        packs stop at the floor until then, and publishing that as the ceiling
+        told the owner on 23 September that nothing would be bought today - an
+        hour before the same card, peak passed, listed noon. The hold is a
+        matter of *when*; `held_ceiling` says it, with its own time.
 
         None where there is no solar ceiling at all - then the sensor is
         unavailable rather than reporting the bare SoC threshold, which is a
@@ -1158,8 +1163,24 @@ class BatteryCoordinator:
         """
         if self._solar_headroom_ceiling() is None:
             return None
-        ceiling, _ = self._buy_ceiling()
+        ceiling, _ = self._buy_ceiling(hold_for_later=False)
         return ceiling
+
+    def held_ceiling(self) -> dict | None:
+        """The hold, while there is one: how full until when, and why.
+
+        None when nothing is being held back. Otherwise the ceiling that stands
+        until the coming peak, the moment that is, and today's ceiling after
+        it - the three numbers "not now, later" needs to be read correctly.
+        """
+        held, reason = self._buy_ceiling()
+        if reason != POLICY_CHEAPER_LATER:
+            return None
+        peak = self._buy_before()
+        if peak is None:
+            return None
+        then, _ = self._buy_ceiling(hold_for_later=False)
+        return {"held_to": round(held, 1), "until": peak, "then_to": round(then, 1)}
 
     def current_price(self) -> dict | None:
         """What this hour costs, and what the next one does.
@@ -1412,6 +1433,20 @@ class BatteryCoordinator:
             self.hours_of_charge_needed(), until=self._buy_before(),
         ) if slots else []
 
+        # And what the hold is waiting *for*. `buying` stops at the coming peak,
+        # so while a purchase is held for the cheaper far side it is empty -
+        # and an empty plan read as "nothing to buy today", which on 23
+        # September was the morning half of a card that said "buying at noon"
+        # once the peak had passed. Same ranking, same margin, asked about the
+        # far side with today's ceiling: an expectation, marked as one, because
+        # the need is re-measured when those hours arrive.
+        held = self.held_ceiling() if slots else None
+        later = slots_to_buy(
+            slots, now, self._cheap_hours, PRICE_WINDOW_HOURS, self._price_margin,
+            self.hours_of_charge_needed(ceiling=held["then_to"]),
+            since=held["until"],
+        ) if held else []
+
         # The band is ranked per calendar day instead, so it holds still. See
         # `_day_bands`: the rolling window slides, which made green creep across
         # the chart until there were more green bars than `cheap_hours`.
@@ -1443,6 +1478,7 @@ class BatteryCoordinator:
         # remembered. Its *decisions* are the opposite and are read back from
         # the record: see `buys` below.
         buy_at = {_slot_key(slot) for slot in buying}
+        expected_at = {_slot_key(slot) for slot in later}
         day_start = dt_util.as_local(now).replace(
             hour=0, minute=0, second=0, microsecond=0
         )
@@ -1471,6 +1507,8 @@ class BatteryCoordinator:
                 "past": slot.end <= now,
                 "role": role_of(slot, _slot_key(slot)),
                 "buy": buys(slot, _slot_key(slot)),
+                # after the peak, while held: expected, not yet earmarked
+                "expected": slot.end > now and _slot_key(slot) in expected_at,
                 "bought": bool(
                     self.price_history.get(_slot_key(slot), {}).get("bought")
                 ),
@@ -1484,6 +1522,12 @@ class BatteryCoordinator:
             "hours": hours,
             "cheap_hours": describe(cheapest),
             "buy_hours": describe(buying),
+            "waiting": None if held is None else {
+                "held_to": held["held_to"],
+                "until": held["until"].isoformat(),
+                "then_to": held["then_to"],
+                "hours": describe(later),
+            },
             "dear_hours": describe(dearest),
             "solar_remaining_kwh": self.solar_remaining(),
             "usable_capacity_kwh": self.usable_capacity_kwh(),
@@ -1663,8 +1707,20 @@ class BatteryCoordinator:
             near_hours=0,
         )
 
-    def _buy_ceiling(self) -> tuple[float, str | None]:
+    def _buy_ceiling(
+        self, hold_for_later: bool = True
+    ) -> tuple[float, str | None]:
         """How full it is worth buying to, and what put it there.
+
+        `hold_for_later=False` answers a different question: how full buying
+        will make them *today*, rather than how full it may make them *before
+        the coming peak*. The two differ only while a cheaper window on the far
+        side of the peak is holding the purchase back, and the difference is
+        timing, not amount - the packs are still to be filled, just later and
+        cheaper. The draw and the earmark want the first; anything that tells a
+        person what today holds wants the second. Mixing them up is how the
+        card said "nothing to buy" on the morning of 23 September and then,
+        once the peak had passed, "buying at noon".
 
         The reason is returned rather than a "the sun did it" flag, because
         that flag was doing two jobs: naming the policy, and standing for "a
@@ -1738,7 +1794,7 @@ class BatteryCoordinator:
         # is what keeps this from meaning "buy nothing" - it is the owner's own
         # "buy at least to", which is exactly the charge they want in hand
         # before a peak, and `_bound_ceiling` raises anything under it back up.
-        later = self.after_peak_step()
+        later = self.after_peak_step() if hold_for_later else None
         if (
             later is not None
             and later >= self._price_margin
@@ -1781,7 +1837,9 @@ class BatteryCoordinator:
         room = min(ceiling, limit) - soc
         return room if room > BUY_CEILING_BAND else 0.0
 
-    def hours_of_charge_needed(self, online: dict | None = None) -> float | None:
+    def hours_of_charge_needed(
+        self, online: dict | None = None, ceiling: float | None = None
+    ) -> float | None:
         """How long on the grid the packs still need to reach the buy ceiling.
 
         The same arithmetic as `minutes_to_full`, but against the ceiling we
@@ -1801,7 +1859,8 @@ class BatteryCoordinator:
                 for u in self._units
                 if (snap := self._unit_snapshot(u)).online
             }
-        ceiling, _ = self._buy_ceiling()
+        if ceiling is None:
+            ceiling, _ = self._buy_ceiling()
         longest = 0.0
         for snap in online.values():
             missing = self._room_to_buy(snap.soc, snap.charge_limit, ceiling)
