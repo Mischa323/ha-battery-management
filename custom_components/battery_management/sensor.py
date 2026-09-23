@@ -318,10 +318,16 @@ class ChargeCeilingSensor(_BaseSensor):
         measurement yet and the whole forecast is being reserved for.
         """
         share, days = self.coordinator.solar_capture()
+        # The state is today's ceiling. While a cheaper window after the peak
+        # is holding the purchase back, the packs stop lower until then - and
+        # that is worth graphing too, so it is here rather than lost.
+        held = self.coordinator.held_ceiling()
         return {
             "solar_remaining_kwh": self.coordinator.solar_remaining(),
             "solar_capture_share": None if share is None else round(share, 3),
             "solar_capture_days": days,
+            "held_to": None if held is None else held["held_to"],
+            "held_until": None if held is None else held["until"].isoformat(),
         }
 
 
