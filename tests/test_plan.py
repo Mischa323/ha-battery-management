@@ -1221,3 +1221,28 @@ def test_with_nothing_held_there_is_nothing_to_wait_for(planned):
     assert system.coordinator.held_ceiling() is None
     assert plan["waiting"] is None
     assert not any(h["expected"] for h in plan["hours"])
+
+
+def test_every_expected_hour_lies_beyond_the_peak(planned):
+    """The hold says it will not buy before the peak, so no expected hour may.
+
+    Only visible once the need outgrows the cheap stretch on the far side:
+    ranked across the whole window, the second hour spills back into the
+    run-up - the very hours the hold refuses - and the card would list one of
+    them as "verwacht". Here the far side has a single cheap hour.
+    """
+    narrow = morning_of_the_22nd()
+    for slot in narrow["raw_today"]:
+        start = datetime.fromisoformat(slot["start"])
+        if start.day == NOW.day and start.hour > 19:
+            slot["value"] = 0.33
+    system = planned(remaining=0.0, soc=(40.0, 40.0))
+    system.hass.states.set(PRICES, 0.33, narrow)
+    system.coordinator.buy_ceiling_min = 30.0
+
+    waiting = system.coordinator.plan()["waiting"]
+    peak = datetime.fromisoformat(waiting["until"])
+    starts = [datetime.fromisoformat(h["start"]) for h in waiting["hours"]]
+
+    assert len(starts) == 2                       # the need outgrows 19:00
+    assert all(start >= peak for start in starts)
