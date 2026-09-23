@@ -924,10 +924,23 @@ So the reservation is scaled by what recent days actually delivered:
 
     buy up to 100 % − (sun still coming × measured share) ÷ capacity
 
-The share is `(charged − bought) ÷ produced`, taken as the **median of the last
-14 days** that had at least 1 kWh of sun and actually recorded charging. Both
-halves were already being counted per day; only the panels' own output was
-added.
+The share is `(charged − bought) ÷ produced with room`, taken as the **median
+of the last 14 days** that had at least 1 kWh of such sun and actually recorded
+charging.
+
+**"With room"** is the part of the panels' output that fell while at least one
+pack was more than three points below its own charge limit. Sun that arrives at
+full packs is exported whatever the packs would have wanted, so it cannot say
+what share a pack with room takes — and counting it fed on itself. On
+2026-09-21 the grid had filled the packs by 12:45; 7.6 of the day's 17.2 kWh
+came after that, 5.5 kWh went back out, and the share read 32 % where 61 % had
+gone in while there was room. A low share raises the ceiling, which buys the
+packs full again, which keeps the share low.
+
+The production sensor steps every few minutes, so each step is shared out over
+the ticks it covers by how many of them had room. Days closed before this was
+measured have no with-room figure and are skipped, so right after the update
+the share starts again from nothing and needs three new days.
 
 - **A fortnight** covers two weekends, so weekend habits cannot pass for the
   whole picture, and it is short enough that the season shows through — once
