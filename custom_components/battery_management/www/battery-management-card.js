@@ -1922,8 +1922,43 @@ const NO_SPLIT = {
  */
 function buyRowSays(hour) {
   if (hour.bought) return { text: "geladen", tone: "done" };
+  // Expected is weaker than planned and has to look it: these are the hours
+  // on the far side of a peak that a hold is waiting for, and the need is
+  // measured again when they arrive. "gaat laden" would promise that.
+  if (hour.expected && !hour.buy) return { text: "verwacht", tone: "later" };
   if (!hour.past) return { text: "gaat laden", tone: "todo" };
   return { text: "niet geladen", tone: "miss" };
+}
+
+/**
+ * What a hold on the purchase means, in the two places the card says it.
+ *
+ * Reported on the morning of 23 September: the card said there was nothing to
+ * buy, and once the morning peak had passed it listed noon. Both were true of
+ * the moment - a cheaper window after the peak was holding the purchase back,
+ * and the list only ever reached as far as the peak - but read an hour apart
+ * they contradicted each other. So a hold now says what it is holding for:
+ * how full until when, and when it expects to buy instead.
+ *
+ * `why` rides on the ceiling sentence; `none` replaces the empty-list message,
+ * which in this state used to be "the packs reach the ceiling without the
+ * grid" - untrue, they had only reached the floor the hold was keeping them at.
+ */
+function waitingSays(waiting, now = Date.now()) {
+  const peak = hhmm(waiting.until);
+  const why =
+    " Vóór de piek van " + peak + " hooguit tot " +
+    Math.round(waiting.held_to) + " % — daarna is het goedkoper.";
+  const first = (waiting.hours || [])[0];
+  const when = first
+    ? hhmm(first.start) + (dayOf(first.start) === dayKey(0, now) ? "" : " (morgen)")
+    : null;
+  const none = when
+    ? "Nu nog niets: wacht tot na de piek van " + peak +
+      ", verwacht te laden vanaf " + when + "."
+    : "Nu nog niets: wacht tot na de piek van " + peak +
+      " en vult daarna tot " + Math.round(waiting.then_to) + " %.";
+  return { why, none };
 }
 
 /**
@@ -2004,6 +2039,8 @@ class BatteryManagementPlanCard extends HTMLElement {
           .tag.done { background:var(--success-color,#4caf50); color:#fff; }
           .tag.todo { background:var(--info-color,#039be5); color:#fff; }
           .tag.miss { background:var(--divider-color); }
+          .tag.later { border:1px solid var(--info-color,#039be5);
+                       color:var(--info-color,#039be5); }
           .note { font-size:.86em; margin:4px 0 0; }
         </style>
         <div class="plc">
@@ -2068,7 +2105,8 @@ class BatteryManagementPlanCard extends HTMLElement {
           : "";
       el("plwhy").textContent =
         "Koopt bij tot " + Math.round(expected.ceiling) +
-        " % en laat de rest aan de zon." + short;
+        " % en laat de rest aan de zon." + short +
+        (plan.waiting ? waitingSays(plan.waiting).why : "");
       el("plsunshare").textContent = sunShareSays(expected);
     } else {
       el("plsun").textContent = "—";
@@ -2081,7 +2119,7 @@ class BatteryManagementPlanCard extends HTMLElement {
 
     // ---- when, and what became of it ----
     const today = slotsOnDay(plan.hours || [], dayKey(0));
-    const rows = today.filter((h) => h.buy || h.bought);
+    const rows = today.filter((h) => h.buy || h.bought || h.expected);
     el("plhours").innerHTML = rows
       .map((h) => {
         const says = buyRowSays(h);
@@ -2097,9 +2135,17 @@ class BatteryManagementPlanCard extends HTMLElement {
     // An empty list has four quite different meanings, and telling them apart
     // is most of what this card is for: "nothing planned" must never be able
     // to stand in for "no prices", "wrong mode" or "already full enough".
+    //
+    // A hold is a fifth, and it goes first: the list is empty *because* it is
+    // waiting, so the other four would each be a wrong explanation of it. It
+    // also shows beside this morning's history, since an expected hour can be
+    // tomorrow's and so not in today's list at all.
+    const ahead = rows.filter((h) => !h.past);
     el("plnone").textContent = !planState
       ? ""
-      : rows.length
+      : plan.waiting && !ahead.length
+        ? waitingSays(plan.waiting).none
+        : rows.length
         ? ""
         : plan.mode !== "dynamic"
           ? "Koopt niet van het net in deze modus — volgt alleen de meter."
