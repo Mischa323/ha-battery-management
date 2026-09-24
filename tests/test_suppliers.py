@@ -249,3 +249,69 @@ def test_the_untaxed_list_is_not_a_key_the_ranking_reads():
     slots = parse_forecast(parsed, datetime(2026, 9, 1, 9, tzinfo=timezone.utc))
 
     assert [s.price for s in slots] == [0.23]
+
+
+# -- gas ----------------------------------------------------------------------
+
+
+def gas_day(*rows: dict) -> dict:
+    return {"data": {"marketPrices": {"gasPrices": list(rows)}}}
+
+
+def test_gas_is_asked_for_by_the_hour_in_requests_of_its_own():
+    gas = [body for _, body in frank_requests(date(2026, 9, 1))
+           if body["operationName"] == "GasPrices"]
+
+    assert [body["variables"]["date"] for body in gas] == ["2026-09-01", "2026-09-02"]
+    for body in gas:
+        assert "gasPrices" in body["query"]
+        assert "electricityPrices" not in body["query"]
+        assert body["variables"]["resolution"] == "PT60M"
+
+
+def test_the_electricity_query_does_not_carry_gas():
+    """One error nulls a whole GraphQL document. Gas beside electricity in it
+    would let a gas problem take the steering prices with it."""
+    for _, body in frank_requests(date(2026, 9, 1)):
+        if body["operationName"] == "MarketPrices":
+            assert "gasPrices" not in body["query"]
+
+
+def test_gas_rides_alongside_under_its_own_keys():
+    parsed = parse_frank(answer(slot("2026-09-01T02:00:00Z", 0.08)) + [
+        gas_day({"from": "2026-09-01T04:00:00Z", "till": "2026-09-02T04:00:00Z",
+                 "marketPrice": 0.40, "energyTaxPrice": 0.70})
+    ])
+
+    assert parsed["gas_prices"][0]["price"] == 1.10
+    assert parsed["gas_untaxed_prices"][0]["price"] == 0.40
+    assert len(parsed["prices"]) == 1                 # the electricity untouched
+    assert "gas_error" not in parsed
+
+
+def test_without_gas_the_reason_is_kept():
+    unpublished = {"errors": [{"message": "No marketprices found for segment GAS"}],
+                   "data": None}
+
+    parsed = parse_frank(answer(slot("2026-09-01T02:00:00Z", 0.08)) + [unpublished])
+
+    assert "gas_prices" not in parsed
+    assert parsed["gas_error"] == "No marketprices found for segment GAS"
+
+
+def test_the_electricity_morning_error_is_not_mistaken_for_a_gas_one():
+    """Tomorrow's electricity errors every morning. That is not why gas is
+    missing, and must not be reported as though it were."""
+    parsed = parse_frank(
+        answer(slot("2026-09-01T02:00:00Z", 0.08)) + [UNPUBLISHED]
+    )
+
+    assert parsed["gas_error"] == "no gas prices in the response"
+
+
+def test_gas_alone_is_no_forecast():
+    """Without electricity there is nothing to steer on, gas or not."""
+    parsed = parse_frank([gas_day({"from": "2026-09-01T04:00:00Z",
+                                   "marketPrice": 0.40})])
+
+    assert parsed == {}

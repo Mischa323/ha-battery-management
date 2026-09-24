@@ -409,3 +409,79 @@ async def test_a_third_party_sensor_has_no_exchange_price_to_offer(build_system)
 
     assert system.coordinator.current_market_price() is None
     assert system.coordinator.current_untaxed_price() is None
+
+
+# -- gas, for the Energy dashboard --------------------------------------------
+
+
+def gas_answer(price: float, tax: float = 0.70) -> dict:
+    """One gas day, as one slot wide enough to cover whenever this runs."""
+    return {"data": {"marketPrices": {"gasPrices": [
+        {
+            "from": "2020-01-01T00:00:00.000Z",
+            "till": "2099-01-01T00:00:00.000Z",
+            "marketPrice": price,
+            "marketPriceTax": round(price * 0.21, 6),
+            "sourcingMarkupPrice": 0.05,
+            "energyTaxPrice": tax,
+        }
+    ]}}}
+
+
+WIDE = frank_answer([{"from": "2020-01-01T00:00:00.000Z",
+                      "till": "2099-01-01T00:00:00.000Z",
+                      "marketPrice": 0.10, "energyTaxPrice": 0.13}])
+
+
+async def test_the_gas_price_is_published_all_in_and_without_the_tax(build_system):
+    session = FakeSession(replies=[WIDE, WIDE, gas_answer(0.40), gas_answer(0.40)])
+    system = with_frank(build_system, session)
+
+    await system.coordinator.async_refresh_prices()
+
+    # 0.40 + 0.084 VAT + 0.05 markup + 0.70 energy tax
+    assert system.coordinator.current_gas_price() == 1.234
+    assert system.coordinator.current_gas_untaxed_price() == 0.534
+
+
+async def test_a_failed_gas_request_cannot_touch_the_electricity(build_system):
+    """The reason gas is a request of its own. Had it been a field beside the
+    electricity in one document, this error would have nulled both - and the
+    electricity prices are what the packs are steered on."""
+    broken = {
+        "errors": [{"message": 'Cannot query field "gasPrices" on type "MarketPrices"'}],
+        "data": None,
+    }
+    session = FakeSession(replies=[WIDE, WIDE, broken, broken])
+    system = with_frank(build_system, session)
+
+    await system.coordinator.async_refresh_prices()
+
+    assert system.coordinator.prices_error is None
+    assert system.coordinator.current_price() is not None
+    assert system.coordinator.current_gas_price() is None
+    report = system.coordinator.diagnostics()["state"]
+    assert report["gas_price_slots"] == 0
+    assert "gasPrices" in report["gas_error"]
+
+
+async def test_gas_that_cannot_be_reached_at_all_is_only_gas_missing(build_system):
+    session = FakeSession(replies=[WIDE, WIDE, OSError("timed out"), OSError("timed out")])
+    system = with_frank(build_system, session)
+
+    await system.coordinator.async_refresh_prices()
+
+    assert system.coordinator.prices_error is None
+    assert system.coordinator.current_price() is not None
+    assert system.coordinator.current_gas_price() is None
+
+
+async def test_gas_is_never_ranked(build_system):
+    """Dearer or cheaper, gas is a different commodity and must not stand in
+    for an hour of electricity."""
+    session = FakeSession(replies=[WIDE, WIDE, gas_answer(0.01), gas_answer(0.01)])
+    system = with_frank(build_system, session)
+
+    await system.coordinator.async_refresh_prices()
+
+    assert [s.price for s in system.coordinator._price_forecast()] == [0.23]
