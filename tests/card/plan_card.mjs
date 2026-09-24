@@ -351,6 +351,14 @@ check("five empty states, all different",
   ]).size === 5,
   "distinct");
 
+// Since the floor is an end-of-day target, a hold before a cheaper window the
+// same day usually buys nothing at all - and must not say "tot 0 %".
+out = render({ ...WAITING, waiting: { ...WAITING.waiting, held_to: 0 } });
+check("a hold at nothing says it buys nothing, not 'hooguit tot 0 %'",
+  out.plwhy.textContent.includes("koopt hij niets") &&
+    !out.plwhy.textContent.includes("hooguit"),
+  out.plwhy.textContent);
+
 // No hold, no trace of one.
 out = render(FULL);
 check("without a hold the ceiling sentence is unchanged",

@@ -1946,9 +1946,14 @@ function buyRowSays(hour) {
  */
 function waitingSays(waiting, now = Date.now()) {
   const peak = hhmm(waiting.until);
+  // Nothing at all is the usual case since the floor became an end-of-day
+  // target: with a cheaper window later the same day there is no bridge to
+  // buy, and "hooguit tot 0 %" would be a strange way to say so.
   const why =
-    " Vóór de piek van " + peak + " hooguit tot " +
-    Math.round(waiting.held_to) + " % — daarna is het goedkoper.";
+    waiting.held_to > 0
+      ? " Vóór de piek van " + peak + " hooguit tot " +
+        Math.round(waiting.held_to) + " % — daarna is het goedkoper."
+      : " Vóór de piek van " + peak + " koopt hij niets — later vandaag is het goedkoper.";
   const first = (waiting.hours || [])[0];
   const when = first
     ? hhmm(first.start) + (dayOf(first.start) === dayKey(0, now) ? "" : " (morgen)")

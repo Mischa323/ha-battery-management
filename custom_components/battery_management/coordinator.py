@@ -568,6 +568,10 @@ class BatteryCoordinator:
         #: packs fill, so without this the hour we picked can stop qualifying
         #: half-way through and the packs flap off mid-charge.
         self._buying_slot: str | None = None
+        #: the slot in which a purchase reached its line. Not restarted there:
+        #: a pack resting on the line reads either side of it, and each dip
+        #: would otherwise be a fresh purchase at full power.
+        self._topped_up_slot: str | None = None
         # which leg each unit sits on (1-based), and how we came to believe it
         self.unit_phase: dict[str, int | None] = {u.name: None for u in self._units}
         self.phase_detection: str = PHASE_DETECT_UNKNOWN
@@ -1809,29 +1813,58 @@ class BatteryCoordinator:
         # "buy at least to", which is exactly the charge they want in hand
         # before a peak, and `_bound_ceiling` raises anything under it back up.
         later = self.after_peak_step() if hold_for_later else None
-        if (
-            later is not None
-            and later >= self._price_margin
-            # Same guard as the branch above, and for the same reason: with no
-            # floor stated this would read as "buy nothing before a peak", and
-            # the packs would meet every expensive evening on whatever they
-            # happened to hold. That is the fault #7 was opened for, and two
-            # tests in `test_plan.py` go red the moment this is dropped.
-            #
-            # With a floor it says something quite different, and stronger than
-            # it first looks: before any peak with a cheaper window behind it,
-            # buy the bridge the owner asked for and no more. On an ordinary
-            # day that is most evenings, which is the intended shape - the
-            # filling belongs in the cheap window, not in the run-up to a peak.
-            and self.buy_ceiling_min > 0
-        ):
-            held = min(ceiling, self.buy_ceiling_min)
-            if held < ceiling:
-                reason = POLICY_CHEAPER_LATER
-            ceiling = held
+        if later is not None and later >= self._price_margin:
+            # The floor is for the *end of the day*, in the owner's words - "die
+            # ondergrens moet voor het eind van de dag zijn, niet in de ochtend"
+            # - after it had been topping the packs up before the morning peak.
+            # So when the cheaper window lies on the same day as the peak, there
+            # is nothing to buy now, floor or no floor: that window is still in
+            # time to reach it, and at a better price. Returned unbounded on
+            # purpose - `_bound_ceiling` would raise it straight back to the
+            # floor, which is the very purchase this exists to defer.
+            same_day = self.later_same_day_step()
+            if same_day is not None and same_day >= self._price_margin:
+                if self._bound_ceiling(ceiling) > 0:
+                    reason = POLICY_CHEAPER_LATER
+                return 0.0, reason
+            # The cheaper window is only past midnight. Then the end of the
+            # day comes first, and the floor is what the packs meet it with -
+            # the bridge, and no more. Only against a floor the owner stated:
+            # with none, this would read as "buy nothing before the evening
+            # peak", which is the fault #7 was opened for, and two tests in
+            # `test_plan.py` go red the moment this guard is dropped.
+            if self.buy_ceiling_min > 0:
+                held = min(ceiling, self.buy_ceiling_min)
+                if held < ceiling:
+                    reason = POLICY_CHEAPER_LATER
+                ceiling = held
         return self._bound_ceiling(ceiling), reason
 
-    def _room_to_buy(self, soc: float, limit: float, ceiling: float) -> float:
+    def later_same_day_step(self) -> float | None:
+        """How much cheaper the rest of the peak's own day is than before it.
+
+        `after_peak_step` looks at everything past the peak inside the window,
+        which reaches into tomorrow. This stops at the end of the day the peak
+        falls on - the day, not the moment, so that from 22:00 tomorrow
+        morning's peak is judged against tomorrow afternoon, not against a
+        midnight that has nothing to do with it.
+
+        Positive enough means the floor can wait: it is for the end of the day,
+        and a cheaper chance to reach it still comes before the day is out.
+        """
+        peak = self._buy_before()
+        if peak is None:
+            return None
+        end = dt_util.start_of_local_day(dt_util.as_local(peak) + timedelta(days=1))
+        that_day = [slot for slot in (self._price_forecast() or []) if slot.start < end]
+        return cheaper_beyond(
+            that_day, dt_util.utcnow(), peak,
+            self._cheap_hours, PRICE_WINDOW_HOURS, near_hours=0,
+        )
+
+    def _room_to_buy(
+        self, soc: float, limit: float, ceiling: float, started: bool = False
+    ) -> float:
         """Percentage points of this pack still worth buying into.
 
         Zero once it is within `BUY_CEILING_BAND` of the ceiling, which is the
@@ -1842,6 +1875,14 @@ class BatteryCoordinator:
         immediate while coming back is integrated, one misread tick cost some
         45 seconds of importing at 7 kW.
 
+        `started` is the other half, and without it the band only moved the
+        flapping two points down. A band on its own is one line: more room
+        than the band starts a purchase, and the first reading inside the band
+        stops it - so a purchase started at 47 below a floor of 50 stopped at
+        48, the house drew it back to 47, and it started again. Three times
+        on the night of 24 September, each a burst at 7 kW. So the band gates
+        *starting* only; a purchase under way runs to the line itself.
+
         One helper for both callers. `hours_of_charge_needed` decides which
         hours get earmarked and `_dynamic_should_charge` decides whether to
         draw right now; if they measured the room differently, an hour would be
@@ -1849,6 +1890,8 @@ class BatteryCoordinator:
         this is here to stop.
         """
         room = min(ceiling, limit) - soc
+        if started:
+            return max(room, 0.0)
         return room if room > BUY_CEILING_BAND else 0.0
 
     def hours_of_charge_needed(
@@ -1946,12 +1989,21 @@ class BatteryCoordinator:
         if ceiling <= 0:
             # more sun coming than the packs could hold: buying nothing is right
             return False, reason
+        # Start with more room than the band, then run to the line, then stop
+        # for the rest of the slot. The two ends differ on purpose: one line
+        # for both is a line a pack resting on it crosses every few ticks.
+        key = _slot_key(current)
+        if self._topped_up_slot == key:
+            return False, reason
+        started = self._buying_slot == key
         if not any(
-            self._room_to_buy(s.soc, s.charge_limit, ceiling) > 0
+            self._room_to_buy(s.soc, s.charge_limit, ceiling, started=started) > 0
             for s in online.values()
         ):
+            if started:
+                self._topped_up_slot = key
             return False, reason
-        self._buying_slot = _slot_key(current)
+        self._buying_slot = key
         return True, POLICY_DYNAMIC_CHARGE
 
     def minutes_to_full(self) -> int | None:
