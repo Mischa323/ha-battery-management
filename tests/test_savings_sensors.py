@@ -75,7 +75,7 @@ def test_the_payback_reads_the_owner_s_footing(sensors):
 
     assert payback.available is True
     assert payback.native_value == coordinator.payback()["years_without_saldering"]
-    assert payback.native_unit_of_measurement == "a"
+    assert payback.native_unit_of_measurement == sensor.UnitOfTime.YEARS
 
 
 def test_no_purchase_price_leaves_the_payback_unavailable(sensors):
