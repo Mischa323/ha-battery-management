@@ -1813,27 +1813,54 @@ class BatteryCoordinator:
         # "buy at least to", which is exactly the charge they want in hand
         # before a peak, and `_bound_ceiling` raises anything under it back up.
         later = self.after_peak_step() if hold_for_later else None
-        if (
-            later is not None
-            and later >= self._price_margin
-            # Same guard as the branch above, and for the same reason: with no
-            # floor stated this would read as "buy nothing before a peak", and
-            # the packs would meet every expensive evening on whatever they
-            # happened to hold. That is the fault #7 was opened for, and two
-            # tests in `test_plan.py` go red the moment this is dropped.
-            #
-            # With a floor it says something quite different, and stronger than
-            # it first looks: before any peak with a cheaper window behind it,
-            # buy the bridge the owner asked for and no more. On an ordinary
-            # day that is most evenings, which is the intended shape - the
-            # filling belongs in the cheap window, not in the run-up to a peak.
-            and self.buy_ceiling_min > 0
-        ):
-            held = min(ceiling, self.buy_ceiling_min)
-            if held < ceiling:
-                reason = POLICY_CHEAPER_LATER
-            ceiling = held
+        if later is not None and later >= self._price_margin:
+            # The floor is for the *end of the day*, in the owner's words - "die
+            # ondergrens moet voor het eind van de dag zijn, niet in de ochtend"
+            # - after it had been topping the packs up before the morning peak.
+            # So when the cheaper window lies on the same day as the peak, there
+            # is nothing to buy now, floor or no floor: that window is still in
+            # time to reach it, and at a better price. Returned unbounded on
+            # purpose - `_bound_ceiling` would raise it straight back to the
+            # floor, which is the very purchase this exists to defer.
+            same_day = self.later_same_day_step()
+            if same_day is not None and same_day >= self._price_margin:
+                if self._bound_ceiling(ceiling) > 0:
+                    reason = POLICY_CHEAPER_LATER
+                return 0.0, reason
+            # The cheaper window is only past midnight. Then the end of the
+            # day comes first, and the floor is what the packs meet it with -
+            # the bridge, and no more. Only against a floor the owner stated:
+            # with none, this would read as "buy nothing before the evening
+            # peak", which is the fault #7 was opened for, and two tests in
+            # `test_plan.py` go red the moment this guard is dropped.
+            if self.buy_ceiling_min > 0:
+                held = min(ceiling, self.buy_ceiling_min)
+                if held < ceiling:
+                    reason = POLICY_CHEAPER_LATER
+                ceiling = held
         return self._bound_ceiling(ceiling), reason
+
+    def later_same_day_step(self) -> float | None:
+        """How much cheaper the rest of the peak's own day is than before it.
+
+        `after_peak_step` looks at everything past the peak inside the window,
+        which reaches into tomorrow. This stops at the end of the day the peak
+        falls on - the day, not the moment, so that from 22:00 tomorrow
+        morning's peak is judged against tomorrow afternoon, not against a
+        midnight that has nothing to do with it.
+
+        Positive enough means the floor can wait: it is for the end of the day,
+        and a cheaper chance to reach it still comes before the day is out.
+        """
+        peak = self._buy_before()
+        if peak is None:
+            return None
+        end = dt_util.start_of_local_day(dt_util.as_local(peak) + timedelta(days=1))
+        that_day = [slot for slot in (self._price_forecast() or []) if slot.start < end]
+        return cheaper_beyond(
+            that_day, dt_util.utcnow(), peak,
+            self._cheap_hours, PRICE_WINDOW_HOURS, near_hours=0,
+        )
 
     def _room_to_buy(
         self, soc: float, limit: float, ceiling: float, started: bool = False

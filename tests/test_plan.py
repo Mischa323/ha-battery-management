@@ -978,9 +978,35 @@ def morning_of_the_22nd(after_peak: float = 0.20) -> dict:
     return {"raw_today": slots}
 
 
-def before_the_peak(planned, *, soc, floor=30.0, after_peak=0.20, **options):
+def cheaper_only_after_midnight() -> dict:
+    """The other shape: the peak, the rest of the evening no cheaper, and the
+    cheap hours only past midnight. The end of the day comes before any
+    cheaper chance, so the floor is what the packs meet it with."""
+    midnight = NOW.replace(hour=0, minute=0, second=0, microsecond=0)
+    slots = []
+    for i in range(48):
+        start = midnight + timedelta(hours=i)
+        if start.day != NOW.day:
+            price = 0.20          # the cheaper window, past midnight
+        elif 16 <= start.hour < 19:
+            price = 0.48
+        else:
+            price = 0.33
+        slots.append(
+            {
+                "start": start.isoformat(),
+                "end": (start + timedelta(hours=1)).isoformat(),
+                "value": price,
+            }
+        )
+    return {"raw_today": slots}
+
+
+def before_the_peak(planned, *, soc, floor=30.0, after_peak=0.20, day=None, **options):
     system = planned(remaining=0.0, soc=(soc, soc), **options)
-    system.hass.states.set(PRICES, 0.33, morning_of_the_22nd(after_peak))
+    system.hass.states.set(
+        PRICES, 0.33, day() if day else morning_of_the_22nd(after_peak)
+    )
     system.coordinator.buy_ceiling_min = floor
     return system
 
@@ -998,36 +1024,98 @@ async def test_it_waits_for_the_cheaper_window_on_the_far_side(planned):
     ceiling, reason = system.coordinator._buy_ceiling()
     await system.coordinator._async_tick(None)
 
-    assert (ceiling, reason) == (30.0, POLICY_CHEAPER_LATER)
+    # the cheaper window is the same day, so not even the floor is bought now
+    assert (ceiling, reason) == (0.0, POLICY_CHEAPER_LATER)
     assert system.coordinator.active_policy != POLICY_DYNAMIC_CHARGE
     assert system.coordinator.setpoint >= 0
 
 
-async def test_it_still_buys_the_bridge_the_floor_asks_for(planned):
-    """Holding back is not refusing. Empty packs still meet the peak charged -
-    to the level the owner stated and no further, with the rest left to the
-    cheaper window."""
-    system = before_the_peak(planned, soc=20.0)
+async def test_the_floor_is_for_the_end_of_the_day_not_the_morning(planned):
+    """Asked for by the owner on 24 September, after the floor had been
+    topping the packs up before the morning peak: "die ondergrens moet voor
+    het eind van de dag zijn niet in de ochtend".
+
+    With a cheaper window later the same day there is time to reach the floor
+    there, at a better price - so even nearly empty packs buy nothing now.
+    """
+    system = before_the_peak(planned, soc=20.0, floor=50.0)
 
     await system.coordinator._async_tick(None)
 
-    # stops at the floor before the peak - the published ceiling is today's
+    assert system.coordinator._buy_ceiling() == (0.0, POLICY_CHEAPER_LATER)
+    assert system.coordinator.active_policy != POLICY_DYNAMIC_CHARGE
+    # and today's target still includes the floor, reached in that window
+    assert system.coordinator.charge_ceiling() >= 50.0
+
+
+async def test_it_still_buys_the_bridge_the_floor_asks_for(planned):
+    """Holding back is not refusing. When the cheaper window is past midnight
+    the end of the day comes first, and empty packs meet it at the level the
+    owner stated - no further, the rest left to the cheaper night."""
+    system = before_the_peak(planned, soc=20.0, day=cheaper_only_after_midnight)
+
+    await system.coordinator._async_tick(None)
+
+    # stops at the floor. A cheaper window past midnight is a cheaper
+    # tomorrow too, and that branch gets there first - same floor, same buy.
     assert system.coordinator._buy_ceiling()[0] == 30.0
-    assert system.coordinator.held_ceiling()["held_to"] == 30.0
     assert system.coordinator.active_policy == POLICY_DYNAMIC_CHARGE
     assert system.coordinator.setpoint < 0
 
 
 async def test_with_no_floor_stated_it_behaves_exactly_as_before(planned):
-    """`buy_ceiling_min` ships at 0, and reading that as a level to stop at
-    would mean "buy nothing before a peak" - which is the fault #7 was opened
-    for, arriving silently with an update. No floor, no holding back."""
-    system = before_the_peak(planned, soc=77.0, floor=0.0)
+    """`buy_ceiling_min` ships at 0, and before the last peak of the day
+    reading that as a level to stop at would mean "buy nothing before the
+    evening" - which is the fault #7 was opened for, arriving silently with an
+    update. No floor, no holding back there."""
+    system = before_the_peak(
+        planned, soc=77.0, floor=0.0, day=cheaper_only_after_midnight
+    )
 
     ceiling, reason = system.coordinator._buy_ceiling()
 
     assert ceiling == 100.0
     assert reason != POLICY_CHEAPER_LATER
+
+
+async def test_a_cheaper_window_the_same_day_holds_with_no_floor_too(planned):
+    """The same-day hold does not lean on the floor at all: the cheaper window
+    comes before the day is out, so there is nothing a floor could be owed."""
+    system = before_the_peak(planned, soc=77.0, floor=0.0)
+
+    assert system.coordinator._buy_ceiling() == (0.0, POLICY_CHEAPER_LATER)
+
+
+async def test_from_late_evening_tomorrows_peak_is_judged_on_tomorrow(
+    planned, monkeypatch
+):
+    """"The same day" is the peak's day, not the clock's. At 22:00, the next
+    peak is tomorrow morning's, and the question is whether tomorrow afternoon
+    is cheaper - not whether anything before tonight's midnight is."""
+    midnight = NOW.replace(hour=0, minute=0, second=0, microsecond=0)
+    slots = []
+    for i in range(48):
+        start = midnight + timedelta(hours=i)
+        if start.day == NOW.day:
+            price = 0.33
+        elif 6 <= start.hour < 9:
+            price = 0.48          # tomorrow morning's peak
+        elif 11 <= start.hour < 16:
+            price = 0.18          # tomorrow afternoon
+        else:
+            price = 0.33
+        slots.append({"start": start.isoformat(),
+                      "end": (start + timedelta(hours=1)).isoformat(),
+                      "value": price})
+    late = midnight + timedelta(hours=22)
+    monkeypatch.setattr(coordinator_module.dt_util, "utcnow", lambda: late)
+    system = planned(remaining=0.0, soc=(30.0, 30.0))
+    system.hass.states.set(PRICES, 0.33, {"raw_today": slots})
+    system.hass.states.set(GRID_SENSOR, 300)
+    system.coordinator.buy_ceiling_min = 50.0
+
+    assert system.coordinator._buy_before() == midnight + timedelta(days=1, hours=6)
+    assert system.coordinator._buy_ceiling() == (0.0, POLICY_CHEAPER_LATER)
 
 
 async def test_a_far_side_within_the_margin_is_not_a_cheaper_window(planned):
@@ -1075,7 +1163,7 @@ async def test_the_hours_left_before_a_peak_are_never_too_few_to_count(planned):
     # four hours to the peak, ranked over five: thinner than the budget
     assert system.coordinator._buy_before() == NOW + timedelta(hours=4)
     assert system.coordinator.after_peak_step() >= system.coordinator._price_margin
-    assert system.coordinator._buy_ceiling() == (30.0, POLICY_CHEAPER_LATER)
+    assert system.coordinator._buy_ceiling() == (0.0, POLICY_CHEAPER_LATER)
 
 
 async def test_a_peak_in_the_next_quarter_holds_back_hardest(planned):
@@ -1092,7 +1180,7 @@ async def test_a_peak_in_the_next_quarter_holds_back_hardest(planned):
     system.coordinator.buy_ceiling_min = 30.0
 
     assert system.coordinator._buy_before() is not None
-    assert system.coordinator._buy_ceiling() == (30.0, POLICY_CHEAPER_LATER)
+    assert system.coordinator._buy_ceiling() == (0.0, POLICY_CHEAPER_LATER)
 
 
 # -- the band on the ceiling --------------------------------------------------
@@ -1158,10 +1246,10 @@ def test_the_published_ceiling_is_todays_not_the_one_before_the_peak(planned):
     """
     system = before_the_peak(planned, soc=77.0)
 
-    assert system.coordinator._buy_ceiling() == (30.0, POLICY_CHEAPER_LATER)
+    assert system.coordinator._buy_ceiling() == (0.0, POLICY_CHEAPER_LATER)
     assert system.coordinator.charge_ceiling() == 100.0
     assert system.coordinator.held_ceiling() == {
-        "held_to": 30.0,
+        "held_to": 0.0,
         "until": NOW + timedelta(hours=4),
         "then_to": 100.0,
     }
@@ -1174,7 +1262,7 @@ def test_the_plan_says_what_the_hold_is_waiting_for(planned):
     plan = system.coordinator.plan()
 
     assert plan["buy_hours"] == []
-    assert plan["waiting"]["held_to"] == 30.0
+    assert plan["waiting"]["held_to"] == 0.0
     assert plan["waiting"]["then_to"] == 100.0
     assert plan["waiting"]["until"] == (NOW + timedelta(hours=4)).isoformat()
     later = [h["start"] for h in plan["waiting"]["hours"]]
@@ -1215,7 +1303,8 @@ def test_what_was_expected_in_the_morning_is_what_is_planned_after_the_peak(
 
 
 def test_with_nothing_held_there_is_nothing_to_wait_for(planned):
-    system = before_the_peak(planned, soc=77.0, floor=0.0)
+    """A far side a penny cheaper is no cheaper window, so nothing is held."""
+    system = before_the_peak(planned, soc=77.0, after_peak=0.30)
 
     plan = system.coordinator.plan()
 
@@ -1258,14 +1347,13 @@ def set_socs(system, first, second) -> None:
 
 
 async def test_a_purchase_under_way_runs_to_the_line(planned):
-    """Floor at 50, a hold on for a cheaper afternoon, the house drawing the
-    packs down through the night. Pack 2 read 47 - three points of room, so a
+    """Floor at 50, the house drawing the packs down through the night. Pack 2 read 47 - three points of room, so a
     purchase started - and one point later read 48, inside the band, and it
     stopped. The house drew it back to 47 and it started again: three bursts
     of 7 kW between 05:00 and 06:00.
 
     Started, it now runs to 50."""
-    system = before_the_peak(planned, soc=49.0, floor=50.0)
+    system = before_the_peak(planned, soc=49.0, floor=50.0, day=cheaper_only_after_midnight)
     set_socs(system, 49.0, 47.0)
 
     await system.coordinator._async_tick(None)
@@ -1283,7 +1371,7 @@ async def test_a_purchase_under_way_runs_to_the_line(planned):
 async def test_once_at_the_line_it_does_not_start_again_in_that_slot(planned):
     """A pack resting on the line reads either side of it. Each dip below
     would otherwise be a fresh purchase at full power."""
-    system = before_the_peak(planned, soc=49.0, floor=50.0)
+    system = before_the_peak(planned, soc=49.0, floor=50.0, day=cheaper_only_after_midnight)
     set_socs(system, 47.0, 47.0)
     await system.coordinator._async_tick(None)
     set_socs(system, 50.0, 50.0)
@@ -1298,7 +1386,7 @@ async def test_once_at_the_line_it_does_not_start_again_in_that_slot(planned):
 async def test_starting_still_needs_more_room_than_the_band(planned):
     """The band is not gone - it gates the start. Two points under the line is
     no reason to begin buying at full power."""
-    system = before_the_peak(planned, soc=48.0, floor=50.0)
+    system = before_the_peak(planned, soc=48.0, floor=50.0, day=cheaper_only_after_midnight)
 
     await system.coordinator._async_tick(None)
 
@@ -1308,7 +1396,7 @@ async def test_starting_still_needs_more_room_than_the_band(planned):
 async def test_a_new_slot_starts_afresh(planned, monkeypatch):
     """Topped up in one slot says nothing about the next: by then the house
     may have drawn the packs well under the line again."""
-    system = before_the_peak(planned, soc=47.0, floor=50.0)
+    system = before_the_peak(planned, soc=47.0, floor=50.0, day=cheaper_only_after_midnight)
     await system.coordinator._async_tick(None)
     set_socs(system, 50.0, 50.0)
     await system.coordinator._async_tick(None)
