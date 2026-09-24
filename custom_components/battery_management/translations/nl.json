@@ -347,6 +347,12 @@
       },
       "untaxed_price": {
         "name": "Stroomprijs zonder energiebelasting"
+      },
+      "gas_price": {
+        "name": "Gasprijs"
+      },
+      "gas_untaxed_price": {
+        "name": "Gasprijs zonder energiebelasting"
       }
     },
     "select": {

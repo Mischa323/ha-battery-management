@@ -347,6 +347,12 @@
       },
       "untaxed_price": {
         "name": "Price without energy tax"
+      },
+      "gas_price": {
+        "name": "Gas price"
+      },
+      "gas_untaxed_price": {
+        "name": "Gas price without energy tax"
       }
     },
     "select": {

@@ -63,6 +63,31 @@ query MarketPrices($date: String!, $resolution: PriceResolution!) {
 }
 """
 
+#: Gas, in a document of its own and a request of its own. Not a field beside
+#: `electricityPrices` in the query above, however tidy that would look: a
+#: GraphQL error nulls the whole `data`, so one unexpected thing about gas - a
+#: renamed field, a day not yet published - would take the electricity prices
+#: with it, and those are what the packs are steered on. Separate, a gas failure
+#: can only ever lose the gas price.
+#:
+#: By the hour: the gas price is set per gas day, so quarters would be the same
+#: number four times over.
+FRANK_GAS_QUERY = """
+query GasPrices($date: String!, $resolution: PriceResolution!) {
+  marketPrices(date: $date, resolution: $resolution) {
+    gasPrices {
+      from
+      till
+      marketPrice
+      marketPriceTax
+      sourcingMarkupPrice
+      energyTaxPrice
+    }
+  }
+}
+"""
+FRANK_GAS_RESOLUTION = "PT60M"
+
 #: what an all-in price is made of. `marketPrice` is required - a slot without
 #: one is not a price. The rest default to 0, which yields the bare exchange
 #: price: still correctly *ranked*, just not what you actually pay.
@@ -80,7 +105,13 @@ def frank_requests(today: date) -> list[tuple[str, dict]]:
     `cheapest_slots` ranks over a rolling 24 h window from now, so a forecast
     that stops at midnight is a short window rather than a wrong one.
     """
-    return [_frank_day(today), _frank_day(today + timedelta(days=1))]
+    tomorrow = today + timedelta(days=1)
+    return [
+        _frank_day(today),
+        _frank_day(tomorrow),
+        _frank_gas_day(today),
+        _frank_gas_day(tomorrow),
+    ]
 
 
 def _frank_day(day: date) -> tuple[str, dict]:
@@ -94,8 +125,19 @@ def _frank_day(day: date) -> tuple[str, dict]:
     }
 
 
-def _frank_rows(payloads: list) -> list:
-    """Every electricity row across the answers, in the order they arrived.
+def _frank_gas_day(day: date) -> tuple[str, dict]:
+    return FRANK_ENDPOINT, {
+        "operationName": "GasPrices",
+        "query": FRANK_GAS_QUERY,
+        "variables": {
+            "date": day.isoformat(),
+            "resolution": FRANK_GAS_RESOLUTION,
+        },
+    }
+
+
+def _frank_rows(payloads: list, field: str = "electricityPrices") -> list:
+    """Every row of one kind across the answers, in the order they arrived.
 
     A payload that is missing, errored or malformed contributes nothing rather
     than failing the others: an afternoon request has a tomorrow and a morning
@@ -117,7 +159,7 @@ def _frank_rows(payloads: list) -> list:
         day = data.get("marketPrices")
         if not isinstance(day, dict):
             continue
-        values = day.get("electricityPrices")
+        values = day.get(field)
         if not isinstance(values, list):
             continue
         for row in values:
@@ -146,8 +188,46 @@ def parse_frank(payloads: list) -> dict:
     """
     if not isinstance(payloads, list):
         return {}
-    rows = _frank_rows(payloads)
+    prices, market_prices, untaxed_prices = _frank_series(_frank_rows(payloads))
+    if not prices:
+        return {}
+    gas, _, gas_untaxed = _frank_series(_frank_rows(payloads, "gasPrices"))
 
+    # `prices` is the key an ordinary price sensor would publish, so the
+    # shape-based parser handles it with no special case anywhere else.
+    #
+    # `market_prices` rides alongside and is deliberately NOT one of the keys
+    # that parser looks at: it is the exchange component on its own, which is
+    # what export is settled against. Paying tax on power you sold back would
+    # be a strange arrangement, so the all-in price is the wrong number there -
+    # and a wrong number on an energy dashboard looks exactly like a right one.
+    #
+    # `untaxed_prices` is the all-in price less the energy tax - what Frank's
+    # own app calls "het dynamische deel", because the tax is the same every
+    # hour and is billed apart. Asked for by the owner after the app showed
+    # EUR 1.29 for a day Home Assistant put at EUR 2.52: same 11.7 kWh, and
+    # the gap was 11.7 x EUR 0.11 of energy tax. Also not a key the parser
+    # reads, so it can never take part in the ranking.
+    #
+    # Gas rides along the same way, for the Energy dashboard only - nothing
+    # here steers on it. Absent rather than empty when Frank gave none, with
+    # the reason beside it, so a gas price that never arrives is visible in the
+    # diagnostics rather than a sensor that is quietly unavailable.
+    result = {
+        "prices": prices,
+        "market_prices": market_prices,
+        "untaxed_prices": untaxed_prices,
+    }
+    if gas:
+        result["gas_prices"] = gas
+        result["gas_untaxed_prices"] = gas_untaxed
+    else:
+        result["gas_error"] = _frank_gas_error(payloads)
+    return result
+
+
+def _frank_series(rows: list) -> tuple[list, list, list]:
+    """All-in, bare exchange and untaxed series from one kind of row."""
     prices = []
     market_prices = []
     untaxed_prices = []
@@ -173,31 +253,24 @@ def parse_frank(payloads: list) -> dict:
         prices.append(slot)
         market_prices.append(bare)
         untaxed_prices.append(variable)
+    return prices, market_prices, untaxed_prices
 
-    # `prices` is the key an ordinary price sensor would publish, so the
-    # shape-based parser handles it with no special case anywhere else.
-    #
-    # `market_prices` rides alongside and is deliberately NOT one of the keys
-    # that parser looks at: it is the exchange component on its own, which is
-    # what export is settled against. Paying tax on power you sold back would
-    # be a strange arrangement, so the all-in price is the wrong number there -
-    # and a wrong number on an energy dashboard looks exactly like a right one.
-    #
-    # `untaxed_prices` is the all-in price less the energy tax - what Frank's
-    # own app calls "het dynamische deel", because the tax is the same every
-    # hour and is billed apart. Asked for by the owner after the app showed
-    # EUR 1.29 for a day Home Assistant put at EUR 2.52: same 11.7 kWh, and
-    # the gap was 11.7 x EUR 0.11 of energy tax. Also not a key the parser
-    # reads, so it can never take part in the ranking.
-    return (
-        {
-            "prices": prices,
-            "market_prices": market_prices,
-            "untaxed_prices": untaxed_prices,
-        }
-        if prices
-        else {}
-    )
+
+def _frank_gas_error(payloads: list) -> str:
+    """Why there is no gas price, as far as the answers say.
+
+    Frank names the segment in its errors ("... for segment GAS"), and a field
+    it does not know by name, so the gas one can be told apart from the
+    electricity tomorrow that errors every morning. Otherwise the plain fact.
+    """
+    for payload in payloads:
+        if not isinstance(payload, dict):
+            continue
+        for error in payload.get("errors") or []:
+            message = error.get("message") if isinstance(error, dict) else None
+            if isinstance(message, str) and "gas" in message.lower():
+                return message
+    return "no gas prices in the response"
 
 
 #: key -> (build the requests, read the answers). Plural on both sides: a
