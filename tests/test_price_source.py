@@ -185,10 +185,12 @@ async def test_each_day_is_asked_for_in_its_own_request(build_system):
     await system.coordinator.async_refresh_prices()
 
     today = dt_util.now().date()
-    assert [body["variables"]["date"] for _, body in session.calls] == [
-        today.isoformat(),
-        (today + timedelta(days=1)).isoformat(),
-    ]
+    days = [today.isoformat(), (today + timedelta(days=1)).isoformat()]
+    electricity = [b for _, b in session.calls if b["operationName"] == "MarketPrices"]
+    gas = [b for _, b in session.calls if b["operationName"] == "GasPrices"]
+    assert [body["variables"]["date"] for body in electricity] == days
+    # gas in requests of its own, so it can never sink the electricity ones
+    assert [body["variables"]["date"] for body in gas] == days
 
 
 async def test_a_day_that_is_not_published_yet_does_not_sink_the_other(build_system):

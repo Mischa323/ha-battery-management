@@ -56,7 +56,10 @@ def test_each_day_is_asked_for_separately_by_the_quarter():
     nulls the whole response. Sharing a document with tomorrow would mean
     losing today along with it.
     """
-    requests = frank_requests(date(2026, 9, 1))
+    requests = [
+        (url, body) for url, body in frank_requests(date(2026, 9, 1))
+        if body["operationName"] == "MarketPrices"
+    ]
 
     assert [body["variables"]["date"] for _, body in requests] == [
         "2026-09-01",
@@ -64,7 +67,7 @@ def test_each_day_is_asked_for_separately_by_the_quarter():
     ]
     for url, body in requests:
         assert url == FRANK_ENDPOINT
-        assert body["operationName"] == "MarketPrices"
+        assert "electricityPrices" in body["query"]
         assert body["variables"]["resolution"] == "PT15M"
 
 
