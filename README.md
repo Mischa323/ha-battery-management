@@ -1183,6 +1183,17 @@ on the savings sensors. Shadow never empties a pack, so it keeps its own
 account of what it has "sold" and stops where the real packs would have, until
 the next buy fills them again. Dry run with trading On counts as shadow too.
 
+**In the plan.** With trading on or in shadow, the **Plan card** gets a
+*Wanneer verkopen* list: the slots still to come that would pay to sell in —
+the live decision asked of every slot ahead, with that slot's own prices,
+the cheapest refill *after* it, and saldering as it will be on that day —
+and the slots it did sell in (or would have, in shadow). Consecutive quarters
+read as one row, with the best margin of the run. A buy hour is never listed:
+the tick gives that hour to buying. What no price list can know is whether the
+packs will be above **Sell down to** when the hour comes, so the card says how
+many kWh sit above it right now. The same is on the Plan sensor: `sell`,
+`sell_margin` and `sold` per hour, and a `trade` block.
+
 **What was saved.** The savings sensors count every tick, whoever is driving:
 the same house without packs would have drawn *meter + packs*, and the
 difference in what the two cost is the saving. Pack power is the measured

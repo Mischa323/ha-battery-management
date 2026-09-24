@@ -1931,6 +1931,91 @@ function buyRowSays(hour) {
 }
 
 /**
+ * What a slot means for selling, in the plan card's "wanneer verkopen" list.
+ *
+ * Asked for by the owner: "wanneer hij gaat ontladen voor slim handelen".
+ * In shadow the words say "zou", because nothing is sold - a list that read
+ * "verkoopt" while the packs sat still would be the card lying.
+ */
+function sellRowSays(hour, mode) {
+  const shadow = mode === "shadow";
+  if (hour.sold) {
+    return {
+      text: hour.past
+        ? shadow ? "zou verkocht hebben" : "verkocht"
+        : shadow ? "zou nu verkopen" : "verkoopt nu",
+      tone: "done",
+    };
+  }
+  return { text: shadow ? "zou verkopen" : "gaat verkopen", tone: "todo" };
+}
+
+/**
+ * Consecutive slots with the same verdict, as one row.
+ *
+ * Quarter-hour prices would otherwise list an evening peak as eight rows of
+ * the same words. The margin shown is the best of the run - the reason the
+ * run is there at all.
+ */
+function sellRuns(hours, mode) {
+  const runs = [];
+  for (const h of hours) {
+    const says = sellRowSays(h, mode);
+    const last = runs[runs.length - 1];
+    if (last && last.end === h.start && last.says.text === says.text) {
+      last.end = h.end;
+      if (h.sell_margin != null) last.margin = Math.max(last.margin ?? -Infinity, h.sell_margin);
+    } else {
+      runs.push({ start: h.start, end: h.end, says, margin: h.sell_margin ?? null });
+    }
+  }
+  return runs;
+}
+
+/**
+ * The whole "wanneer verkopen" section, or nothing when trading is off.
+ *
+ * Built as one piece of markup rather than toggling a hidden block, so a
+ * card with trading off carries no empty heading.
+ */
+function sellSection(plan, today) {
+  const trade = plan.trade;
+  if (!trade || !trade.mode || trade.mode === "off") return "";
+  const shadow = trade.mode === "shadow";
+  const title = "Wanneer verkopen" + (shadow ? " (schaduw)" : "");
+  const rows = today.filter((h) => h.sold || (!h.past && h.sell));
+  const list = sellRuns(rows, trade.mode)
+    .map(
+      (r) =>
+        '<div class="hr"><span class="when">' + hhmm(r.start) + "–" + hhmm(r.end) +
+        "</span>" +
+        '<span class="muted">' +
+        (r.margin != null ? "+" + euro(r.margin, 3) + "/kWh" : "") +
+        "</span>" +
+        '<span class="tag ' + r.says.tone + '">' + esc(r.says.text) + "</span></div>"
+    )
+    .join("");
+  const empty =
+    plan.mode !== "dynamic"
+      ? "Verkoopt alleen in de modus Dynamisch."
+      : rows.length
+        ? ""
+        : "Vandaag geen kwartier dat minstens " + euro(trade.min_margin_eur_kwh, 2) +
+          " per kWh oplevert na terugkopen en slijtage.";
+  const floor =
+    "Alleen zolang de accu's boven " + Math.round(trade.sell_floor) + " % zitten" +
+    (trade.above_floor_kwh != null
+      ? " — nu " + kwh(trade.above_floor_kwh) + " daarboven."
+      : ".") +
+    (shadow ? " Schaduw stuurt niets aan, het houdt alleen bij." : "");
+  return (
+    "<h4>" + esc(title) + "</h4>" + list +
+    (empty ? '<div class="muted note">' + esc(empty) + "</div>" : "") +
+    '<div class="muted note">' + esc(floor) + "</div>"
+  );
+}
+
+/**
  * What a hold on the purchase means, in the two places the card says it.
  *
  * Reported on the morning of 23 September: the card said there was nothing to
@@ -2062,6 +2147,7 @@ class BatteryManagementPlanCard extends HTMLElement {
           <h4>Wanneer van het net</h4>
           <div id="plhours"></div>
           <div class="muted note" id="plnone"></div>
+          <div id="plsell"></div>
         </div>
       </ha-card>`;
     this._built = true;
@@ -2145,6 +2231,9 @@ class BatteryManagementPlanCard extends HTMLElement {
     // waiting, so the other four would each be a wrong explanation of it. It
     // also shows beside this morning's history, since an expected hour can be
     // tomorrow's and so not in today's list at all.
+    // ---- when it sells, if slim handelen is on ----
+    el("plsell").innerHTML = planState ? sellSection(plan, today) : "";
+
     const ahead = rows.filter((h) => !h.past);
     el("plnone").textContent = !planState
       ? ""

@@ -820,6 +820,8 @@ class BatteryCoordinator:
                 self.price_history[key] = {
                     "buy": bool(entry.get("buy")),
                     "bought": bool(entry.get("bought")),
+                    # sold to the grid in this slot - or would have, in shadow
+                    "sold": bool(entry.get("sold")),
                 }
         for key in ("charged_wh", "charged_grid_wh"):
             # a meter reading, not runtime state: restored regardless of age
@@ -1473,7 +1475,7 @@ class BatteryCoordinator:
         if current is None:
             return
         entry = self.price_history.setdefault(
-            _slot_key(current), {"buy": False, "bought": False}
+            _slot_key(current), {"buy": False, "bought": False, "sold": False}
         )
         entry["buy"] = self._price_buys(current, now)
         entry["bought"] = entry["bought"] or bought
@@ -1482,6 +1484,22 @@ class BatteryCoordinator:
         ).isoformat()
         for key in [k for k in self.price_history if k < cutoff]:
             del self.price_history[key]
+
+    def _remember_sold(self) -> None:
+        """Mark the current slot as one it sold in - or would have, in shadow.
+
+        A fact about the slot like `bought`, kept for the same reason: the plan
+        card lists what became of today, and a forecast re-run over a past
+        hour says what *would* pay now, not what happened.
+        """
+        slots = self._price_forecast()
+        current = slot_at(slots, dt_util.utcnow()) if slots else None
+        if current is None:
+            return
+        entry = self.price_history.setdefault(
+            _slot_key(current), {"buy": False, "bought": False, "sold": False}
+        )
+        entry["sold"] = True
 
     def expected_charge(self) -> dict:
         """How much is still meant to come off the meter, and how much off the roof.
@@ -1635,6 +1653,13 @@ class BatteryCoordinator:
         # the record: see `buys` below.
         buy_at = {_slot_key(slot) for slot in buying}
         expected_at = {_slot_key(slot) for slot in later}
+        # never in an hour earmarked for buying - the tick gives buying the
+        # hour, so the plan must not promise a sale in it either
+        sell_at = {
+            key: margin
+            for key, margin in (self.sell_forecast(slots) if slots else {}).items()
+            if key not in buy_at
+        }
         day_start = dt_util.as_local(now).replace(
             hour=0, minute=0, second=0, microsecond=0
         )
@@ -1668,6 +1693,12 @@ class BatteryCoordinator:
                 "bought": bool(
                     self.price_history.get(_slot_key(slot), {}).get("bought")
                 ),
+                # slim handelen: expected to sell (ahead), and did (behind)
+                "sell": slot.end > now and _slot_key(slot) in sell_at,
+                "sell_margin": sell_at.get(_slot_key(slot)),
+                "sold": bool(
+                    self.price_history.get(_slot_key(slot), {}).get("sold")
+                ),
             }
             for slot in sorted(slots or [], key=lambda s: s.start)
             if slot.end > day_start
@@ -1685,6 +1716,16 @@ class BatteryCoordinator:
                 "hours": describe(later),
             },
             "dear_hours": describe(dearest),
+            "trade": {
+                "mode": self.trade_mode,
+                "sell_floor": self.sell_floor,
+                "min_margin_eur_kwh": self._trade_margin,
+                "above_floor_kwh": self.energy_above_sell_line(),
+                "sell_hours": describe(
+                    s for s in sorted(slots or [], key=lambda s: s.start)
+                    if _slot_key(s) in sell_at
+                ),
+            },
             "solar_remaining_kwh": self.solar_remaining(),
             "usable_capacity_kwh": self.usable_capacity_kwh(),
             "charge_ceiling": self.charge_ceiling(),
@@ -2224,6 +2265,80 @@ class BatteryCoordinator:
         if verdict["margin"] < self._trade_margin:
             verdict["why"] = "margin_too_small"
         return verdict
+
+    def _component_by_slot(self, key: str) -> dict[str, float]:
+        """A side list the supplier publishes, per slot key, folded like the
+        all-in price so the two line up."""
+        rows = (self._price_attributes() or {}).get(key)
+        if not rows:
+            return {}
+        slots = parse_forecast({"prices": rows}, dt_util.utcnow())
+        if slots and self._price_resolution == RESOLUTION_HOURLY:
+            slots = to_hourly(slots)
+        return {_slot_key(slot): slot.price for slot in slots or []}
+
+    def sell_forecast(self, slots=None) -> dict[str, float]:
+        """Which slots still to come would pay to sell in, with their margin.
+
+        The live decision asked of every slot ahead: the same export value
+        (that slot's market price and tax, and saldering as it will be on that
+        day), the same refill (the cheapest hours after *that* slot), the same
+        wear and threshold. So a slot marked here is one the tick will sell in
+        when it arrives - if the packs are then above the sell line, which is
+        the one thing no price list can say.
+
+        Empty unless selling could happen at all: trading on or in shadow,
+        Dynamic, and a purchase price to weigh the wear with.
+        """
+        if (
+            self.trade_mode == TRADE_OFF
+            or self.mode != MODE_DYNAMIC
+            or self._battery_price <= 0
+        ):
+            return {}
+        wear = self.battery_wear()
+        slots = slots if slots is not None else self._price_forecast()
+        if wear is None or not slots:
+            return {}
+        market = self._component_by_slot("market_prices")
+        untaxed = self._component_by_slot("untaxed_prices")
+        now = dt_util.utcnow()
+        margins: dict[str, float] = {}
+        for slot in slots:
+            if slot.end <= now:
+                continue
+            key = _slot_key(slot)
+            tax = slot.price - untaxed[key] if key in untaxed else None
+            saldering = dt_util.as_local(slot.start).date() < self._saldering_until
+            value = export_value(self._feed_in, market.get(key), tax, saldering)
+            if value is None:
+                continue
+            ahead = [
+                s for s in slots_in_window(slots, slot.start, PRICE_WINDOW_HOURS)
+                if s.start > slot.start
+            ]
+            refill = cheap_mean(ahead, self._cheap_hours)
+            if refill is None:
+                continue
+            margin = sell_margin(value, refill, wear)
+            if margin >= self._trade_margin:
+                margins[key] = round(margin, 4)
+        return margins
+
+    def energy_above_sell_line(self) -> float | None:
+        """kWh the packs hold above where selling stops, right now."""
+        if self._full_charge_minutes <= 0:
+            return None
+        total = 0.0
+        seen = False
+        for cfg in self._units:
+            unit = self._unit_snapshot(cfg)
+            if not unit.online or unit.soc is None:
+                continue
+            seen = True
+            capacity = unit.unit_max * self._full_charge_minutes / 60.0 / 1000.0
+            total += max(unit.soc - self._sell_line(unit), 0.0) / 100.0 * capacity
+        return round(total, 2) if seen else None
 
     def _sell_line(self, unit: UnitState) -> float:
         """How far selling may take this pack: the higher of its own floor
@@ -4493,6 +4608,8 @@ class BatteryCoordinator:
             self.trade_selling = trade_sell and self.trade_mode == TRADE_ON
             self.trade_would_sell = trade_sell and self.trade_mode == TRADE_SHADOW
             self._trade_sell_w = float(upper) if trade_sell else 0.0
+            if trade_sell:
+                self._remember_sold()
             trade_policy = POLICY_TRADE_SELL if self.trade_selling else None
 
             external_sp, external_policy = (None, None)
