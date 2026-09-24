@@ -568,6 +568,10 @@ class BatteryCoordinator:
         #: packs fill, so without this the hour we picked can stop qualifying
         #: half-way through and the packs flap off mid-charge.
         self._buying_slot: str | None = None
+        #: the slot in which a purchase reached its line. Not restarted there:
+        #: a pack resting on the line reads either side of it, and each dip
+        #: would otherwise be a fresh purchase at full power.
+        self._topped_up_slot: str | None = None
         # which leg each unit sits on (1-based), and how we came to believe it
         self.unit_phase: dict[str, int | None] = {u.name: None for u in self._units}
         self.phase_detection: str = PHASE_DETECT_UNKNOWN
@@ -1831,7 +1835,9 @@ class BatteryCoordinator:
             ceiling = held
         return self._bound_ceiling(ceiling), reason
 
-    def _room_to_buy(self, soc: float, limit: float, ceiling: float) -> float:
+    def _room_to_buy(
+        self, soc: float, limit: float, ceiling: float, started: bool = False
+    ) -> float:
         """Percentage points of this pack still worth buying into.
 
         Zero once it is within `BUY_CEILING_BAND` of the ceiling, which is the
@@ -1842,6 +1848,14 @@ class BatteryCoordinator:
         immediate while coming back is integrated, one misread tick cost some
         45 seconds of importing at 7 kW.
 
+        `started` is the other half, and without it the band only moved the
+        flapping two points down. A band on its own is one line: more room
+        than the band starts a purchase, and the first reading inside the band
+        stops it - so a purchase started at 47 below a floor of 50 stopped at
+        48, the house drew it back to 47, and it started again. Three times
+        on the night of 24 September, each a burst at 7 kW. So the band gates
+        *starting* only; a purchase under way runs to the line itself.
+
         One helper for both callers. `hours_of_charge_needed` decides which
         hours get earmarked and `_dynamic_should_charge` decides whether to
         draw right now; if they measured the room differently, an hour would be
@@ -1849,6 +1863,8 @@ class BatteryCoordinator:
         this is here to stop.
         """
         room = min(ceiling, limit) - soc
+        if started:
+            return max(room, 0.0)
         return room if room > BUY_CEILING_BAND else 0.0
 
     def hours_of_charge_needed(
@@ -1946,12 +1962,21 @@ class BatteryCoordinator:
         if ceiling <= 0:
             # more sun coming than the packs could hold: buying nothing is right
             return False, reason
+        # Start with more room than the band, then run to the line, then stop
+        # for the rest of the slot. The two ends differ on purpose: one line
+        # for both is a line a pack resting on it crosses every few ticks.
+        key = _slot_key(current)
+        if self._topped_up_slot == key:
+            return False, reason
+        started = self._buying_slot == key
         if not any(
-            self._room_to_buy(s.soc, s.charge_limit, ceiling) > 0
+            self._room_to_buy(s.soc, s.charge_limit, ceiling, started=started) > 0
             for s in online.values()
         ):
+            if started:
+                self._topped_up_slot = key
             return False, reason
-        self._buying_slot = _slot_key(current)
+        self._buying_slot = key
         return True, POLICY_DYNAMIC_CHARGE
 
     def minutes_to_full(self) -> int | None:
