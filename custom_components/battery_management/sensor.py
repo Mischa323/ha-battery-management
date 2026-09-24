@@ -22,6 +22,7 @@ from .const import (
     PERIOD_WEEK,
     PHASE_DETECT_STATES,
     POLICIES,
+    TRADE_STATES,
 )
 from .coordinator import BatteryCoordinator, UnitConfig
 
@@ -60,6 +61,8 @@ async def async_setup_entry(
             SavingsTodaySensor(coordinator, entry),
             SavingsThisMonthSensor(coordinator, entry),
             SavingsTotalSensor(coordinator, entry),
+            PaybackSensor(coordinator, entry),
+            TradeStatusSensor(coordinator, entry),
         ]
         + [
             entity
@@ -756,6 +759,60 @@ class SavingsTotalSensor(_SavingsSensor):
     @property
     def extra_state_attributes(self) -> dict:
         return self.coordinator.money_total_attributes()
+
+
+class PaybackSensor(_BaseSensor):
+    """In how many years the packs pay for themselves without saldering.
+
+    The owner's question, on the footing that will hold for most of the
+    packs' life. The same with saldering, and the realistic "years to go"
+    from today, are in the attributes. Unavailable until there is a purchase
+    price and a day's worth of measurement; `reliable` turns true after a
+    month, and even then a summer-only figure flatters the winter.
+    """
+
+    _attr_translation_key = "payback"
+    _attr_native_unit_of_measurement = UnitOfTime.YEARS
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_suggested_display_precision = 1
+    _attr_icon = "mdi:cash-clock"
+
+    def __init__(self, coordinator, entry) -> None:
+        super().__init__(coordinator, entry)
+        self._attr_unique_id = f"{entry.entry_id}_payback"
+
+    @property
+    def available(self) -> bool:
+        return self.coordinator.payback()["known"]
+
+    @property
+    def native_value(self) -> float | None:
+        return self.coordinator.payback()["years_without_saldering"]
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        return self.coordinator.payback()
+
+
+class TradeStatusSensor(_BaseSensor):
+    """What selling is doing, and the three prices it weighed."""
+
+    _attr_translation_key = "trade_status"
+    _attr_device_class = SensorDeviceClass.ENUM
+    _attr_options = list(TRADE_STATES)
+    _attr_icon = "mdi:swap-vertical-bold"
+
+    def __init__(self, coordinator, entry) -> None:
+        super().__init__(coordinator, entry)
+        self._attr_unique_id = f"{entry.entry_id}_trade_status"
+
+    @property
+    def native_value(self) -> str:
+        return self.coordinator.trade_state()
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        return self.coordinator.trade_attributes()
 
 
 class UnitTargetSensor(_BaseSensor):

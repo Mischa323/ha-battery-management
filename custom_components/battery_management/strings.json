@@ -386,6 +386,19 @@
       },
       "savings_total": {
         "name": "Savings since start"
+      },
+      "payback": {
+        "name": "Payback time"
+      },
+      "trade_status": {
+        "name": "Smart trading status",
+        "state": {
+          "off": "Off",
+          "not_dynamic": "Not in Dynamic",
+          "selling": "Selling",
+          "would_sell": "Would sell (shadow)",
+          "waiting": "Waiting for a peak that pays"
+        }
       }
     },
     "select": {

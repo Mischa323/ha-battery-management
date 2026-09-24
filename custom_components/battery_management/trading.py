@@ -104,3 +104,54 @@ def grid_cost(grid_w: float, price: float, value: float, hours: float) -> float:
     """
     kwh = grid_w / 1000.0 * hours
     return kwh * price if kwh >= 0 else kwh * value
+
+
+#: hours in a year, for turning a measured rate into a yearly one
+HOURS_PER_YEAR = 8760.0
+
+
+def yearly(amount: float, counted_hours: float) -> float | None:
+    """What `amount`, earned over `counted_hours`, comes to over a year.
+
+    Over the hours actually counted, not the calendar since counting began:
+    a week with HA down for a day would otherwise read a seventh low.
+    """
+    if counted_hours <= 0:
+        return None
+    return amount / counted_hours * HOURS_PER_YEAR
+
+
+def simple_payback(price: float, per_year: float | None) -> float | None:
+    """Years for `per_year` to repay `price`; None when it never will."""
+    if price <= 0 or per_year is None or per_year <= 0:
+        return None
+    return price / per_year
+
+
+def payback_remaining(
+    price: float,
+    saved: float,
+    per_year_with: float | None,
+    per_year_after: float | None,
+    saldering_years_left: float,
+) -> float | None:
+    """Years from now until the packs have paid for themselves, footing and all.
+
+    Saldering first, at its rate, for as long as it lasts; then the rate
+    without it for whatever is left. That is the number that will actually
+    come true, where `simple_payback` on either footing alone answers "what
+    if it were like this for ever". None when what is left is never repaid.
+    """
+    if price <= 0:
+        return None
+    remaining = price - saved
+    if remaining <= 0:
+        return 0.0
+    left = max(saldering_years_left, 0.0)
+    if left > 0 and per_year_with is not None and per_year_with > 0:
+        if per_year_with * left >= remaining:
+            return remaining / per_year_with
+        remaining -= per_year_with * left
+    if per_year_after is None or per_year_after <= 0:
+        return None
+    return left + remaining / per_year_after

@@ -100,3 +100,57 @@ def test_drawn_is_paid_at_the_price_and_fed_back_earns_the_value():
     assert grid_cost(1000, 0.30, 0.10, 1.0) == pytest.approx(0.30)
     assert grid_cost(-1000, 0.30, 0.10, 1.0) == pytest.approx(-0.10)
     assert grid_cost(0, 0.30, 0.10, 1.0) == 0.0
+
+
+# -- payback ------------------------------------------------------------------
+
+from custom_components.battery_management.trading import (  # noqa: E402
+    payback_remaining,
+    simple_payback,
+    yearly,
+)
+
+
+def test_a_rate_is_taken_over_the_hours_counted():
+    assert yearly(1.0, 24.0) == pytest.approx(365.0)
+    assert yearly(1.0, 0.0) is None
+
+
+def test_simple_payback_is_price_over_the_yearly_saving():
+    assert simple_payback(5000, 500) == pytest.approx(10.0)
+
+
+def test_a_saving_that_never_comes_never_pays_back():
+    assert simple_payback(5000, 0) is None
+    assert simple_payback(5000, -20) is None
+    assert simple_payback(5000, None) is None
+    assert simple_payback(0, 500) is None
+
+
+def test_payback_uses_saldering_while_it_lasts_then_the_rate_after():
+    """EUR 5000, 1000 saved; 200 a year for the quarter year saldering has
+    left repays 50, and the other 3950 at 600 a year takes 6.58 more."""
+    years = payback_remaining(5000, 1000, 200, 600, 0.25)
+    assert years == pytest.approx(0.25 + 3950 / 600)
+
+
+def test_payback_can_finish_inside_saldering():
+    assert payback_remaining(5000, 4900, 800, 600, 0.5) == pytest.approx(100 / 800)
+
+
+def test_payback_after_saldering_has_ended():
+    assert payback_remaining(5000, 1000, 200, 500, 0.0) == pytest.approx(8.0)
+    assert payback_remaining(5000, 1000, 200, 500, -1.0) == pytest.approx(8.0)
+
+
+def test_repaid_is_nought_to_go():
+    assert payback_remaining(5000, 5200, 200, 500, 0.3) == 0.0
+
+
+def test_a_loss_during_saldering_just_passes_the_time():
+    assert payback_remaining(5000, 0, -50, 500, 0.5) == pytest.approx(0.5 + 10.0)
+
+
+def test_never_repaid_after_saldering_is_none():
+    assert payback_remaining(5000, 0, 200, 0, 0.25) is None
+    assert payback_remaining(0, 0, 200, 500, 0.25) is None

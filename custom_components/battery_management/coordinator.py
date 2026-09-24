@@ -36,7 +36,16 @@ from .phases import (
 )
 from .suppliers import FETCHERS, SOURCE_ENTITY, SOURCE_NONE
 from .trace import Trace
-from .trading import FeedIn, export_value, grid_cost, sell_margin, wear_per_kwh
+from .trading import (
+    FeedIn,
+    export_value,
+    grid_cost,
+    payback_remaining,
+    sell_margin,
+    simple_payback,
+    wear_per_kwh,
+    yearly,
+)
 from .prices import (
     cheap_mean,
     cheapest_slots,
@@ -167,6 +176,13 @@ from .const import (
     MAX_PRICE_AGE,
     MAX_ENERGY_GAP_INTERVALS,
     MONEY_FIELDS,
+    PAYBACK_MIN_HOURS,
+    PAYBACK_RELIABLE_DAYS,
+    TRADE_STATE_NOT_DYNAMIC,
+    TRADE_STATE_OFF,
+    TRADE_STATE_SELLING,
+    TRADE_STATE_WAITING,
+    TRADE_STATE_WOULD_SELL,
     PERIOD_DAY,
     PERIOD_HISTORY,
     BUY_CEILING_BAND,
@@ -3302,6 +3318,9 @@ class BatteryCoordinator:
             field: grid_cost(without, price, value, hours) - grid_cost(grid, price, value, hours)
             for field, value in values.items()
         }
+        figures["saved_actual_eur"] = figures[
+            "saved_eur" if self.saldering_active() else "saved_after_eur"
+        ]
         figures["counted_h"] = hours
         margin = (self.last_trade_verdict or {}).get("margin")
         live = self.enabled and not self.dry_run
@@ -3353,6 +3372,93 @@ class BatteryCoordinator:
         """Everything saved since counting began, on today's footing."""
         field = "saved_eur" if self.saldering_active() else "saved_after_eur"
         return round(self.money[field], 2)
+
+    def payback(self) -> dict:
+        """How long the packs take to pay for themselves, three ways.
+
+        `years_without_saldering` is the owner's question - "in how many years
+        with a dynamic contract, once feeding back no longer nets" - as the
+        purchase price over the yearly saving on that footing. The same with
+        saldering beside it, and `years_to_go`: from today, with what has been
+        saved already taken off, saldering at its rate until it ends and the
+        rate without it after. All three extrapolate the hours counted to a
+        year, so a summer-only measurement flatters them; `reliable` says
+        whether a month has been counted yet.
+        """
+        counted = self.money["counted_h"]
+        per_year_with = yearly(self.money["saved_eur"], counted)
+        per_year_after = yearly(self.money["saved_after_eur"], counted)
+        today = dt_util.as_local(dt_util.utcnow()).date()
+        saldering_left = (self._saldering_until - today).days / 365.25
+        known = self._battery_price > 0 and counted >= PAYBACK_MIN_HOURS
+
+        def rounded(value):
+            return None if value is None else round(value, 1)
+
+        return {
+            "known": known,
+            "years_without_saldering": rounded(
+                simple_payback(self._battery_price, per_year_after)
+            ) if known else None,
+            "years_with_saldering": rounded(
+                simple_payback(self._battery_price, per_year_with)
+            ) if known else None,
+            "years_to_go": rounded(
+                payback_remaining(
+                    self._battery_price,
+                    self.money["saved_actual_eur"],
+                    per_year_with,
+                    per_year_after,
+                    saldering_left,
+                )
+            ) if known else None,
+            "yearly_saving_with_saldering_eur": (
+                None if per_year_with is None else round(per_year_with, 2)
+            ),
+            "yearly_saving_without_saldering_eur": (
+                None if per_year_after is None else round(per_year_after, 2)
+            ),
+            "saved_so_far_eur": round(self.money["saved_actual_eur"], 2),
+            "battery_price_eur": self._battery_price,
+            "counted_days": round(counted / 24.0, 1),
+            "reliable": counted / 24.0 >= PAYBACK_RELIABLE_DAYS,
+            "since": self.money_since,
+            "saldering_until": self._saldering_until.isoformat(),
+        }
+
+    def trade_state(self) -> str:
+        """One word for what selling is doing, for the card and for history."""
+        # switched off, nothing is decided at all - "waiting" would be a lie
+        if self.trade_mode == TRADE_OFF or not self.enabled:
+            return TRADE_STATE_OFF
+        if self.mode != MODE_DYNAMIC:
+            return TRADE_STATE_NOT_DYNAMIC
+        if self.trade_selling:
+            return TRADE_STATE_SELLING
+        if self.trade_would_sell:
+            return TRADE_STATE_WOULD_SELL
+        return TRADE_STATE_WAITING
+
+    def trade_attributes(self) -> dict:
+        """The numbers behind `trade_state`, rounded for reading."""
+        verdict = self.last_trade_verdict or {}
+
+        def cents(key):
+            value = verdict.get(key)
+            return None if value is None else round(value, 4)
+
+        return {
+            "trade_mode": self.trade_mode,
+            "export_value_eur_kwh": cents("value"),
+            "refill_eur_kwh": cents("refill"),
+            "wear_eur_kwh": cents("wear"),
+            "margin_eur_kwh": cents("margin"),
+            "min_margin_eur_kwh": self._trade_margin,
+            "why": verdict.get("why"),
+            "saldering": self.saldering_active(),
+            "saldering_until": self._saldering_until.isoformat(),
+            "sell_floor": self.sell_floor,
+        }
 
     def money_total_attributes(self) -> dict:
         return {

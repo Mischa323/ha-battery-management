@@ -565,12 +565,35 @@ BUY_CEILING_BAND = 2.0
 MONEY_FIELDS = (
     "saved_eur",
     "saved_after_eur",
+    # on the footing of the tick it was counted in - what has really been
+    # saved so far, which a payback time subtracts from the price
+    "saved_actual_eur",
     "traded_kwh",
     "traded_eur",
     "shadow_kwh",
     "shadow_eur",
     "counted_h",
 )
+
+#: Below this many counted days a payback time is shown but marked as not yet
+#: to be relied on: a few weeks of September say little about a year.
+PAYBACK_RELIABLE_DAYS = 30
+#: and below this it is not shown at all - one day is an anecdote
+PAYBACK_MIN_HOURS = 24.0
+
+#: what the trade status sensor can say
+TRADE_STATE_OFF = "off"
+TRADE_STATE_NOT_DYNAMIC = "not_dynamic"
+TRADE_STATE_SELLING = "selling"
+TRADE_STATE_WOULD_SELL = "would_sell"
+TRADE_STATE_WAITING = "waiting"
+TRADE_STATES = [
+    TRADE_STATE_OFF,
+    TRADE_STATE_NOT_DYNAMIC,
+    TRADE_STATE_SELLING,
+    TRADE_STATE_WOULD_SELL,
+    TRADE_STATE_WAITING,
+]
 
 PERIOD_HISTORY = {
     PERIOD_DAY: 62,

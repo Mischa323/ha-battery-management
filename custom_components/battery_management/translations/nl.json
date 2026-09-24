@@ -386,6 +386,19 @@
       },
       "savings_total": {
         "name": "Besparing sinds start"
+      },
+      "payback": {
+        "name": "Terugverdientijd"
+      },
+      "trade_status": {
+        "name": "Slim handelen status",
+        "state": {
+          "off": "Uit",
+          "not_dynamic": "Niet in Dynamisch",
+          "selling": "Verkoopt",
+          "would_sell": "Zou verkopen (schaduw)",
+          "waiting": "Wacht op een piek die loont"
+        }
       }
     },
     "select": {
