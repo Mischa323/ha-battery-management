@@ -391,6 +391,14 @@
           "dynamic": "Dynamic tariff",
           "external": "External plan (EMHASS)"
         }
+      },
+      "trade_mode": {
+        "name": "Smart trading",
+        "state": {
+          "off": "Off",
+          "shadow": "Shadow (record only)",
+          "on": "On"
+        }
       }
     },
     "switch": {
@@ -413,6 +421,9 @@
       },
       "buy_ceiling_max": {
         "name": "Buy up to: at most"
+      },
+      "sell_floor": {
+        "name": "Sell down to: at least"
       }
     },
     "button": {

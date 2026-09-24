@@ -391,6 +391,14 @@
           "dynamic": "Dynamisch tarief",
           "external": "Extern plan (EMHASS)"
         }
+      },
+      "trade_mode": {
+        "name": "Slim handelen",
+        "state": {
+          "off": "Uit",
+          "shadow": "Schaduw (alleen bijhouden)",
+          "on": "Aan"
+        }
       }
     },
     "switch": {
@@ -413,6 +421,9 @@
       },
       "buy_ceiling_max": {
         "name": "Inkopen tot: hoogstens"
+      },
+      "sell_floor": {
+        "name": "Verkopen tot: minstens"
       }
     },
     "button": {

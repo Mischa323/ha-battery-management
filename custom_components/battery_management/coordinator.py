@@ -36,6 +36,7 @@ from .phases import (
 )
 from .suppliers import FETCHERS, SOURCE_ENTITY, SOURCE_NONE
 from .trace import Trace
+from .trading import FeedIn, export_value, grid_cost, sell_margin, wear_per_kwh
 from .prices import (
     cheapest_slots,
     cheaper_beyond,
@@ -81,6 +82,13 @@ from .const import (
     CONF_TRACE_DAYS,
     CONF_FAST_CHARGE_HOLD,
     CONF_FILL_BEFORE_DEAR_DAY,
+    CONF_BATTERY_CYCLES,
+    CONF_BATTERY_PRICE,
+    CONF_FEED_IN_BASIS,
+    CONF_FEED_IN_CORRECTION,
+    CONF_FEED_IN_FIXED,
+    CONF_SALDERING_UNTIL,
+    CONF_TRADE_MARGIN,
     CONF_BATTERY_POWER_SENSOR,
     CONF_CHARGE_BELOW_SOC,
     CONF_CHEAP_HOURS,
@@ -105,6 +113,18 @@ from .const import (
     DEFAULT_EXTERNAL_TIMEOUT,
     DEFAULT_FAST_CHARGE_HOLD,
     DEFAULT_FILL_BEFORE_DEAR_DAY,
+    DEFAULT_BATTERY_CYCLES,
+    DEFAULT_BATTERY_PRICE,
+    DEFAULT_FEED_IN_BASIS,
+    DEFAULT_FEED_IN_CORRECTION,
+    DEFAULT_FEED_IN_FIXED,
+    DEFAULT_SALDERING_UNTIL,
+    DEFAULT_SELL_FLOOR,
+    DEFAULT_TRADE_MARGIN,
+    TRADE_MODES,
+    TRADE_OFF,
+    TRADE_ON,
+    TRADE_SHADOW,
     DEFAULT_CHARGE_BELOW_SOC,
     DEFAULT_CHEAP_HOURS,
     DEFAULT_PRICE_MARGIN,
@@ -171,6 +191,8 @@ from .const import (
     POLICY_DISABLED,
     POLICY_BUY_WINDOW,
     POLICY_CHEAPER_LATER,
+    POLICY_TRADE_SELL,
+    POLICY_TRADE_SHADOW,
     POLICY_CHEAPER_TOMORROW,
     POLICY_DYNAMIC_CHARGE,
     POLICY_SOLAR_HEADROOM,
@@ -339,6 +361,14 @@ class UnitStatus:
     flow: str | None = None
 
 
+def _parse_day(value, fallback: str) -> date:
+    """A date from settings, or the fallback when it is missing or garbled."""
+    try:
+        return date.fromisoformat(str(value)) if value else date.fromisoformat(fallback)
+    except ValueError:
+        return date.fromisoformat(fallback)
+
+
 class BatteryCoordinator:
     """Runs the periodic control loop and holds shared state."""
 
@@ -375,6 +405,26 @@ class BatteryCoordinator:
         )
         self._full_charge_minutes: float = float(
             data.get(CONF_FULL_CHARGE_MINUTES, DEFAULT_FULL_CHARGE_MINUTES)
+        )
+        # selling to the grid: the owner's contract and the owner's packs
+        self._feed_in = FeedIn(
+            basis=str(data.get(CONF_FEED_IN_BASIS) or DEFAULT_FEED_IN_BASIS),
+            fixed=float(data.get(CONF_FEED_IN_FIXED, DEFAULT_FEED_IN_FIXED)),
+            correction=float(
+                data.get(CONF_FEED_IN_CORRECTION, DEFAULT_FEED_IN_CORRECTION)
+            ),
+        )
+        self._saldering_until: date = _parse_day(
+            data.get(CONF_SALDERING_UNTIL), DEFAULT_SALDERING_UNTIL
+        )
+        self._battery_price: float = float(
+            data.get(CONF_BATTERY_PRICE, DEFAULT_BATTERY_PRICE)
+        )
+        self._battery_cycles: float = float(
+            data.get(CONF_BATTERY_CYCLES, DEFAULT_BATTERY_CYCLES)
+        )
+        self._trade_margin: float = float(
+            data.get(CONF_TRADE_MARGIN, DEFAULT_TRADE_MARGIN)
         )
         self._price_sensor: str | None = data.get(CONF_PRICE_SENSOR) or None
         self._price_resolution: str = (
@@ -492,6 +542,11 @@ class BatteryCoordinator:
         self.status: str = "idle"           # idle | charging | discharging | fast_charge | off | degraded
         self.soc_reserve: float = float(DEFAULT_SOC_RESERVE)
         self.buy_ceiling_min: float = float(DEFAULT_BUY_CEILING_MIN)
+        #: Selling to the grid. Off unless asked for, and asked for on the
+        #: device page rather than in a settings form, so it can be tried in
+        #: shadow and switched off from a dashboard without a reload.
+        self.trade_mode: str = TRADE_OFF
+        self.sell_floor: float = float(DEFAULT_SELL_FLOOR)
         self.buy_ceiling_max: float = float(DEFAULT_BUY_CEILING_MAX)
         self.mode: str = DEFAULT_MODE
         self.active_policy: str = POLICY_DISABLED
@@ -572,6 +627,10 @@ class BatteryCoordinator:
         #: a pack resting on the line reads either side of it, and each dip
         #: would otherwise be a fresh purchase at full power.
         self._topped_up_slot: str | None = None
+        #: the same two latches for selling: the slot a sale started in, and
+        #: the one in which it reached its line and is not restarted
+        self._selling_slot: str | None = None
+        self._sold_out_slot: str | None = None
         # which leg each unit sits on (1-based), and how we came to believe it
         self.unit_phase: dict[str, int | None] = {u.name: None for u in self._units}
         self.phase_detection: str = PHASE_DETECT_UNKNOWN
@@ -640,6 +699,8 @@ class BatteryCoordinator:
             "soc_reserve": self.soc_reserve,
             "buy_ceiling_min": self.buy_ceiling_min,
             "buy_ceiling_max": self.buy_ceiling_max,
+            "trade_mode": self.trade_mode,
+            "sell_floor": self.sell_floor,
             "dry_run": self.dry_run,
             "mode": self.mode,
             "recovering": dict(self.recovering),
@@ -696,9 +757,13 @@ class BatteryCoordinator:
             self.dry_run = bool(stored["dry_run"])
         if stored and stored.get("mode") in self.available_modes:
             self.mode = stored["mode"]
-        for key in ("buy_ceiling_min", "buy_ceiling_max"):
+        for key in ("buy_ceiling_min", "buy_ceiling_max", "sell_floor"):
             if stored and stored.get(key) is not None:
                 setattr(self, key, float(stored[key]))
+        # restored like the other sliders, whether or not the coordinator was
+        # switched on: it is a choice the owner made, not runtime state
+        if stored and stored.get("trade_mode") in TRADE_MODES:
+            self.trade_mode = stored["trade_mode"]
         for name, count in (stored or {}).get("phase_attempts", {}).items():
             if name in self.phase_attempts:
                 self.phase_attempts[name] = int(count)
@@ -2123,6 +2188,25 @@ class BatteryCoordinator:
             self.buy_ceiling_min = max(0.0, min(100.0, float(low)))
         if high is not None:
             self.buy_ceiling_max = max(0.0, min(100.0, float(high)))
+        await self._store.async_save(self._state_to_save())
+        self._notify()
+        if self.enabled:
+            await self._async_tick(dt_util.utcnow())
+
+    async def async_set_trade_mode(self, option: str) -> None:
+        """Off, shadow or on. Takes effect on the next tick."""
+        if option not in TRADE_MODES:
+            raise ValueError(f"unknown trade mode {option!r}")
+        self.trade_mode = option
+        self._selling_slot = self._sold_out_slot = None
+        await self._store.async_save(self._state_to_save())
+        self._notify()
+        if self.enabled:
+            await self._async_tick(dt_util.utcnow())
+
+    async def async_set_sell_floor(self, value: float) -> None:
+        """How far selling may empty the packs, in percent."""
+        self.sell_floor = max(0.0, min(100.0, float(value)))
         await self._store.async_save(self._state_to_save())
         self._notify()
         if self.enabled:

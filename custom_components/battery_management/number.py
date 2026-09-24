@@ -21,6 +21,7 @@ async def async_setup_entry(
             SocReserveNumber(coordinator, entry),
             BuyCeilingMinNumber(coordinator, entry),
             BuyCeilingMaxNumber(coordinator, entry),
+            SellFloorNumber(coordinator, entry),
         ]
     )
 
@@ -130,3 +131,27 @@ class BuyCeilingMaxNumber(_CeilingNumber):
 
     async def async_set_native_value(self, value: float) -> None:
         await self.coordinator.async_set_buy_ceiling(high=value)
+
+
+class SellFloorNumber(_CeilingNumber):
+    """How far selling to the grid may empty the packs.
+
+    Its own line beside the SoC reserve, and the higher of the two wins: what
+    is below it is kept for the house until the next cheap window. It bounds
+    selling only - the packs still cover the house below it, as they always
+    have.
+    """
+
+    _attr_translation_key = "sell_floor"
+    _attr_icon = "mdi:arrow-collapse-down"
+
+    def __init__(self, coordinator, entry) -> None:
+        super().__init__(coordinator, entry)
+        self._attr_unique_id = f"{entry.entry_id}_sell_floor"
+
+    @property
+    def native_value(self) -> float:
+        return self.coordinator.sell_floor
+
+    async def async_set_native_value(self, value: float) -> None:
+        await self.coordinator.async_set_sell_floor(value)
