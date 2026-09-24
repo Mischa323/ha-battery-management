@@ -78,11 +78,18 @@ def test_the_payback_reads_the_owner_s_footing(sensors):
     assert payback.native_unit_of_measurement == sensor.UnitOfTime.YEARS
 
 
-def test_no_purchase_price_leaves_the_payback_unavailable(sensors):
+def test_no_purchase_price_leaves_the_payback_unknown_not_unavailable(sensors):
+    """Unknown, with its attributes: an unavailable entity loses them, and the
+    card then could neither find the sensor nor say what it is waiting for."""
     system, coordinator = sensors
     coordinator._battery_price = 0.0
 
-    assert sensor.PaybackSensor(coordinator, system.entry).available is False
+    payback = sensor.PaybackSensor(coordinator, system.entry)
+
+    assert payback.available is True
+    assert payback.native_value is None
+    assert payback.extra_state_attributes["battery_price_eur"] == 0.0
+    assert "years_to_go" in payback.extra_state_attributes
 
 
 def test_the_trade_status_is_an_enum_of_its_states(sensors):

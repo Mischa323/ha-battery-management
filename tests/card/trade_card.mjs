@@ -133,6 +133,17 @@ function render(overrides, config = {}) {
   });
   check("an unavailable payback sensor is still found by its id",
     unavailable.payback === "sensor.bm_payback", unavailable);
+  for (const id of ["sensor.battery_management_payback_time",
+                    "sensor.battery_management_terugverdientijd",
+                    "sensor.battery_management_payback_time_2"]) {
+    const got = findTradeEntities({ states: { [id]: { state: "unavailable", attributes: {} } } });
+    check("found by the id Home Assistant gives it: " + id, got.payback === id, got);
+  }
+  const unknown = findTradeEntities({
+    states: { "sensor.whatever": { state: "unknown", attributes: { known: false, years_to_go: null } } },
+  });
+  check("and by its attributes while it has no value yet",
+    unknown.payback === "sensor.whatever", unknown);
   check("the stub config carries them",
     Trade.getStubConfig({ states: states() }).trade === "sensor.bm_slim_handelen_status",
     Trade.getStubConfig({ states: states() }));

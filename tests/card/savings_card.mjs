@@ -133,8 +133,29 @@ function render(opts) {
     /nog te kort/.test(node("svpaynote").textContent),
     node("svpaynote").textContent);
 
+  render({
+    payback: {
+      state: "unknown",
+      attributes: { known: false, battery_price_eur: 0, counted_days: 3, years_to_go: null },
+    },
+  });
+  check("no purchase price says where to fill it in",
+    node("svpay").textContent === "Nog niet te zeggen." &&
+    /Instellen → Slim handelen/.test(node("svpaynote").textContent),
+    node("svpaynote").textContent);
+
+  render({
+    payback: {
+      state: "unknown",
+      attributes: { known: false, battery_price_eur: 8500, counted_days: 0.08, years_to_go: null },
+    },
+  });
+  check("too little measured says how far along it is",
+    node("svpaynote").textContent === "Eerst een dag meten: nu 2 van de 24 uur gemeten.",
+    node("svpaynote").textContent);
+
   render({ payback: { state: "unavailable", attributes: {} } });
-  check("unavailable says what it needs",
+  check("an older install, still unavailable, says both",
     node("svpay").textContent === "Nog niet te zeggen." && /aanschafprijs/.test(node("svpaynote").textContent),
     [node("svpay").textContent, node("svpaynote").textContent]);
 

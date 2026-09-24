@@ -2258,10 +2258,17 @@ function paybackSays(stateObj) {
   if (!stateObj) return { main: "Terugverdientijd-sensor niet gevonden.", note: "" };
   const p = stateObj.attributes || {};
   if (!p.known) {
-    return {
-      main: "Nog niet te zeggen.",
-      note: "Vul de aanschafprijs in en laat hem minstens een dag meten.",
-    };
+    // Say which of the two it is waiting for, when the attributes can tell.
+    // An install from before the sensor always published them still shows
+    // it unavailable, with none - then both, as before.
+    const note =
+      p.battery_price_eur !== undefined && !(p.battery_price_eur > 0)
+        ? "Vul de aanschafprijs van de accu's in bij Instellen → Slim handelen."
+        : p.counted_days !== undefined
+          ? "Eerst een dag meten: nu " + Math.round(p.counted_days * 24) +
+            " van de 24 uur gemeten."
+          : "Vul de aanschafprijs in en laat hem minstens een dag meten.";
+    return { main: "Nog niet te zeggen.", note };
   }
   const without = p.years_without_saldering;
   const main =
@@ -2300,7 +2307,7 @@ function findTradeEntities(hass) {
         a.options.join() === "off,shadow,on") found.trade_mode = id;
     else if (!id.startsWith("sensor.")) continue;
     else if ("min_margin_eur_kwh" in a && "trade_mode" in a) found.trade = id;
-    else if ("years_to_go" in a || /_(payback|terugverdientijd)(_\d+)?$/.test(id))
+    else if ("years_to_go" in a || /_(payback|payback_time|terugverdientijd)(_\d+)?$/.test(id))
       found.payback = id;
     else if ("saved_actual_eur" in a && a.period === "day") found.savings_today = id;
     else if ("saved_actual_eur" in a && a.period === "month") found.savings_month = id;
