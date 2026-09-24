@@ -18,6 +18,7 @@ import pytest
 from custom_components.battery_management import coordinator as coordinator_module
 from custom_components.battery_management.const import (
     CONF_BATTERY_POWER_SENSOR,
+    CONF_CHARGE_BELOW_SOC,
     MAX_ENERGY_GAP_INTERVALS,
     MONEY_FIELDS,
     TRADE_ON,
@@ -25,7 +26,13 @@ from custom_components.battery_management.const import (
 )
 
 from .conftest import GRID_SENSOR
-from .test_trade_sell import ENERGY_TAX, MARKUP_AND_VAT, trading  # noqa: F401
+from .test_trade_sell import (  # noqa: F401
+    ENERGY_TAX,
+    MARKUP_AND_VAT,
+    PRICE_SENSOR,
+    prices,
+    trading,
+)
 
 PACKS = "sensor.battery_power"
 
@@ -262,3 +269,27 @@ async def test_shadow_stops_when_its_packs_would_be_empty(trading, clock):
 
     assert system.coordinator.trade_would_sell is False
     assert system.coordinator.money["shadow_kwh"] == pytest.approx(2.8, abs=0.15)
+
+
+async def test_buying_fills_shadow_s_packs_back_up(trading, clock):
+    """Once the packs have bought, shadow's pretend-empty packs are as full as
+    the real ones again - otherwise one evening's shadow sale would block
+    every evening after it."""
+    system = trading(
+        trade=TRADE_SHADOW,
+        soc=(60.0, 60.0),
+        **{CONF_BATTERY_POWER_SENSOR: PACKS, CONF_CHARGE_BELOW_SOC: 70},
+    )
+    system.coordinator.sell_floor = 50
+    system.hass.states.set(GRID_SENSOR, 0)
+    system.hass.states.set(PACKS, 0)
+    await hour(system, clock)
+    assert system.coordinator._shadow_sold_kwh > 2.5
+
+    # the same slot turned cheap: the packs buy
+    system.hass.states.set(PRICE_SENSOR, 0.02, prices(peak=0.02))
+    clock(60)
+    await system.coordinator._async_tick(None)
+
+    assert system.coordinator.trade_would_sell is False
+    assert system.coordinator._shadow_sold_kwh == 0.0
