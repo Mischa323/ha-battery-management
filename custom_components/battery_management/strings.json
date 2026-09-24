@@ -344,6 +344,9 @@
           "off": "Not in use",
           "gave_up": "Could not measure it; type it in"
         }
+      },
+      "untaxed_price": {
+        "name": "Price without energy tax"
       }
     },
     "select": {

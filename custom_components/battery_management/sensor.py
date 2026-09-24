@@ -41,6 +41,7 @@ async def async_setup_entry(
             PlanSensor(coordinator, entry),
             CurrentPriceSensor(coordinator, entry),
             MarketPriceSensor(coordinator, entry),
+            UntaxedPriceSensor(coordinator, entry),
             GridObservedSensor(coordinator, entry),
             GridUsedSensor(coordinator, entry),
             OtherControllerSensor(coordinator, entry),
@@ -416,6 +417,34 @@ class MarketPriceSensor(_BaseSensor):
     @property
     def native_value(self) -> float | None:
         return self.coordinator.current_market_price()
+
+
+class UntaxedPriceSensor(_BaseSensor):
+    """This hour's price without the energy tax.
+
+    What Frank's app shows as "het dynamische deel": the tax is the same every
+    hour and billed apart, so the app leaves it out and the all-in price here
+    does not. Point the Energy dashboard at this one to make the two agree -
+    and remember that the tax is still paid, on the invoice.
+    """
+
+    _attr_translation_key = "untaxed_price"
+    _attr_native_unit_of_measurement = "EUR/kWh"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_suggested_display_precision = 3
+    _attr_icon = "mdi:cash-minus"
+
+    def __init__(self, coordinator, entry) -> None:
+        super().__init__(coordinator, entry)
+        self._attr_unique_id = f"{entry.entry_id}_untaxed_price"
+
+    @property
+    def available(self) -> bool:
+        return self.coordinator.current_untaxed_price() is not None
+
+    @property
+    def native_value(self) -> float | None:
+        return self.coordinator.current_untaxed_price()
 
 
 class _ChargedSensor(_BaseSensor):

@@ -68,6 +68,8 @@ query MarketPrices($date: String!, $resolution: PriceResolution!) {
 #: price: still correctly *ranked*, just not what you actually pay.
 _FRANK_REQUIRED = "marketPrice"
 _FRANK_ADDERS = ("marketPriceTax", "sourcingMarkupPrice", "energyTaxPrice")
+#: the one adder that is the same every hour and billed apart
+_FRANK_ENERGY_TAX = "energyTaxPrice"
 
 
 def frank_requests(today: date) -> list[tuple[str, dict]]:
@@ -148,6 +150,7 @@ def parse_frank(payloads: list) -> dict:
 
     prices = []
     market_prices = []
+    untaxed_prices = []
     for row in rows:
         if not isinstance(row, dict):
             continue
@@ -160,12 +163,16 @@ def parse_frank(payloads: list) -> dict:
             value = row.get(key)
             if isinstance(value, (int, float)):
                 total += float(value)
+        tax = row.get(_FRANK_ENERGY_TAX)
+        untaxed = total - (float(tax) if isinstance(tax, (int, float)) else 0.0)
         slot = {"from": start, "price": round(total, 6)}
         bare = {"from": start, "price": round(float(market), 6)}
+        variable = {"from": start, "price": round(untaxed, 6)}
         if row.get("till"):
-            slot["till"] = bare["till"] = row["till"]
+            slot["till"] = bare["till"] = variable["till"] = row["till"]
         prices.append(slot)
         market_prices.append(bare)
+        untaxed_prices.append(variable)
 
     # `prices` is the key an ordinary price sensor would publish, so the
     # shape-based parser handles it with no special case anywhere else.
@@ -175,7 +182,22 @@ def parse_frank(payloads: list) -> dict:
     # what export is settled against. Paying tax on power you sold back would
     # be a strange arrangement, so the all-in price is the wrong number there -
     # and a wrong number on an energy dashboard looks exactly like a right one.
-    return {"prices": prices, "market_prices": market_prices} if prices else {}
+    #
+    # `untaxed_prices` is the all-in price less the energy tax - what Frank's
+    # own app calls "het dynamische deel", because the tax is the same every
+    # hour and is billed apart. Asked for by the owner after the app showed
+    # EUR 1.29 for a day Home Assistant put at EUR 2.52: same 11.7 kWh, and
+    # the gap was 11.7 x EUR 0.11 of energy tax. Also not a key the parser
+    # reads, so it can never take part in the ranking.
+    return (
+        {
+            "prices": prices,
+            "market_prices": market_prices,
+            "untaxed_prices": untaxed_prices,
+        }
+        if prices
+        else {}
+    )
 
 
 #: key -> (build the requests, read the answers). Plural on both sides: a

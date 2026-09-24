@@ -203,3 +203,46 @@ def test_a_slot_returned_twice_is_only_ranked_once():
 
 def test_frank_energie_is_offered_by_name():
     assert SUPPLIERS["frank_energie"] == "Frank Energie"
+
+
+def test_the_energy_tax_is_kept_apart_too():
+    """Frank's own app shows the price without the energy tax - "het
+    dynamische deel" - and the same kilowatt hours then read at half the cost
+    they do here. Keeping it apart is what lets the two be made to agree."""
+    payload = answer(
+        {
+            "from": "2026-09-01T00:00:00.000Z",
+            "till": "2026-09-01T00:15:00.000Z",
+            "marketPrice": 0.10,
+            "marketPriceTax": 0.021,
+            "sourcingMarkupPrice": 0.02,
+            "energyTaxPrice": 0.13,
+        }
+    )
+
+    parsed = parse_frank(payload)
+
+    assert parsed["prices"][0]["price"] == 0.271
+    assert parsed["untaxed_prices"][0]["price"] == 0.141
+    assert parsed["untaxed_prices"][0]["till"] == "2026-09-01T00:15:00.000Z"
+
+
+def test_without_a_tax_figure_nothing_is_taken_off():
+    """No `energyTaxPrice` means none was added either - the two stay equal
+    rather than a guessed tax being subtracted."""
+    parsed = parse_frank(answer(slot("2026-09-01T02:00:00Z", 0.08)))
+
+    assert parsed["untaxed_prices"][0]["price"] == parsed["prices"][0]["price"]
+
+
+def test_the_untaxed_list_is_not_a_key_the_ranking_reads():
+    """Riding alongside, like the exchange price: the parser must still see
+    one price per slot, the all-in one."""
+    parsed = parse_frank(
+        answer({"from": "2026-09-01T10:00:00Z", "till": "2026-09-01T11:00:00Z",
+                "marketPrice": 0.10, "energyTaxPrice": 0.13})
+    )
+
+    slots = parse_forecast(parsed, datetime(2026, 9, 1, 9, tzinfo=timezone.utc))
+
+    assert [s.price for s in slots] == [0.23]

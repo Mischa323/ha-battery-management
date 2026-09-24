@@ -1232,8 +1232,24 @@ class BatteryCoordinator:
         claimed for it. Only available on the direct route; a third-party
         sensor publishes whichever single number it publishes.
         """
+        return self._current_component("market_prices")
+
+    def current_untaxed_price(self) -> float | None:
+        """This hour's price less the energy tax - Frank's "dynamische deel".
+
+        The energy tax is the same every hour and billed apart, so a supplier's
+        own app can leave it out of the hourly figures while this integration's
+        all-in price includes it. The same kilowatt hours then cost twice as
+        much in one place as in the other, and neither is wrong. This is the
+        number to point the Energy dashboard at when it should agree with the
+        app. Only on the direct route, like the exchange price.
+        """
+        return self._current_component("untaxed_prices")
+
+    def _current_component(self, key: str) -> float | None:
+        """This slot's value from one of the side lists a supplier publishes."""
         attributes = self._price_attributes() or {}
-        rows = attributes.get("market_prices")
+        rows = attributes.get(key)
         if not rows:
             return None
         slots = parse_forecast({"prices": rows}, dt_util.utcnow())

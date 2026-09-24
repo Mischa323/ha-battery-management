@@ -346,6 +346,8 @@ async def test_the_exchange_component_is_kept_apart_from_the_all_in_price(
 
     assert system.coordinator.current_price()["price"] == 0.271
     assert system.coordinator.current_market_price() == 0.10
+    # and the all-in less the energy tax, which is what Frank's app shows
+    assert system.coordinator.current_untaxed_price() == 0.141
 
 
 async def test_the_exchange_price_does_not_disturb_the_ranking(build_system):
@@ -385,9 +387,10 @@ async def test_by_the_hour_folds_the_exchange_price_too(build_system):
 
     await system.coordinator.async_refresh_prices()
 
-    # the duration-weighted mean of the four quarters, in both numbers
+    # the duration-weighted mean of the four quarters, in all three numbers
     assert system.coordinator.current_market_price() == 0.25
     assert system.coordinator.current_price()["price"] == 0.38
+    assert system.coordinator.current_untaxed_price() == 0.25
 
 
 async def test_a_third_party_sensor_has_no_exchange_price_to_offer(build_system):
@@ -403,3 +406,4 @@ async def test_a_third_party_sensor_has_no_exchange_price_to_offer(build_system)
     )
 
     assert system.coordinator.current_market_price() is None
+    assert system.coordinator.current_untaxed_price() is None
