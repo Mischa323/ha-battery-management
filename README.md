@@ -1012,16 +1012,24 @@ thing still left before the peak.
 
 So the deadline stays and the *amount* now looks past it. When the cheap hours
 on the far side of the coming peak are cheaper than this side by more than the
-margin, the ceiling before the peak is **Buy up to: at least** — take the
-bridge, fill in the cheaper window.
+margin, it holds back — and how far depends on *when* that cheaper window is.
 
-**This does nothing until you set a floor.** With *Buy up to: at least* at 0
-the rule would read as "buy nothing before a peak", which is exactly the fault
-above arriving from the other direction, so with no floor stated nothing is
-held back. With one, it says something stronger than it first looks: before any
-peak with a cheaper window behind it, buy the bridge you asked for and no more.
-On an ordinary day that is most evenings — which is the intended shape, because
-the filling belongs in the cheap window and not in the run-up to a peak.
+**Later the same day: buy nothing now.** *Buy up to: at least* is a target for
+the **end of the day**, in the owner's words: "die ondergrens moet voor het
+eind van de dag zijn niet in de ochtend". A cheaper window later that day is
+still in time to reach it, at a better price, so the morning peak is met on
+whatever the packs hold — floor or no floor. "The same day" is the peak's own
+day, so seen from 22:00, tomorrow morning's peak is weighed against tomorrow
+afternoon.
+
+**Only past midnight: buy the floor, no more.** Then the end of the day comes
+before any cheaper chance, and the floor is what the packs meet it with — the
+bridge into the evening. With *Buy up to: at least* at 0 nothing is held back
+here, because "buy nothing before the evening peak" is exactly the fault above
+arriving from the other direction.
+
+If you want charge in hand for the *morning* peak regardless, that is what
+**SoC reserve** is for: it stops the packs discharging below it at any hour.
 
 ### What the card says while it holds
 
@@ -1036,8 +1044,8 @@ So while a hold is on:
 
 - **Charge ceiling** (sensor and card) is *today's* target. The hold has its
   own attributes on the sensor: `held_to` and `held_until`.
-- The card adds *"Vóór de piek van 07:45 hooguit tot 30 % — daarna is het
-  goedkoper."*
+- The card adds *"Vóór de piek van 07:45 koopt hij niets — later vandaag is het
+  goedkoper."* — or, before the last peak of the day, *"hooguit tot 50 %"*.
 - The hours it is waiting for are listed as **verwacht**, outlined rather than
   filled: expected, not promised, because the need is measured again when they
   arrive. Once the peak passes the same hours become *gaat laden*.
