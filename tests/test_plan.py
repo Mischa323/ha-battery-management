@@ -12,6 +12,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from custom_components.battery_management import coordinator as coordinator_module
+from tests.conftest import GRID_SENSOR
 from custom_components.battery_management.const import (
     CONF_CHARGE_BELOW_SOC,
     CONF_CHEAP_HOURS,
@@ -1246,3 +1247,76 @@ def test_every_expected_hour_lies_beyond_the_peak(planned):
 
     assert len(starts) == 2                       # the need outgrows 19:00
     assert all(start >= peak for start in starts)
+
+
+# -- the night of 24 September ------------------------------------------------
+
+
+def set_socs(system, first, second) -> None:
+    system.hass.states.set("sensor.093_soc", first)
+    system.hass.states.set("sensor.052_soc", second)
+
+
+async def test_a_purchase_under_way_runs_to_the_line(planned):
+    """Floor at 50, a hold on for a cheaper afternoon, the house drawing the
+    packs down through the night. Pack 2 read 47 - three points of room, so a
+    purchase started - and one point later read 48, inside the band, and it
+    stopped. The house drew it back to 47 and it started again: three bursts
+    of 7 kW between 05:00 and 06:00.
+
+    Started, it now runs to 50."""
+    system = before_the_peak(planned, soc=49.0, floor=50.0)
+    set_socs(system, 49.0, 47.0)
+
+    await system.coordinator._async_tick(None)
+    assert system.coordinator.active_policy == POLICY_DYNAMIC_CHARGE
+
+    set_socs(system, 49.0, 48.0)                   # where it used to stop
+    await system.coordinator._async_tick(None)
+    assert system.coordinator.active_policy == POLICY_DYNAMIC_CHARGE
+
+    set_socs(system, 50.0, 50.0)                   # the line itself
+    await system.coordinator._async_tick(None)
+    assert system.coordinator.active_policy != POLICY_DYNAMIC_CHARGE
+
+
+async def test_once_at_the_line_it_does_not_start_again_in_that_slot(planned):
+    """A pack resting on the line reads either side of it. Each dip below
+    would otherwise be a fresh purchase at full power."""
+    system = before_the_peak(planned, soc=49.0, floor=50.0)
+    set_socs(system, 47.0, 47.0)
+    await system.coordinator._async_tick(None)
+    set_socs(system, 50.0, 50.0)
+    await system.coordinator._async_tick(None)
+
+    set_socs(system, 49.0, 49.0)                   # the reading dips back
+    await system.coordinator._async_tick(None)
+
+    assert system.coordinator.active_policy != POLICY_DYNAMIC_CHARGE
+
+
+async def test_starting_still_needs_more_room_than_the_band(planned):
+    """The band is not gone - it gates the start. Two points under the line is
+    no reason to begin buying at full power."""
+    system = before_the_peak(planned, soc=48.0, floor=50.0)
+
+    await system.coordinator._async_tick(None)
+
+    assert system.coordinator.active_policy != POLICY_DYNAMIC_CHARGE
+
+
+async def test_a_new_slot_starts_afresh(planned, monkeypatch):
+    """Topped up in one slot says nothing about the next: by then the house
+    may have drawn the packs well under the line again."""
+    system = before_the_peak(planned, soc=47.0, floor=50.0)
+    await system.coordinator._async_tick(None)
+    set_socs(system, 50.0, 50.0)
+    await system.coordinator._async_tick(None)
+
+    later = NOW + timedelta(hours=1)
+    monkeypatch.setattr(coordinator_module.dt_util, "utcnow", lambda: later)
+    system.hass.states.set(GRID_SENSOR, 300)       # an hour on, a fresh reading
+    set_socs(system, 46.0, 46.0)
+    await system.coordinator._async_tick(None)
+
+    assert system.coordinator.active_policy == POLICY_DYNAMIC_CHARGE
