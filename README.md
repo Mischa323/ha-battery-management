@@ -619,6 +619,12 @@ price without the energy tax, which is the same every hour and billed apart. On
 difference is 11.7 kWh × ~€0.11 of tax. Pick **Price without energy tax** and
 the two agree; the tax is still on the invoice either way.
 
+**Gas** works the same way: *Gas consumption → Use an entity with current
+price* and pick **Gas price**, or **Gas price without energy tax** to match the
+app. It is fetched in requests of its own, so anything that goes wrong with gas
+can only lose the gas price — never the electricity prices the packs are
+steered on.
+
 **Export is a different number.** Energy tax and VAT are not paid back to you,
 so pointing export compensation at the same entity overstates what you earn —
 and a wrong figure on an energy dashboard looks exactly like a right one. Use
@@ -803,6 +809,8 @@ capped — that would be throwing sun away.
 | **Market price** | The exchange component of this hour, without tax or markup. For the Energy dashboard's *export compensation* — see below. | not on the direct route |
 | **Current price** | What this hour costs, in EUR/kWh. Its attributes say which decision the hour belongs to, when it changes, and what the next one is. | no prices available |
 | **Price without energy tax** | This hour's all-in price less the energy tax — what Frank's app shows as *het dynamische deel*. The tax is the same every hour and billed apart, so the app leaves it out; point the Energy dashboard at this sensor to make the two agree. The tax is still paid, on the invoice. | not on the direct route |
+| **Gas price** | This gas day's all-in price per m³, from Frank. For the Energy dashboard's gas cost only — nothing here steers on gas. Set per gas day, so the same number all day. | not on the direct route, or Frank gave no gas price (the diagnostics say why under `gas_error`) |
+| **Gas price without energy tax** | The same less the energy tax, to agree with Frank's app. | as above |
 | **Plan** | Today's cheap and dear hours with their prices, plus the numbers the ceiling was computed from, all in attributes. Its `hours` attribute is the whole series, each slot carrying the `role` it belongs to — `cheap`, `dear` or `normal` — which is what the card's chart is drawn from. | never |
 | **Fuse headroom** | Amps still available on **the busiest single leg** — not a total, and not per leg. It is the one that would trip first; `tightest_phase` in the attributes says which. Measured against the usable limit (the fuse less your margin), so the margin is still there underneath. Per-leg detail — `amps` through the fuse, `amps_without_us`, headroom, and which packs sit on it — is in the attributes. | no per-phase sensors configured |
 | **Phase detection** | Whether it knows which pack is on which leg, and how it found out. The `probes` attribute holds the measurements behind each placement. | never |
