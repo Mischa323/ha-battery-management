@@ -344,6 +344,9 @@
           "off": "Niet in gebruik",
           "gave_up": "Kon het niet meten; vul het handmatig in"
         }
+      },
+      "untaxed_price": {
+        "name": "Stroomprijs zonder energiebelasting"
       }
     },
     "select": {
