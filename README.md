@@ -211,6 +211,7 @@ no manual resource step:
 | --- | --- |
 | **Battery Management Card** | The control panel: on/off, fast charge, state of charge per pack, and the price chart underneath. |
 | **Battery Management Prices** | Only the prices — current price large, today's bars, and the cheapest and dearest hour with their times. |
+| **Battery Management Trading** | Selling to the grid: Off / Shadow / On, whether it pays right now with the sum written out, what the packs have saved, and the payback time. See [Selling to the grid](#selling-to-the-grid). |
 
 ### Adding one
 
@@ -816,6 +817,8 @@ capped — that would be throwing sun away.
 | **Gas price** | This gas day's all-in price per m³, from Frank. For the Energy dashboard's gas cost only — nothing here steers on gas. Set per gas day, so the same number all day. | not on the direct route, or Frank gave no gas price (the diagnostics say why under `gas_error`) |
 | **Gas price without energy tax** | The same less the energy tax, to agree with Frank's app. | as above |
 | **Savings today / this month / since start** | What the packs saved, in EUR, against the same house without them: the import they replaced at the all-in price, less the export they gave up at what your contract pays. Shown on the footing that applies today (with saldering until it ends); the attributes carry both, plus what selling earned (`traded_kwh`, `traded_eur`) and what shadow would have (`shadow_kwh`, `shadow_eur`). | never (nought until the first counted tick) |
+| **Payback time** | In how many years the packs pay for themselves on a dynamic contract **without** saldering: purchase price ÷ the yearly saving on that footing. The attributes add the same with saldering, `years_to_go` from today (saldering at its rate until it ends, then without, less what is already saved), the yearly savings and `counted_days`. `reliable` turns true after 30 counted days. | no purchase price, or less than a day counted |
+| **Smart trading status** | `selling`, `would_sell` (shadow), `waiting`, `off` or `not_dynamic`. The attributes carry the three prices it weighed — `export_value_eur_kwh`, `refill_eur_kwh`, `wear_eur_kwh` — the `margin_eur_kwh` they come to, and `why` it is not selling. | never |
 | **Plan** | Today's cheap and dear hours with their prices, plus the numbers the ceiling was computed from, all in attributes. Its `hours` attribute is the whole series, each slot carrying the `role` it belongs to — `cheap`, `dear` or `normal` — which is what the card's chart is drawn from. | never |
 | **Fuse headroom** | Amps still available on **the busiest single leg** — not a total, and not per leg. It is the one that would trip first; `tightest_phase` in the attributes says which. Measured against the usable limit (the fuse less your margin), so the margin is still there underneath. Per-leg detail — `amps` through the fuse, `amps_without_us`, headroom, and which packs sit on it — is in the attributes. | no per-phase sensors configured |
 | **Phase detection** | Whether it knows which pack is on which leg, and how it found out. The `probes` attribute holds the measurements behind each placement. | never |
@@ -1193,6 +1196,30 @@ under `trading`. `trade_why` says what stopped it: `no_battery_price`,
 `no_capacity` (measure the full-charge time), `no_export_value` (a third-party
 price sensor has no market price — only a fixed rate works there), or
 `margin_too_small`.
+
+### The payback time
+
+**Payback time** answers the question as asked: with a dynamic contract, and
+once feeding back no longer nets, in how many years do the packs repay what
+they cost? It is the purchase price over the yearly saving *without*
+saldering, where the yearly saving is what has been saved per counted hour,
+times a year. With saldering sits beside it, and `years_to_go` is the one that
+will actually come true from today: saldering's rate until the end date,
+the rate without it after, less what is already saved.
+
+It extrapolates, so read it with the measurement: a few weeks in September say
+little about a winter, when there is less sun to shift and the peaks differ.
+The card says how many days it rests on, and calls anything under a month too
+short to build on.
+
+### The trading dashboard
+
+The **Battery Management Trading** card finds its own entities, so adding it
+needs no YAML. For a whole view — the card, savings per day and per month as
+bars, and when it sold beside the price — paste
+[`dashboards/slim-handelen.yaml`](dashboards/slim-handelen.yaml) into the raw
+configuration editor. The graphs name entity ids; on a Dutch install check them
+under *Settings → Entities* first, as the file explains.
 
 ## External plan (EMHASS)
 

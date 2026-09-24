@@ -2171,6 +2171,303 @@ defineCard("battery-management-plan-card", BatteryManagementPlanCard, {
 });
 
 /**
+ * Euros, Dutch style: a comma for the decimals, and the sign in front of the
+ * symbol so a loss reads as one.
+ */
+const euro = (value, decimals = 2) => {
+  if (value === null || value === undefined || isNaN(value)) return "—";
+  const text = Math.abs(value).toFixed(decimals).replace(".", ",");
+  return (value < 0 ? "−€" : "€") + text;
+};
+
+/** Years, one decimal, Dutch style. */
+const years = (value) =>
+  value === null || value === undefined ? "—" : value.toFixed(1).replace(".", ",");
+
+/** What each trade status means, as one headline. */
+const TRADE_HEADLINE = {
+  selling: "Verkoopt nu aan het net",
+  would_sell: "Zou nu verkopen (schaduw)",
+  waiting: "Wacht op een piek die loont",
+  off: "Uit",
+  not_dynamic: "Alleen in de modus Dynamisch",
+};
+
+/**
+ * Why it is not selling, in words that say what to do about it.
+ *
+ * Only the reasons that need the owner are worded as an instruction. "Too
+ * little margin" is the normal state of most hours and must not read as a
+ * fault.
+ */
+const TRADE_WHY = {
+  no_battery_price:
+    "Vul de aanschafprijs van de accu's in bij Instellen → Slim handelen. " +
+    "Zonder die prijs is de slijtage onbekend en verkoopt hij nooit.",
+  no_capacity:
+    "De capaciteit is nog niet bekend: meet eerst de tijd van leeg tot vol, " +
+    "anders is de slijtage per kWh niet uit te rekenen.",
+  no_export_value:
+    "Geen marktprijs beschikbaar. Met een prijssensor van buiten werkt alleen een vaste vergoeding.",
+  no_refill_price: "Geen prijzen vooruit om het terugkopen mee te rekenen.",
+  margin_too_small: "Levert nu te weinig op na terugkopen en slijtage.",
+};
+
+/**
+ * The sum behind "sell or not", written out as the sum it is.
+ *
+ * Returns null when there is nothing to show - trading off, or an input
+ * missing - so the card can say *why* instead of printing a row of dashes.
+ */
+function tradeSum(attrs) {
+  const v = attrs.export_value_eur_kwh;
+  const r = attrs.refill_eur_kwh;
+  const w = attrs.wear_eur_kwh;
+  if (v === null || v === undefined || r === null || r === undefined ||
+      w === null || w === undefined) {
+    return null;
+  }
+  const margin = attrs.margin_eur_kwh;
+  return (
+    "Opbrengst " + euro(v, 3) + " − terugkopen " + euro(r, 3) +
+    " ÷ 0,88 − slijtage " + euro(w, 3) + " = " + euro(margin, 3) +
+    " per kWh (drempel " + euro(attrs.min_margin_eur_kwh, 3) + ")"
+  );
+}
+
+/** Saldering, in one line: whether the tax still comes back, and until when. */
+function salderingSays(attrs) {
+  const until = attrs.saldering_until
+    ? new Date(attrs.saldering_until + "T00:00:00").toLocaleDateString("nl-NL", {
+        day: "numeric", month: "long", year: "numeric",
+      })
+    : "?";
+  return attrs.saldering
+    ? "Saldering tot " + until + ": de energiebelasting telt mee in wat terugleveren oplevert."
+    : "Saldering is voorbij (sinds " + until + "): terugleveren levert alleen de vergoeding op.";
+}
+
+/**
+ * The payback time, as the owner asked it, with how far to trust it.
+ *
+ * The sensor is unavailable until there is a purchase price and a day's
+ * measurement, and an unavailable entity carries no attributes - so that case
+ * is told from the state alone.
+ */
+function paybackSays(stateObj) {
+  if (!stateObj) return { main: "Terugverdientijd-sensor niet gevonden.", note: "" };
+  const p = stateObj.attributes || {};
+  if (!p.known) {
+    return {
+      main: "Nog niet te zeggen.",
+      note: "Vul de aanschafprijs in en laat hem minstens een dag meten.",
+    };
+  }
+  const without = p.years_without_saldering;
+  const main =
+    without === null || without === undefined
+      ? "Zonder saldering verdient hij zich met deze besparing niet terug."
+      : "Zonder saldering in " + years(without) + " jaar terugverdiend" +
+        (p.years_with_saldering != null
+          ? " (met saldering " + years(p.years_with_saldering) + " jaar)."
+          : ".");
+  const togo =
+    p.years_to_go === null || p.years_to_go === undefined
+      ? ""
+      : p.years_to_go === 0
+        ? "Al terugverdiend. "
+        : "Vanaf nu nog " + years(p.years_to_go) + " jaar te gaan. ";
+  const days = Math.round(p.counted_days || 0);
+  const trust = p.reliable
+    ? "Gemeten over " + days + " dagen; een jaar met winter valt lager uit dan een zomer."
+    : "Gemeten over " + days + (days === 1 ? " dag" : " dagen") +
+      " — nog te kort om op te bouwen.";
+  return { main, note: togo + trust };
+}
+
+/**
+ * Find the trade entities by what they carry rather than by their ids.
+ *
+ * Entity ids are generated from the names, and the names are translated, so
+ * the same sensor is `…_payback` on one install and `…_terugverdientijd` on
+ * another. What the attributes are called is fixed by the integration.
+ */
+function findTradeEntities(hass) {
+  const found = {};
+  for (const [id, st] of Object.entries((hass && hass.states) || {})) {
+    const a = st.attributes || {};
+    if (id.startsWith("select.") && Array.isArray(a.options) &&
+        a.options.join() === "off,shadow,on") found.trade_mode = id;
+    else if (!id.startsWith("sensor.")) continue;
+    else if ("min_margin_eur_kwh" in a && "trade_mode" in a) found.trade = id;
+    else if ("years_to_go" in a || /_(payback|terugverdientijd)(_\d+)?$/.test(id))
+      found.payback = id;
+    else if ("saved_actual_eur" in a && a.period === "day") found.savings_today = id;
+    else if ("saved_actual_eur" in a && a.period === "month") found.savings_month = id;
+    else if ("saved_actual_eur" in a && !a.period) found.savings_total = id;
+  }
+  return found;
+}
+
+/**
+ * Selling to the grid, and what the packs have earned.
+ *
+ * Built for the question the owner will ask on the first evening in shadow:
+ * "would it have sold, and what for?" - so the sum is written out, not only
+ * its answer, and every reason it does not sell says whether that is normal
+ * or something to fix.
+ */
+class BatteryManagementTradeCard extends HTMLElement {
+  setConfig(config) {
+    if (!config) throw new Error("Invalid configuration");
+    this._config = config;
+    this._built = false;
+  }
+
+  set hass(hass) {
+    this._hass = hass;
+    if (!this._built) this._build();
+    this._update();
+  }
+
+  static getStubConfig(hass) {
+    return { type: "custom:battery-management-trade-card", ...findTradeEntities(hass) };
+  }
+
+  getCardSize() {
+    return 5;
+  }
+
+  _build() {
+    const c = this._config;
+    this.innerHTML =
+      '<ha-card header="' + esc(c.title || "Slim handelen") + '">' +
+      `<style>
+          .trc { padding: 4px 16px 16px; }
+          .trc .muted { color: var(--secondary-text-color); }
+          .trc h4 { margin:14px 0 4px; font-size:.8em; font-weight:600;
+                    text-transform:uppercase; letter-spacing:.04em;
+                    color: var(--secondary-text-color); }
+          .trc .head { font-size:1.15em; font-weight:600; }
+          .trc .note { font-size:.86em; margin:4px 0 0; }
+          .trc .modes { display:flex; gap:6px; margin:8px 0 2px; }
+          .trc .modes button { flex:1 1 0; padding:6px 0; border-radius:8px;
+                    border:1px solid var(--divider-color); cursor:pointer;
+                    background: var(--card-background-color); color: inherit; font: inherit; }
+          .trc .modes button.on { background: var(--primary-color); color:#fff;
+                    border-color: var(--primary-color); }
+          .trc .row { display:flex; justify-content:space-between; gap:12px;
+                      padding:3px 0; font-variant-numeric: tabular-nums; }
+          .trc .big { font-size:1.4em; font-weight:600; }
+        </style>
+        <div class="trc">
+          <div class="head" id="trhead">—</div>
+          <div class="modes" id="trmodes"></div>
+          <div class="note" id="trsum"></div>
+          <div class="muted note" id="trwhy"></div>
+          <div class="muted note" id="trsal"></div>
+          <h4>Besparing</h4>
+          <div class="row"><span>Vandaag</span><b id="trtoday">—</b></div>
+          <div class="row"><span>Deze maand</span><b id="trmonth">—</b></div>
+          <div class="row"><span>Sinds start</span><b id="trtotal">—</b></div>
+          <div class="muted note" id="trsold"></div>
+          <h4>Terugverdientijd</h4>
+          <div id="trpay">—</div>
+          <div class="muted note" id="trpaynote"></div>
+        </div>
+      </ha-card>`;
+    this._onClick = (ev) => {
+      const target = ev && ev.target;
+      const button = target && target.closest ? target.closest("[data-option]") : target;
+      const option = button && button.dataset && button.dataset.option;
+      const id = this._ids().trade_mode;
+      if (!option || !id || !this._hass) return;
+      this._hass.callService("select", "select_option", { entity_id: id, option });
+    };
+    if (typeof this.addEventListener === "function") {
+      this.addEventListener("click", this._onClick);
+    }
+    this._built = true;
+  }
+
+  /** What the config names, with anything it leaves out found by attribute. */
+  _ids() {
+    return { ...findTradeEntities(this._hass), ...this._config };
+  }
+
+  _state(key) {
+    const id = this._ids()[key];
+    return id && this._hass && this._hass.states[id];
+  }
+
+  _update() {
+    const el = (id) => this.querySelector("#" + id);
+    const trade = this._state("trade");
+    const attrs = (trade && trade.attributes) || {};
+
+    el("trhead").textContent = trade
+      ? TRADE_HEADLINE[trade.state] || stateLabel(this._hass, trade)
+      : "Slim handelen-sensor niet gevonden";
+
+    const select = this._state("trade_mode");
+    el("trmodes").innerHTML = select
+      ? (select.attributes.options || [])
+          .map(
+            (opt) =>
+              '<button data-option="' + esc(opt) + '"' +
+              (opt === select.state ? ' class="on"' : "") + ">" +
+              esc(stateLabel(this._hass, select, opt)) + "</button>"
+          )
+          .join("")
+      : "";
+
+    const sum = trade && trade.state !== "off" && trade.state !== "not_dynamic"
+      ? tradeSum(attrs)
+      : null;
+    el("trsum").textContent = sum || "";
+    el("trwhy").textContent =
+      trade && trade.state !== "off" && trade.state !== "not_dynamic" && attrs.why
+        ? TRADE_WHY[attrs.why] || attrs.why
+        : "";
+    el("trsal").textContent = trade ? salderingSays(attrs) : "";
+
+    const money = (key) => {
+      const st = this._state(key);
+      const v = st ? parseFloat(st.state) : NaN;
+      return isNaN(v) ? "—" : euro(v);
+    };
+    el("trtoday").textContent = money("savings_today");
+    el("trmonth").textContent = money("savings_month");
+    el("trtotal").textContent = money("savings_total");
+
+    // Sold and shadow-sold today, only when there is something to say: a row
+    // of noughts every evening it did not sell would bury the one that did.
+    const today = (this._state("savings_today") || {}).attributes || {};
+    const parts = [];
+    if (today.traded_kwh > 0.005) {
+      parts.push("Verkocht vandaag " + kwh(today.traded_kwh) + ", winst " + euro(today.traded_eur) + ".");
+    }
+    if (today.shadow_kwh > 0.005) {
+      parts.push("Schaduw vandaag: zou " + kwh(today.shadow_kwh) + " verkocht hebben, winst " +
+        euro(today.shadow_eur) + ".");
+    }
+    el("trsold").textContent = parts.join(" ");
+
+    const pay = paybackSays(this._state("payback"));
+    el("trpay").textContent = pay.main;
+    el("trpaynote").textContent = pay.note;
+  }
+}
+
+defineCard("battery-management-trade-card", BatteryManagementTradeCard, {
+  type: "battery-management-trade-card",
+  name: "Battery Management Trading",
+  description:
+    "Selling to the grid: whether it pays right now, what the packs have saved, and the payback time.",
+  preview: false,
+});
+
+/**
  * One line that answers "did this arrive in time, and did it work".
  *
  * Also left on `window.batteryManagementCardBoot`, so it can be read back
@@ -2184,6 +2481,7 @@ window.batteryManagementCardBoot = {
     "battery-management-card",
     "battery-management-prices-card",
     "battery-management-plan-card",
+    "battery-management-trade-card",
   ].filter((tag) => !!customElements.get(tag)),
   advertised: (window.customCards || [])
     .map((c) => c.type)
