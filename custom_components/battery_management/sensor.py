@@ -42,6 +42,8 @@ async def async_setup_entry(
             CurrentPriceSensor(coordinator, entry),
             MarketPriceSensor(coordinator, entry),
             UntaxedPriceSensor(coordinator, entry),
+            GasPriceSensor(coordinator, entry),
+            GasUntaxedPriceSensor(coordinator, entry),
             GridObservedSensor(coordinator, entry),
             GridUsedSensor(coordinator, entry),
             OtherControllerSensor(coordinator, entry),
@@ -445,6 +447,52 @@ class UntaxedPriceSensor(_BaseSensor):
     @property
     def native_value(self) -> float | None:
         return self.coordinator.current_untaxed_price()
+
+
+class _GasSensor(_BaseSensor):
+    """Gas, for the Energy dashboard. Nothing in the control loop reads it."""
+
+    _attr_native_unit_of_measurement = "EUR/m³"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_suggested_display_precision = 3
+    _attr_icon = "mdi:fire"
+
+    def _value(self) -> float | None:
+        raise NotImplementedError
+
+    @property
+    def available(self) -> bool:
+        return self._value() is not None
+
+    @property
+    def native_value(self) -> float | None:
+        return self._value()
+
+
+class GasPriceSensor(_GasSensor):
+    """This gas day's all-in price, what the Energy dashboard bills gas at."""
+
+    _attr_translation_key = "gas_price"
+
+    def __init__(self, coordinator, entry) -> None:
+        super().__init__(coordinator, entry)
+        self._attr_unique_id = f"{entry.entry_id}_gas_price"
+
+    def _value(self) -> float | None:
+        return self.coordinator.current_gas_price()
+
+
+class GasUntaxedPriceSensor(_GasSensor):
+    """The gas price without the energy tax, to agree with Frank's app."""
+
+    _attr_translation_key = "gas_untaxed_price"
+
+    def __init__(self, coordinator, entry) -> None:
+        super().__init__(coordinator, entry)
+        self._attr_unique_id = f"{entry.entry_id}_gas_untaxed_price"
+
+    def _value(self) -> float | None:
+        return self.coordinator.current_gas_untaxed_price()
 
 
 class _ChargedSensor(_BaseSensor):

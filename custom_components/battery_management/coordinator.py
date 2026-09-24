@@ -1246,6 +1246,19 @@ class BatteryCoordinator:
         """
         return self._current_component("untaxed_prices")
 
+    def current_gas_price(self) -> float | None:
+        """This gas day's all-in price per m3, for the Energy dashboard.
+
+        Nothing here steers on gas; it is fetched because the contract is
+        dynamic and the dashboard otherwise has nothing to price it with. Set
+        per gas day, so the same number all day. Only on the direct route.
+        """
+        return self._current_component("gas_prices")
+
+    def current_gas_untaxed_price(self) -> float | None:
+        """The gas price less the energy tax - the app's "dynamische deel"."""
+        return self._current_component("gas_untaxed_prices")
+
     def _current_component(self, key: str) -> float | None:
         """This slot's value from one of the side lists a supplier publishes."""
         attributes = self._price_attributes() or {}
@@ -2416,6 +2429,10 @@ class BatteryCoordinator:
                 "external_timeout_min": self._external_timeout,
                 "prices_fetched_at": self.prices_fetched_at,
                 "prices_error": self.prices_error,
+                "gas_price_slots": len(
+                    (self._price_attributes() or {}).get("gas_prices", [])
+                ),
+                "gas_error": (self._price_attributes() or {}).get("gas_error"),
                 "price_slots": len((self._price_attributes() or {}).get("prices", [])),
                 "current_price": self.current_price(),
                 # how many hours of grid charging the packs still want, which
