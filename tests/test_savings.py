@@ -293,3 +293,19 @@ async def test_buying_fills_shadow_s_packs_back_up(trading, clock):
 
     assert system.coordinator.trade_would_sell is False
     assert system.coordinator._shadow_sold_kwh == 0.0
+
+
+async def test_switching_off_ends_the_sale(trading, clock):
+    """The last tick's decision must not outlive the coordinator: switched off,
+    nothing is being sold, really or in shadow."""
+    system = trading(soc=(95.0, 95.0), **{CONF_BATTERY_POWER_SENSOR: PACKS})
+    system.hass.states.set(GRID_SENSOR, -6700)
+    system.hass.states.set(PACKS, 7000)
+    await hour(system, clock, ticks=2)
+    assert system.coordinator.trade_selling is True
+
+    system.coordinator.enabled = False
+    await hour(system, clock)
+
+    assert system.coordinator.trade_selling is False
+    assert system.coordinator.money["shadow_kwh"] == 0.0

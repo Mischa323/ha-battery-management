@@ -3269,6 +3269,15 @@ class BatteryCoordinator:
         is the one the selling figures are credited to - which is why this
         runs at the top of the tick, before a new decision is made.
         """
+        # taken and cleared in one go: the decision further down this tick sets
+        # them again if it is reached, and a tick that returns early - switched
+        # off, fast charge, no meter - must not leave last tick's sale standing
+        selling, would_sell, sell_w = (
+            self.trade_selling, self.trade_would_sell, self._trade_sell_w
+        )
+        self.trade_selling = self.trade_would_sell = False
+        self._trade_sell_w = 0.0
+
         now = time.time()
         previous, self._money_at = self._money_at, now
         if previous is None or grid is None:
@@ -3296,15 +3305,15 @@ class BatteryCoordinator:
         figures["counted_h"] = hours
         margin = (self.last_trade_verdict or {}).get("margin")
         live = self.enabled and not self.dry_run
-        if margin is not None and self.trade_selling and live:
+        if margin is not None and selling and live:
             # the export, not the pack output: whatever covered the house
             # would have covered it under grid-zero too
             kwh = max(-grid, 0.0) * hours / 1000.0
             figures["traded_kwh"] = kwh
             figures["traded_eur"] = kwh * margin
-        elif margin is not None and (self.trade_would_sell or self.trade_selling):
+        elif margin is not None and (would_sell or selling):
             # what full output would have sent out past the house's own draw
-            kwh = max(self._trade_sell_w - max(without, 0.0), 0.0) * hours / 1000.0
+            kwh = max(sell_w - max(without, 0.0), 0.0) * hours / 1000.0
             figures["shadow_kwh"] = kwh
             figures["shadow_eur"] = kwh * margin
             self._shadow_sold_kwh += kwh
