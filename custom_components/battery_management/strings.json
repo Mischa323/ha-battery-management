@@ -330,7 +330,6 @@
           "cheaper_tomorrow": "Holding back, a cheaper day is coming",
           "cheaper_later": "Holding back, cheaper later today",
           "trade_sell": "Selling to the grid, it pays",
-          "trade_shadow": "Would sell (shadow)",
           "phase_limit": "Held back by the main fuse",
           "phase_detect": "Measuring which pack is on which phase",
           "recovering": "Charging back up before it discharges again",

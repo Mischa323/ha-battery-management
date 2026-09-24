@@ -38,6 +38,7 @@ from .suppliers import FETCHERS, SOURCE_ENTITY, SOURCE_NONE
 from .trace import Trace
 from .trading import FeedIn, export_value, grid_cost, sell_margin, wear_per_kwh
 from .prices import (
+    cheap_mean,
     cheapest_slots,
     cheaper_beyond,
     dearest_slots,
@@ -192,7 +193,6 @@ from .const import (
     POLICY_BUY_WINDOW,
     POLICY_CHEAPER_LATER,
     POLICY_TRADE_SELL,
-    POLICY_TRADE_SHADOW,
     POLICY_CHEAPER_TOMORROW,
     POLICY_DYNAMIC_CHARGE,
     POLICY_SOLAR_HEADROOM,
@@ -631,6 +631,11 @@ class BatteryCoordinator:
         #: the one in which it reached its line and is not restarted
         self._selling_slot: str | None = None
         self._sold_out_slot: str | None = None
+        #: this tick's selling, real and shadow, for the trace and the counters
+        self.trade_selling: bool = False
+        self.trade_would_sell: bool = False
+        #: the numbers behind the last decision, None while not trading
+        self.last_trade_verdict: dict | None = None
         # which leg each unit sits on (1-based), and how we came to believe it
         self.unit_phase: dict[str, int | None] = {u.name: None for u in self._units}
         self.phase_detection: str = PHASE_DETECT_UNKNOWN
@@ -2100,6 +2105,124 @@ class BatteryCoordinator:
         self._buying_slot = key
         return True, POLICY_DYNAMIC_CHARGE
 
+    # -- selling to the grid -------------------------------------------------
+
+    def saldering_active(self) -> bool:
+        """Is the netting scheme still in force today?"""
+        return dt_util.as_local(dt_util.utcnow()).date() < self._saldering_until
+
+    def export_value_now(self, saldering: bool | None = None) -> float | None:
+        """What a kilowatt hour fed back earns in this slot, in EUR.
+
+        The energy tax is read per slot as the all-in price less the untaxed
+        one - both from the supplier - rather than as a fixed figure, because
+        it is exactly what is added back under saldering. None off the direct
+        route: a third-party sensor publishes one number and nothing is known
+        about its parts.
+        """
+        current = self.current_price()
+        untaxed = self._current_component("untaxed_prices")
+        tax = (
+            current["price"] - untaxed
+            if current is not None and untaxed is not None
+            else None
+        )
+        if saldering is None:
+            saldering = self.saldering_active()
+        return export_value(
+            self._feed_in, self._current_component("market_prices"), tax, saldering
+        )
+
+    def battery_wear(self) -> float | None:
+        """EUR per kWh through the packs, from what the owner paid for them."""
+        return wear_per_kwh(
+            self._battery_price, self._battery_cycles, self.usable_capacity_kwh()
+        )
+
+    def refill_price(self) -> float | None:
+        """What buying a sold kilowatt hour back is expected to cost.
+
+        The mean of the cheapest `cheap_hours` still ahead, which is exactly
+        how the buying ranks them - a sale is only worth what the purchase that
+        replaces it costs, and that purchase will be made there.
+        """
+        slots = self._price_forecast()
+        if not slots:
+            return None
+        now = dt_util.utcnow()
+        ahead = [s for s in slots_in_window(slots, now, PRICE_WINDOW_HOURS) if s.start > now]
+        return cheap_mean(ahead, self._cheap_hours)
+
+    def trade_verdict(self) -> dict:
+        """Every number behind "sell now or not", for the trace and the card.
+
+        `margin` is None whenever any input is unknown, and `why` says which.
+        """
+        verdict = {
+            "value": self.export_value_now(),
+            "refill": self.refill_price(),
+            "wear": self.battery_wear(),
+            "margin": None,
+            "saldering": self.saldering_active(),
+            "why": None,
+        }
+        # the owner's purchase price is the switch: until it is filled in, the
+        # cost of a cycle is unknown and nothing is ever sold
+        if self._battery_price <= 0:
+            verdict["why"] = "no_battery_price"
+            return verdict
+        for key, why in (
+            ("wear", "no_capacity"),
+            ("value", "no_export_value"),
+            ("refill", "no_refill_price"),
+        ):
+            if verdict[key] is None:
+                verdict["why"] = why
+                return verdict
+        verdict["margin"] = sell_margin(
+            verdict["value"], verdict["refill"], verdict["wear"]
+        )
+        if verdict["margin"] < self._trade_margin:
+            verdict["why"] = "margin_too_small"
+        return verdict
+
+    def _sell_line(self, unit: UnitState) -> float:
+        """How far selling may take this pack: the higher of its own floor
+        (limit and reserve) and the owner's sell floor."""
+        return max(self._discharge_floor(unit), self.sell_floor)
+
+    def _trade_should_sell(self, online: dict) -> bool:
+        """Sell to the grid this tick? Decided the same in shadow as when on.
+
+        Every pack must be above its sell line: selling stops as soon as one
+        reaches it rather than draining the fuller one further, which is the
+        careful reading of a floor. Started with more room than the band and
+        run to the line itself, then not restarted in that slot - the same
+        hysteresis as buying, for the same reason: a pack resting on a line
+        reads either side of it.
+        """
+        self.last_trade_verdict = None
+        if self.trade_mode == TRADE_OFF or self.mode != MODE_DYNAMIC or not online:
+            return False
+        slots = self._price_forecast()
+        current = slot_at(slots, dt_util.utcnow()) if slots else None
+        if current is None:
+            return False
+        verdict = self.last_trade_verdict = self.trade_verdict()
+        if verdict["why"] is not None:
+            return False
+        key = _slot_key(current)
+        if self._sold_out_slot == key:
+            return False
+        started = self._selling_slot == key
+        room = min(s.soc - self._sell_line(s) for s in online.values())
+        if room <= (0.0 if started else BUY_CEILING_BAND):
+            if started:
+                self._sold_out_slot = key
+            return False
+        self._selling_slot = key
+        return True
+
     def minutes_to_full(self) -> int | None:
         """How long a fast charge would take from right now, in minutes.
 
@@ -2654,6 +2777,19 @@ class BatteryCoordinator:
             # publishes it; a third-party sensor gives one number and this
             # column stays empty.
             "market_price_eur_kwh": self.current_market_price(),
+            # selling: what was decided, and on what numbers. Written in shadow
+            # too - that column is the whole point of shadow.
+            "trade_mode": self.trade_mode,
+            "trade_selling": self.trade_selling,
+            "trade_would_sell": self.trade_would_sell,
+            "export_value_eur_kwh": (self.last_trade_verdict or {}).get("value"),
+            "refill_eur_kwh": (self.last_trade_verdict or {}).get("refill"),
+            "sell_margin_eur_kwh": (
+                None
+                if (self.last_trade_verdict or {}).get("margin") is None
+                else round(self.last_trade_verdict["margin"], 4)
+            ),
+            "trade_why": (self.last_trade_verdict or {}).get("why"),
             # cumulative kWh produced today, if a solar sensor is configured -
             # the diff between two rows is the only reading that can settle
             # "was that solar" without guessing from grid_w alone.
@@ -4058,6 +4194,19 @@ class BatteryCoordinator:
                     upper = min(upper, 0.0)
                     buy_window_policy = POLICY_BUY_WINDOW
 
+            # Selling is the mirror image of buying: a forced value, not a
+            # bound, because there is no deficit to regulate against. Never in
+            # an hour earmarked for buying, and decided in shadow exactly as
+            # when on - only the command is withheld.
+            trade_sell = (
+                not dynamic_charge
+                and buy_window_policy is None
+                and self._trade_should_sell(online)
+            )
+            self.trade_selling = trade_sell and self.trade_mode == TRADE_ON
+            self.trade_would_sell = trade_sell and self.trade_mode == TRADE_SHADOW
+            trade_policy = POLICY_TRADE_SELL if self.trade_selling else None
+
             external_sp, external_policy = (None, None)
             if self.mode == MODE_EXTERNAL:
                 external_sp, external_policy = self._external_target()
@@ -4070,6 +4219,9 @@ class BatteryCoordinator:
             sp_before, gain_used, sp_reason = self.setpoint, None, "integrate"
             if dynamic_charge:
                 sp, sp_reason = -maxchg, "dynamic_buy"
+            elif self.trade_selling:
+                # everything the packs and the fuse allow; the clamp still holds
+                sp, sp_reason = upper, "trade_sell"
             elif external_sp is not None:
                 # the plan proposes; the clamp below still disposes
                 sp, sp_reason = external_sp, "external_plan"
@@ -4097,6 +4249,7 @@ class BatteryCoordinator:
 
             self.active_policy = (
                 dynamic_policy
+                or trade_policy
                 or buy_window_policy
                 or external_policy
                 or phase_policy
