@@ -209,6 +209,7 @@ SCHEMAS = {
     "_logging_schema": "logging",
     "_dynamic_schema": "dynamic",
     "_solar_schema": "solar",
+    "_trading_schema": "trading",
     "_phases_schema": "phases",
     "_price_entity_schema": "price_entity",
     "_shadow_schema": "shadow",

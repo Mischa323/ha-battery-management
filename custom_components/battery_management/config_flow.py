@@ -23,6 +23,13 @@ from .const import (
     CONF_DEVICE,
     CONF_FAST_CHARGE_HOLD,
     CONF_FILL_BEFORE_DEAR_DAY,
+    CONF_BATTERY_CYCLES,
+    CONF_BATTERY_PRICE,
+    CONF_FEED_IN_BASIS,
+    CONF_FEED_IN_CORRECTION,
+    CONF_FEED_IN_FIXED,
+    CONF_SALDERING_UNTIL,
+    CONF_TRADE_MARGIN,
     CONF_BATTERY_POWER_SENSOR,
     CONF_CHARGE_BELOW_SOC,
     CONF_CHEAP_HOURS,
@@ -72,6 +79,13 @@ from .const import (
     DEFAULT_DISCHARGE_RECOVERY,
     DEFAULT_FAST_CHARGE_HOLD,
     DEFAULT_FILL_BEFORE_DEAR_DAY,
+    DEFAULT_BATTERY_CYCLES,
+    DEFAULT_BATTERY_PRICE,
+    DEFAULT_FEED_IN_BASIS,
+    DEFAULT_FEED_IN_CORRECTION,
+    DEFAULT_FEED_IN_FIXED,
+    DEFAULT_SALDERING_UNTIL,
+    DEFAULT_TRADE_MARGIN,
     DEFAULT_CHARGE_BELOW_SOC,
     DEFAULT_CHEAP_HOURS,
     DEFAULT_PRICE_MARGIN,
@@ -101,6 +115,7 @@ from .const import (
 )
 from .const import RESOLUTIONS
 from .discovery import match_unit_entities
+from .trading import FEED_IN_BASES
 from .suppliers import SOURCE_ENTITY, SOURCE_NONE, SUPPLIERS
 from .validate import validate_phases, validate_shadow, validate_unit
 
@@ -365,6 +380,56 @@ def _solar_schema(defaults: dict) -> vol.Schema:
     )
 
 
+def _trading_schema(defaults: dict) -> vol.Schema:
+    """What selling to the grid earns, and what it costs the packs.
+
+    Both are the owner's to fill in: the feed-in terms are their contract's,
+    the price of the packs is what they paid. Nothing here switches selling
+    on - that is the "Slim handelen" select on the device page, so it can be
+    tried in shadow first and turned off from a dashboard.
+    """
+    return vol.Schema(
+        {
+            vol.Required(
+                CONF_FEED_IN_BASIS,
+                default=defaults.get(CONF_FEED_IN_BASIS, DEFAULT_FEED_IN_BASIS),
+            ): selector.SelectSelector(
+                selector.SelectSelectorConfig(
+                    options=FEED_IN_BASES,
+                    translation_key="feed_in_basis",
+                    mode=selector.SelectSelectorMode.LIST,
+                )
+            ),
+            vol.Optional(
+                CONF_FEED_IN_FIXED,
+                default=defaults.get(CONF_FEED_IN_FIXED, DEFAULT_FEED_IN_FIXED),
+            ): _amount(0, 2, "€/kWh", step=0.001),
+            vol.Optional(
+                CONF_FEED_IN_CORRECTION,
+                default=defaults.get(
+                    CONF_FEED_IN_CORRECTION, DEFAULT_FEED_IN_CORRECTION
+                ),
+            ): _amount(-1, 1, "€/kWh", step=0.001),
+            vol.Optional(
+                CONF_SALDERING_UNTIL,
+                default=defaults.get(CONF_SALDERING_UNTIL, DEFAULT_SALDERING_UNTIL),
+            ): selector.DateSelector(),
+            vol.Optional(
+                CONF_BATTERY_PRICE,
+                default=defaults.get(CONF_BATTERY_PRICE, DEFAULT_BATTERY_PRICE),
+            ): _amount(0, 100000, "€", step=1),
+            vol.Optional(
+                CONF_BATTERY_CYCLES,
+                default=defaults.get(CONF_BATTERY_CYCLES, DEFAULT_BATTERY_CYCLES),
+            ): _amount(100, 20000, "cycli", step=100),
+            vol.Optional(
+                CONF_TRADE_MARGIN,
+                default=defaults.get(CONF_TRADE_MARGIN, DEFAULT_TRADE_MARGIN),
+            ): _amount(0, 1, "€/kWh", step=0.01),
+        }
+    )
+
+
 def _phases_schema(defaults: dict) -> vol.Schema:
     """Fuse protection. Empty sensor list = the whole feature is off."""
     return vol.Schema(
@@ -616,6 +681,7 @@ class BatteryManagementOptionsFlow(OptionsFlow):
                 "battery",
                 "dynamic",
                 "solar",
+                "trading",
                 "phases",
                 "units",
                 "logging",
@@ -664,6 +730,16 @@ class BatteryManagementOptionsFlow(OptionsFlow):
         defaults = {**self._entry.data, **self._entry.options}
         return self.async_show_form(
             step_id="solar", data_schema=_solar_schema(defaults)
+        )
+
+    async def async_step_trading(
+        self, user_input: dict | None = None
+    ) -> ConfigFlowResult:
+        if user_input is not None:
+            return self._save(user_input)
+        defaults = {**self._entry.data, **self._entry.options}
+        return self.async_show_form(
+            step_id="trading", data_schema=_trading_schema(defaults)
         )
 
     async def async_step_dynamic(
