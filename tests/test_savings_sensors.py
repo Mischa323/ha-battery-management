@@ -64,3 +64,32 @@ def test_the_periods_declare_their_reset(sensors):
 
     assert month.last_reset == coordinator.period_started_at("month")
     assert month.extra_state_attributes["total"]["saved_eur"] == 100.0
+
+
+def test_the_payback_reads_the_owner_s_footing(sensors):
+    system, coordinator = sensors
+    coordinator._battery_price = 5000.0
+    coordinator.money.update(counted_h=720.0, saved_eur=20.0, saved_after_eur=41.1)
+
+    payback = sensor.PaybackSensor(coordinator, system.entry)
+
+    assert payback.available is True
+    assert payback.native_value == coordinator.payback()["years_without_saldering"]
+    assert payback.native_unit_of_measurement == "a"
+
+
+def test_no_purchase_price_leaves_the_payback_unavailable(sensors):
+    system, coordinator = sensors
+    coordinator._battery_price = 0.0
+
+    assert sensor.PaybackSensor(coordinator, system.entry).available is False
+
+
+def test_the_trade_status_is_an_enum_of_its_states(sensors):
+    system, coordinator = sensors
+
+    status = sensor.TradeStatusSensor(coordinator, system.entry)
+
+    assert status.native_value == "off"
+    assert set(status.options) == {"off", "not_dynamic", "selling", "would_sell", "waiting"}
+    assert "why" in status.extra_state_attributes
