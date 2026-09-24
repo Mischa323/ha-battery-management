@@ -2695,6 +2695,28 @@ class BatteryCoordinator:
                     for name in PERIODS
                 },
                 "counts_charge_energy": self.counts_charge_energy,
+                # selling and savings: the settings, the last verdict and the
+                # money, so "why did it (not) sell" is answerable from a download
+                "trading": {
+                    "mode": self.trade_mode,
+                    "sell_floor": self.sell_floor,
+                    "feed_in": {
+                        "basis": self._feed_in.basis,
+                        "fixed": self._feed_in.fixed,
+                        "correction": self._feed_in.correction,
+                    },
+                    "saldering_until": self._saldering_until.isoformat(),
+                    "saldering": self.saldering_active(),
+                    "battery_price": self._battery_price,
+                    "battery_cycles": self._battery_cycles,
+                    "trade_margin": self._trade_margin,
+                    "wear_eur_kwh": self.battery_wear(),
+                    "last_verdict": self.last_trade_verdict,
+                    "selling": self.trade_selling,
+                    "would_sell": self.trade_would_sell,
+                    "shadow_sold_kwh": round(self._shadow_sold_kwh, 3),
+                },
+                "money": self.money_total_attributes(),
                 # the fuse protection, including the evidence behind each
                 # placement - a probe that guessed wrong is only findable here
                 "phase_protection": self.phase_report() if self.phase_protection else None,
