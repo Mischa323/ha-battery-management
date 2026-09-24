@@ -1055,6 +1055,13 @@ Both halves measure that room through one helper on purpose: when the
 earmarking and the draw disagreed, an hour was marked for buying that the tick
 then refused, which is the flapping itself.
 
+That band only gates **starting**. With one line for both ends it merely moved
+the flapping two points down: on the night of 2026-09-24, floor at 50 %, a pack
+at 47 % started a purchase, stopped one point later at 48 %, was drawn back to
+47 % by the house and started again — three 7 kW bursts in an hour. A purchase
+under way now runs to the line itself, and once there it is not restarted in
+the same slot.
+
 ### How full, when tomorrow is cheaper
 
 Whether to buy before the peak is settled by the peak. How *full* is a fair
