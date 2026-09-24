@@ -202,16 +202,17 @@ python -m pytest
 CI runs the suite both ways — stubbed and against a real Home Assistant — plus
 hassfest and HACS validation.
 
-## The two cards, and where to find them
+## The cards, and where to find them
 
-The integration ships two Lovelace cards and registers them itself, so there is
+The integration ships its Lovelace cards and registers them itself, so there is
 no manual resource step:
 
 | Card | What it is for |
 | --- | --- |
 | **Battery Management Card** | The control panel: on/off, fast charge, state of charge per pack, and the price chart underneath. |
 | **Battery Management Prices** | Only the prices — current price large, today's bars, and the cheapest and dearest hour with their times. |
-| **Battery Management Trading** | Selling to the grid: Off / Shadow / On, whether it pays right now with the sum written out, what the packs have saved, and the payback time. See [Selling to the grid](#selling-to-the-grid). |
+| **Battery Management Trading** | Selling to the grid: Off / Shadow / On, whether it pays right now with the sum written out, and what it sold (or would have, in shadow) today. Belongs beside the controls. See [Selling to the grid](#selling-to-the-grid). |
+| **Battery Management Savings** | What the packs saved today, this month and since the start — green when they saved, red when they lost — and the payback time. Made for a dashboard of its own. |
 
 ### Adding one
 
@@ -464,7 +465,7 @@ in the diagnostics say which of those is happening.
 The chart lives on the card that ships with the integration, not on the device
 page — a device page lists entities, and a chart is not one.
 
-Added the same way as the other card — see **The two cards, and where to find
+Added the same way as the other cards — see **The cards, and where to find
 them** above.
 
 It draws **the whole day** — one bar per hour, from midnight, coloured by the
@@ -1212,14 +1213,21 @@ little about a winter, when there is less sun to shift and the peaks differ.
 The card says how many days it rests on, and calls anything under a month too
 short to build on.
 
-### The trading dashboard
+### Where the cards go
 
-The **Battery Management Trading** card finds its own entities, so adding it
-needs no YAML. For a whole view — the card, savings per day and per month as
-bars, and when it sold beside the price — paste
-[`dashboards/slim-handelen.yaml`](dashboards/slim-handelen.yaml) into the raw
-configuration editor. The graphs name entity ids; on a Dutch install check them
-under *Settings → Entities* first, as the file explains.
+Trading and saving are two different questions, looked at at different times,
+so they are two cards:
+
+- **Battery Management Trading** goes on the battery dashboard, beside the
+  other controls: *+ Add card → By card → "battery"*. It finds its own
+  entities, so there is nothing to fill in.
+- **Battery Management Savings** gets a dashboard of its own. Make a new
+  dashboard and paste [`dashboards/besparing.yaml`](dashboards/besparing.yaml)
+  into its raw configuration editor: the card, savings per day and per month
+  as bars, and the running total. The card colours each figure green when the
+  packs saved money and red when they lost it; half a cent either way counts as
+  nought and stays uncoloured. The graphs name entity ids; on a Dutch install
+  check them under *Settings → Entities* first, as the file explains.
 
 ## External plan (EMHASS)
 

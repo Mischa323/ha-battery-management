@@ -27,8 +27,8 @@ const check = (name, cond, got) => {
   else console.log("ok  ", name);
 };
 
-const { euro, tradeSum, paybackSays, findTradeEntities, TRADE_WHY } = new Function(
-  src + ";return {euro, tradeSum, paybackSays, findTradeEntities, TRADE_WHY};"
+const { euro, tradeSum, findTradeEntities, TRADE_WHY } = new Function(
+  src + ";return {euro, tradeSum, findTradeEntities, TRADE_WHY};"
 )();
 const Trade = _defined.get("battery-management-trade-card");
 check("the card is registered", !!Trade, [..._defined.keys()]);
@@ -209,46 +209,15 @@ function render(overrides, config = {}) {
   check("a tap elsewhere does nothing", calls.length === 1, calls);
 }
 
-// --- money ---------------------------------------------------------------
+// --- what it sold today ---------------------------------------------------
 {
   render();
-  check("savings in euros, Dutch style",
-    text("trtoday") === "€0,42" && text("trmonth") === "€12,50",
-    [text("trtoday"), text("trmonth")]);
-  check("a loss reads as one", text("trtotal") === "−€3,20", text("trtotal"));
   check("shadow's evening is reported",
     /Schaduw vandaag: zou 6\.7 kWh verkocht hebben, winst €1,28/.test(text("trsold")),
     text("trsold"));
   check("and nothing about real sales that did not happen", !/Verkocht vandaag/.test(text("trsold")),
     text("trsold"));
   check("euro handles nothing", euro(null) === "—" && euro(undefined) === "—", euro(null));
-}
-
-// --- payback -------------------------------------------------------------
-{
-  render();
-  check("the owner's question first, with saldering beside it",
-    text("trpay") === "Zonder saldering in 10,0 jaar terugverdiend (met saldering 20,5 jaar).",
-    text("trpay"));
-  check("says how far to trust a fortnight",
-    /nog 9,6 jaar te gaan/i.test(text("trpaynote")) && /nog te kort/.test(text("trpaynote")),
-    text("trpaynote"));
-
-  const unavailable = paybackSays({ state: "unavailable", attributes: {} });
-  check("unavailable says what it needs",
-    unavailable.main === "Nog niet te zeggen." && /aanschafprijs/.test(unavailable.note),
-    unavailable);
-  const never = paybackSays({
-    state: "unknown",
-    attributes: { known: true, years_without_saldering: null, years_to_go: null, counted_days: 40, reliable: true },
-  });
-  check("a saving that never repays says so",
-    /verdient hij zich met deze besparing niet terug/.test(never.main) && /winter/.test(never.note),
-    never);
-  const done = paybackSays({
-    state: "0", attributes: { known: true, years_without_saldering: 8, years_to_go: 0, counted_days: 400, reliable: true },
-  });
-  check("repaid is repaid", /Al terugverdiend/.test(done.note), done);
 }
 
 // --- nothing configured --------------------------------------------------
@@ -258,8 +227,10 @@ function render(overrides, config = {}) {
   card.setConfig({});
   card.hass = { states: {}, callService: () => {} };
   check("no entities at all says so rather than throwing",
-    text("trhead") === "Slim handelen-sensor niet gevonden" && text("trtoday") === "—",
-    [text("trhead"), text("trtoday")]);
+    text("trhead") === "Slim handelen-sensor niet gevonden" && text("trsum") === "",
+    [text("trhead"), text("trsum")]);
+  check("and it no longer shows the savings - those have their own card",
+    !/Besparing|Terugverdientijd/.test(card.innerHTML), card.innerHTML.length);
 }
 
 console.log(fails ? `\n${fails} FAILED` : "\ntrade card checks pass");
