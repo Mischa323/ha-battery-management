@@ -613,6 +613,12 @@ dearest hour of the day with the times they fall.
 current price*** and pick **Current price**. That is the all-in price, which is
 what import is billed at.
 
+**Or match your supplier's app.** Frank's app shows *het dynamische deel*: the
+price without the energy tax, which is the same every hour and billed apart. On
+2026-09-23 that put the same 11.7 kWh at €1.29 in the app and €2.52 here — the
+difference is 11.7 kWh × ~€0.11 of tax. Pick **Price without energy tax** and
+the two agree; the tax is still on the invoice either way.
+
 **Export is a different number.** Energy tax and VAT are not paid back to you,
 so pointing export compensation at the same entity overstates what you earn —
 and a wrong figure on an energy dashboard looks exactly like a right one. Use
