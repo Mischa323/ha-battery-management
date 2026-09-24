@@ -33,6 +33,7 @@ const EXPECTED = [
   "battery-management-prices-card",
   "battery-management-plan-card",
   "battery-management-trade-card",
+  "battery-management-savings-card",
 ];
 check("every element defined",
   EXPECTED.every((t) => defined.has(t)) && defined.size === EXPECTED.length,

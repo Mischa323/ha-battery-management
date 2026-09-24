@@ -766,9 +766,13 @@ class PaybackSensor(_BaseSensor):
 
     The owner's question, on the footing that will hold for most of the
     packs' life. The same with saldering, and the realistic "years to go"
-    from today, are in the attributes. Unavailable until there is a purchase
-    price and a day's worth of measurement; `reliable` turns true after a
-    month, and even then a summer-only figure flatters the winter.
+    from today, are in the attributes. `reliable` turns true after a month,
+    and even then a summer-only figure flatters the winter.
+
+    Always available, with no value (unknown) until there is a purchase price
+    and a day's measurement. Not unavailable: Home Assistant drops the
+    attributes of an unavailable entity, and without them the card can
+    neither find this sensor nor say which of the two it is still waiting for.
     """
 
     _attr_translation_key = "payback"
@@ -780,10 +784,6 @@ class PaybackSensor(_BaseSensor):
     def __init__(self, coordinator, entry) -> None:
         super().__init__(coordinator, entry)
         self._attr_unique_id = f"{entry.entry_id}_payback"
-
-    @property
-    def available(self) -> bool:
-        return self.coordinator.payback()["known"]
 
     @property
     def native_value(self) -> float | None:

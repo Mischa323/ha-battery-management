@@ -2258,10 +2258,17 @@ function paybackSays(stateObj) {
   if (!stateObj) return { main: "Terugverdientijd-sensor niet gevonden.", note: "" };
   const p = stateObj.attributes || {};
   if (!p.known) {
-    return {
-      main: "Nog niet te zeggen.",
-      note: "Vul de aanschafprijs in en laat hem minstens een dag meten.",
-    };
+    // Say which of the two it is waiting for, when the attributes can tell.
+    // An install from before the sensor always published them still shows
+    // it unavailable, with none - then both, as before.
+    const note =
+      p.battery_price_eur !== undefined && !(p.battery_price_eur > 0)
+        ? "Vul de aanschafprijs van de accu's in bij Instellen → Slim handelen."
+        : p.counted_days !== undefined
+          ? "Eerst een dag meten: nu " + Math.round(p.counted_days * 24) +
+            " van de 24 uur gemeten."
+          : "Vul de aanschafprijs in en laat hem minstens een dag meten.";
+    return { main: "Nog niet te zeggen.", note };
   }
   const without = p.years_without_saldering;
   const main =
@@ -2300,7 +2307,7 @@ function findTradeEntities(hass) {
         a.options.join() === "off,shadow,on") found.trade_mode = id;
     else if (!id.startsWith("sensor.")) continue;
     else if ("min_margin_eur_kwh" in a && "trade_mode" in a) found.trade = id;
-    else if ("years_to_go" in a || /_(payback|terugverdientijd)(_\d+)?$/.test(id))
+    else if ("years_to_go" in a || /_(payback|payback_time|terugverdientijd)(_\d+)?$/.test(id))
       found.payback = id;
     else if ("saved_actual_eur" in a && a.period === "day") found.savings_today = id;
     else if ("saved_actual_eur" in a && a.period === "month") found.savings_month = id;
@@ -2310,12 +2317,14 @@ function findTradeEntities(hass) {
 }
 
 /**
- * Selling to the grid, and what the packs have earned.
+ * Selling to the grid: the switch, and whether it pays right now.
  *
  * Built for the question the owner will ask on the first evening in shadow:
  * "would it have sold, and what for?" - so the sum is written out, not only
  * its answer, and every reason it does not sell says whether that is normal
- * or something to fix.
+ * or something to fix. It belongs beside the controls, on the battery
+ * dashboard; what the packs have *saved* is a different question with its
+ * own card, and on the owner's wish its own dashboard.
  */
 class BatteryManagementTradeCard extends HTMLElement {
   setConfig(config) {
@@ -2366,14 +2375,7 @@ class BatteryManagementTradeCard extends HTMLElement {
           <div class="note" id="trsum"></div>
           <div class="muted note" id="trwhy"></div>
           <div class="muted note" id="trsal"></div>
-          <h4>Besparing</h4>
-          <div class="row"><span>Vandaag</span><b id="trtoday">—</b></div>
-          <div class="row"><span>Deze maand</span><b id="trmonth">—</b></div>
-          <div class="row"><span>Sinds start</span><b id="trtotal">—</b></div>
-          <div class="muted note" id="trsold"></div>
-          <h4>Terugverdientijd</h4>
-          <div id="trpay">—</div>
-          <div class="muted note" id="trpaynote"></div>
+          <div class="note" id="trsold"></div>
         </div>
       </ha-card>`;
     this._onClick = (ev) => {
@@ -2431,15 +2433,6 @@ class BatteryManagementTradeCard extends HTMLElement {
         : "";
     el("trsal").textContent = trade ? salderingSays(attrs) : "";
 
-    const money = (key) => {
-      const st = this._state(key);
-      const v = st ? parseFloat(st.state) : NaN;
-      return isNaN(v) ? "—" : euro(v);
-    };
-    el("trtoday").textContent = money("savings_today");
-    el("trmonth").textContent = money("savings_month");
-    el("trtotal").textContent = money("savings_total");
-
     // Sold and shadow-sold today, only when there is something to say: a row
     // of noughts every evening it did not sell would bury the one that did.
     const today = (this._state("savings_today") || {}).attributes || {};
@@ -2452,10 +2445,6 @@ class BatteryManagementTradeCard extends HTMLElement {
         euro(today.shadow_eur) + ".");
     }
     el("trsold").textContent = parts.join(" ");
-
-    const pay = paybackSays(this._state("payback"));
-    el("trpay").textContent = pay.main;
-    el("trpaynote").textContent = pay.note;
   }
 }
 
@@ -2463,7 +2452,136 @@ defineCard("battery-management-trade-card", BatteryManagementTradeCard, {
   type: "battery-management-trade-card",
   name: "Battery Management Trading",
   description:
-    "Selling to the grid: whether it pays right now, what the packs have saved, and the payback time.",
+    "Selling to the grid: Off / Shadow / On, and whether it pays right now.",
+  preview: false,
+});
+
+
+/**
+ * Green for money saved, red for money lost, nothing for nought.
+ *
+ * The owner's ask: "de cijfers groen als je geld bespaart en rood als je
+ * verliest". Half a cent either way is still nought - a figure flickering
+ * between colours at the start of every day would say nothing.
+ */
+const moneyTone = (value) =>
+  value === null || value === undefined || isNaN(value) || Math.abs(value) < 0.005
+    ? ""
+    : value > 0
+      ? "gain"
+      : "loss";
+
+/**
+ * What the packs have saved, and when they will have paid for themselves.
+ *
+ * Its own card so it can have its own dashboard: this is looked at once a
+ * week to see whether the packs are worth it, not every evening to see
+ * whether they are selling.
+ */
+class BatteryManagementSavingsCard extends HTMLElement {
+  setConfig(config) {
+    if (!config) throw new Error("Invalid configuration");
+    this._config = config;
+    this._built = false;
+  }
+
+  set hass(hass) {
+    this._hass = hass;
+    if (!this._built) this._build();
+    this._update();
+  }
+
+  static getStubConfig(hass) {
+    const found = findTradeEntities(hass);
+    const config = { type: "custom:battery-management-savings-card" };
+    for (const key of ["savings_today", "savings_month", "savings_total", "payback"]) {
+      if (found[key]) config[key] = found[key];
+    }
+    return config;
+  }
+
+  getCardSize() {
+    return 4;
+  }
+
+  _build() {
+    const c = this._config;
+    this.innerHTML =
+      '<ha-card header="' + esc(c.title || "Besparing") + '">' +
+      `<style>
+          .svc { padding: 4px 16px 16px; }
+          .svc .muted { color: var(--secondary-text-color); }
+          .svc h4 { margin:14px 0 4px; font-size:.8em; font-weight:600;
+                    text-transform:uppercase; letter-spacing:.04em;
+                    color: var(--secondary-text-color); }
+          .svc .tiles { display:flex; gap:10px; }
+          .svc .tile { flex:1 1 0; border-radius:10px; padding:10px 12px;
+                    background: var(--secondary-background-color, #f2f2f2); }
+          .svc .tile .n { font-size:1.5em; font-weight:600; line-height:1.2;
+                    font-variant-numeric: tabular-nums; }
+          .svc .tile .l { font-size:.8em; }
+          .svc .gain { color: var(--success-color, #2e7d32); }
+          .svc .loss { color: var(--error-color, #c62828); }
+          .svc .note { font-size:.86em; margin:4px 0 0; }
+        </style>
+        <div class="svc">
+          <div class="tiles">
+            <div class="tile"><div class="n" id="svtoday">—</div><div class="l muted">vandaag</div></div>
+            <div class="tile"><div class="n" id="svmonth">—</div><div class="l muted">deze maand</div></div>
+            <div class="tile"><div class="n" id="svtotal">—</div><div class="l muted">sinds start</div></div>
+          </div>
+          <div class="muted note" id="svfooting"></div>
+          <h4>Terugverdientijd</h4>
+          <div id="svpay">—</div>
+          <div class="muted note" id="svpaynote"></div>
+        </div>
+      </ha-card>`;
+    this._built = true;
+  }
+
+  _ids() {
+    return { ...findTradeEntities(this._hass), ...this._config };
+  }
+
+  _state(key) {
+    const id = this._ids()[key];
+    return id && this._hass && this._hass.states[id];
+  }
+
+  _update() {
+    const el = (id) => this.querySelector("#" + id);
+    for (const [key, id] of [
+      ["savings_today", "svtoday"],
+      ["savings_month", "svmonth"],
+      ["savings_total", "svtotal"],
+    ]) {
+      const st = this._state(key);
+      const v = st ? parseFloat(st.state) : NaN;
+      el(id).textContent = isNaN(v) ? "—" : euro(v);
+      el(id).className = ("n " + moneyTone(v)).trim();
+    }
+
+    // Which footing the three figures are on - they change on the day
+    // saldering ends, and a jump nobody explained reads as a fault.
+    const total = (this._state("savings_total") || {}).attributes || {};
+    el("svfooting").textContent =
+      total.saldering === undefined
+        ? ""
+        : total.saldering
+          ? "Gerekend met saldering: teruggeleverde stroom levert ook de energiebelasting op."
+          : "Gerekend zonder saldering: teruggeleverde stroom levert alleen de vergoeding op.";
+
+    const pay = paybackSays(this._state("payback"));
+    el("svpay").textContent = pay.main;
+    el("svpaynote").textContent = pay.note;
+  }
+}
+
+defineCard("battery-management-savings-card", BatteryManagementSavingsCard, {
+  type: "battery-management-savings-card",
+  name: "Battery Management Savings",
+  description:
+    "What the packs have saved - green when they save, red when they lose - and the payback time.",
   preview: false,
 });
 
@@ -2482,6 +2600,7 @@ window.batteryManagementCardBoot = {
     "battery-management-prices-card",
     "battery-management-plan-card",
     "battery-management-trade-card",
+    "battery-management-savings-card",
   ].filter((tag) => !!customElements.get(tag)),
   advertised: (window.customCards || [])
     .map((c) => c.type)

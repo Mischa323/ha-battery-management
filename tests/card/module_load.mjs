@@ -62,6 +62,7 @@ const EXPECTED = [
   "battery-management-prices-card",
   "battery-management-plan-card",
   "battery-management-trade-card",
+  "battery-management-savings-card",
 ];
 
 const advertised = (globalThis.customCards || []).map((c) => c.type);

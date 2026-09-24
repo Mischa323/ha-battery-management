@@ -202,16 +202,17 @@ python -m pytest
 CI runs the suite both ways — stubbed and against a real Home Assistant — plus
 hassfest and HACS validation.
 
-## The two cards, and where to find them
+## The cards, and where to find them
 
-The integration ships two Lovelace cards and registers them itself, so there is
+The integration ships its Lovelace cards and registers them itself, so there is
 no manual resource step:
 
 | Card | What it is for |
 | --- | --- |
 | **Battery Management Card** | The control panel: on/off, fast charge, state of charge per pack, and the price chart underneath. |
 | **Battery Management Prices** | Only the prices — current price large, today's bars, and the cheapest and dearest hour with their times. |
-| **Battery Management Trading** | Selling to the grid: Off / Shadow / On, whether it pays right now with the sum written out, what the packs have saved, and the payback time. See [Selling to the grid](#selling-to-the-grid). |
+| **Battery Management Trading** | Selling to the grid: Off / Shadow / On, whether it pays right now with the sum written out, and what it sold (or would have, in shadow) today. Belongs beside the controls. See [Selling to the grid](#selling-to-the-grid). |
+| **Battery Management Savings** | What the packs saved today, this month and since the start — green when they saved, red when they lost — and the payback time. Made for a dashboard of its own. |
 
 ### Adding one
 
@@ -464,7 +465,7 @@ in the diagnostics say which of those is happening.
 The chart lives on the card that ships with the integration, not on the device
 page — a device page lists entities, and a chart is not one.
 
-Added the same way as the other card — see **The two cards, and where to find
+Added the same way as the other cards — see **The cards, and where to find
 them** above.
 
 It draws **the whole day** — one bar per hour, from midnight, coloured by the
@@ -817,7 +818,7 @@ capped — that would be throwing sun away.
 | **Gas price** | This gas day's all-in price per m³, from Frank. For the Energy dashboard's gas cost only — nothing here steers on gas. Set per gas day, so the same number all day. | not on the direct route, or Frank gave no gas price (the diagnostics say why under `gas_error`) |
 | **Gas price without energy tax** | The same less the energy tax, to agree with Frank's app. | as above |
 | **Savings today / this month / since start** | What the packs saved, in EUR, against the same house without them: the import they replaced at the all-in price, less the export they gave up at what your contract pays. Shown on the footing that applies today (with saldering until it ends); the attributes carry both, plus what selling earned (`traded_kwh`, `traded_eur`) and what shadow would have (`shadow_kwh`, `shadow_eur`). | never (nought until the first counted tick) |
-| **Payback time** | In how many years the packs pay for themselves on a dynamic contract **without** saldering: purchase price ÷ the yearly saving on that footing. The attributes add the same with saldering, `years_to_go` from today (saldering at its rate until it ends, then without, less what is already saved), the yearly savings and `counted_days`. `reliable` turns true after 30 counted days. | no purchase price, or less than a day counted |
+| **Payback time** | In how many years the packs pay for themselves on a dynamic contract **without** saldering: purchase price ÷ the yearly saving on that footing. The attributes add the same with saldering, `years_to_go` from today (saldering at its rate until it ends, then without, less what is already saved), the yearly savings and `counted_days`. `reliable` turns true after 30 counted days. Shows no value (unknown) until there is a purchase price and a day counted; the attributes stay, so the card can say which of the two it is waiting for. | never |
 | **Smart trading status** | `selling`, `would_sell` (shadow), `waiting`, `off` or `not_dynamic`. The attributes carry the three prices it weighed — `export_value_eur_kwh`, `refill_eur_kwh`, `wear_eur_kwh` — the `margin_eur_kwh` they come to, and `why` it is not selling. | never |
 | **Plan** | Today's cheap and dear hours with their prices, plus the numbers the ceiling was computed from, all in attributes. Its `hours` attribute is the whole series, each slot carrying the `role` it belongs to — `cheap`, `dear` or `normal` — which is what the card's chart is drawn from. | never |
 | **Fuse headroom** | Amps still available on **the busiest single leg** — not a total, and not per leg. It is the one that would trip first; `tightest_phase` in the attributes says which. Measured against the usable limit (the fuse less your margin), so the margin is still there underneath. Per-leg detail — `amps` through the fuse, `amps_without_us`, headroom, and which packs sit on it — is in the attributes. | no per-phase sensors configured |
@@ -1212,14 +1213,21 @@ little about a winter, when there is less sun to shift and the peaks differ.
 The card says how many days it rests on, and calls anything under a month too
 short to build on.
 
-### The trading dashboard
+### Where the cards go
 
-The **Battery Management Trading** card finds its own entities, so adding it
-needs no YAML. For a whole view — the card, savings per day and per month as
-bars, and when it sold beside the price — paste
-[`dashboards/slim-handelen.yaml`](dashboards/slim-handelen.yaml) into the raw
-configuration editor. The graphs name entity ids; on a Dutch install check them
-under *Settings → Entities* first, as the file explains.
+Trading and saving are two different questions, looked at at different times,
+so they are two cards:
+
+- **Battery Management Trading** goes on the battery dashboard, beside the
+  other controls: *+ Add card → By card → "battery"*. It finds its own
+  entities, so there is nothing to fill in.
+- **Battery Management Savings** gets a dashboard of its own. Make a new
+  dashboard and paste [`dashboards/besparing.yaml`](dashboards/besparing.yaml)
+  into its raw configuration editor: the card, savings per day and per month
+  as bars, and the running total. The card colours each figure green when the
+  packs saved money and red when they lost it; half a cent either way counts as
+  nought and stays uncoloured. The graphs name entity ids; on a Dutch install
+  check them under *Settings → Entities* first, as the file explains.
 
 ## External plan (EMHASS)
 
