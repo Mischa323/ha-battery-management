@@ -93,6 +93,7 @@
           "battery": "The packs",
           "dynamic": "Dynamic tariff",
           "solar": "Solar",
+          "trading": "Smart trading",
           "phases": "Fuse protection per phase",
           "units": "Battery unit entities",
           "logging": "Logging and safety nets",
@@ -169,6 +170,28 @@
           "solar_forecast_sensors": "Pick every roof plane; they are summed. Prefer the 'remaining today' variants - a whole-day total is right at 02:00 and wrong at 17:00.",
           "solar_produced_sensor": "Only needed if the sensors above give a day total: this is subtracted, leaving what is still to come.",
           "solar_forecast_max": "Only used while the charge time is unmeasured, since without a capacity there is no way to turn kWh into a percentage. 0 ignores the forecast."
+        }
+      },
+      "trading": {
+        "title": "Smart trading",
+        "description": "What feeding back earns, and what it costs the packs. Both are yours to fill in: the compensation follows from your contract, the pack cost from what you paid.\n\nSwitching it on is not done here but with the \"Smart trading\" select on the device page: Off, Shadow (only record what it would sell) or On. How far it may sell is the \"Sell down to: at least\" slider.",
+        "data": {
+          "feed_in_basis": "What the feed-in compensation is based on",
+          "feed_in_fixed": "Fixed compensation (€/kWh)",
+          "feed_in_correction": "Correction on the compensation (€/kWh)",
+          "saldering_until": "Saldering holds until",
+          "battery_price": "Purchase price of the packs (€)",
+          "battery_cycles": "Rated charge cycles",
+          "trade_margin": "Minimum profit per kWh sold (€)"
+        },
+        "data_description": {
+          "feed_in_basis": "A dynamic contract pays by the quarter, so this is a rule rather than an amount. Pick what your supplier pays: the bare market price, the market price including VAT, or a fixed rate. If unsure, leave Market price: it is the careful choice, and it sells too little rather than too much.",
+          "feed_in_fixed": "Only used when the basis is a fixed rate.",
+          "feed_in_correction": "Added on top of the basis. If your supplier charges a feed-in fee, enter it negative, for example -0.02.",
+          "saldering_until": "The first day saldering no longer holds, 1 January 2027 by law. Until then the energy tax on a kilowatt hour fed back is netted, and counts in what feeding back earns. After it, not, and selling stops paying by itself.",
+          "battery_price": "What all the packs cost together. With the cycles and the measured capacity it gives the wear per kWh. Empty (0) means wear unknown, and then it does not sell - a guessed wear would either wear the packs out or never let them sell.",
+          "battery_cycles": "The number of full charge cycles from the packs' specifications.",
+          "trade_margin": "What a kilowatt hour sold must at least earn after buying it back (round-trip loss included) and the wear. Higher is more careful."
         }
       },
       "phases": {
@@ -306,6 +329,7 @@
           "solar_headroom": "Not buying, the sun still fits",
           "cheaper_tomorrow": "Holding back, a cheaper day is coming",
           "cheaper_later": "Holding back, cheaper later today",
+          "trade_sell": "Selling to the grid, it pays",
           "phase_limit": "Held back by the main fuse",
           "phase_detect": "Measuring which pack is on which phase",
           "recovering": "Charging back up before it discharges again",
@@ -353,6 +377,28 @@
       },
       "gas_untaxed_price": {
         "name": "Gas price without energy tax"
+      },
+      "savings_today": {
+        "name": "Savings today"
+      },
+      "savings_this_month": {
+        "name": "Savings this month"
+      },
+      "savings_total": {
+        "name": "Savings since start"
+      },
+      "payback": {
+        "name": "Payback time"
+      },
+      "trade_status": {
+        "name": "Smart trading status",
+        "state": {
+          "off": "Off",
+          "not_dynamic": "Not in Dynamic",
+          "selling": "Selling",
+          "would_sell": "Would sell (shadow)",
+          "waiting": "Waiting for a peak that pays"
+        }
       }
     },
     "select": {
@@ -365,6 +411,14 @@
           "pause": "Pause",
           "dynamic": "Dynamic tariff",
           "external": "External plan (EMHASS)"
+        }
+      },
+      "trade_mode": {
+        "name": "Smart trading",
+        "state": {
+          "off": "Off",
+          "shadow": "Shadow (record only)",
+          "on": "On"
         }
       }
     },
@@ -388,6 +442,9 @@
       },
       "buy_ceiling_max": {
         "name": "Buy up to: at most"
+      },
+      "sell_floor": {
+        "name": "Sell down to: at least"
       }
     },
     "button": {
@@ -422,6 +479,13 @@
       "options": {
         "published": "As the supplier publishes them (quarter-hourly if they do)",
         "hourly": "By the hour"
+      }
+    },
+    "feed_in_basis": {
+      "options": {
+        "market": "Market price",
+        "market_vat": "Market price including VAT",
+        "fixed": "Fixed rate per kWh"
       }
     }
   }

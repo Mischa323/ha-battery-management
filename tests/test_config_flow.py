@@ -188,6 +188,7 @@ async def test_options_menu_offers_every_section(hass: HomeAssistant):
         "battery",
         "dynamic",
         "solar",
+        "trading",
         "phases",
         "units",
         "logging",

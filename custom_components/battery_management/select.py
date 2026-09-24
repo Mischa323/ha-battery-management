@@ -7,7 +7,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import DOMAIN
+from .const import DOMAIN, TRADE_MODES
 from .coordinator import BatteryCoordinator
 
 
@@ -15,7 +15,9 @@ async def async_setup_entry(
     hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
 ) -> None:
     coordinator: BatteryCoordinator = hass.data[DOMAIN][entry.entry_id]
-    async_add_entities([ModeSelect(coordinator, entry)])
+    async_add_entities(
+        [ModeSelect(coordinator, entry), TradeModeSelect(coordinator, entry)]
+    )
 
 
 class ModeSelect(SelectEntity):
@@ -54,3 +56,38 @@ class ModeSelect(SelectEntity):
 
     async def async_select_option(self, option: str) -> None:
         await self.coordinator.async_set_mode(option)
+
+
+class TradeModeSelect(SelectEntity):
+    """Selling to the grid: off, shadow, or on.
+
+    Shadow decides exactly as On would and records it - what it would have
+    sold, when, and for how much - without commanding a single watt. That is
+    how a site finds out whether its packs would have made money before it
+    lets them try.
+    """
+
+    _attr_has_entity_name = True
+    _attr_should_poll = False
+    _attr_icon = "mdi:swap-vertical-bold"
+    _attr_translation_key = "trade_mode"
+    _attr_options = TRADE_MODES
+
+    def __init__(self, coordinator: BatteryCoordinator, entry: ConfigEntry) -> None:
+        self.coordinator = coordinator
+        self._attr_unique_id = f"{entry.entry_id}_trade_mode"
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, entry.entry_id)},
+            name="Battery Management",
+            manufacturer="Battery Management",
+        )
+
+    async def async_added_to_hass(self) -> None:
+        self.coordinator.async_add_listener(self.async_write_ha_state)
+
+    @property
+    def current_option(self) -> str:
+        return self.coordinator.trade_mode
+
+    async def async_select_option(self, option: str) -> None:
+        await self.coordinator.async_set_trade_mode(option)

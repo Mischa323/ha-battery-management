@@ -93,6 +93,7 @@
           "battery": "Accu's",
           "dynamic": "Dynamisch tarief",
           "solar": "Zon",
+          "trading": "Slim handelen",
           "phases": "Zekeringbewaking per fase",
           "units": "Entiteiten van de accu-units",
           "logging": "Logboek en vangnetten",
@@ -169,6 +170,28 @@
           "solar_forecast_sensors": "Kies elk dakvlak; ze worden opgeteld. Liefst de 'resterend vandaag'-varianten - een dagtotaal klopt om 02:00 en niet om 17:00.",
           "solar_produced_sensor": "Alleen nodig als hierboven een dagtotaal staat: dit wordt eraf getrokken, zodat overblijft wat er nog komt.",
           "solar_forecast_max": "Alleen gebruikt zolang de laadduur ongemeten is, want zonder capaciteit is kWh niet in procenten om te rekenen. 0 negeert de verwachting."
+        }
+      },
+      "trading": {
+        "title": "Slim handelen",
+        "description": "Wat terugleveren oplevert en wat het de accu's kost. Beide vul je zelf in: de vergoeding volgt uit je contract, de accukosten uit wat je betaald hebt.\n\nAanzetten doe je niet hier maar met de keuzelijst \"Slim handelen\" op de apparaatpagina: Uit, Schaduw (alleen bijhouden wat hij zou verkopen) of Aan. Hoe ver hij mag verkopen stel je in met de schuif \"Verkopen tot: minstens\".",
+        "data": {
+          "feed_in_basis": "Waar de terugleververgoeding op gebaseerd is",
+          "feed_in_fixed": "Vaste vergoeding (€/kWh)",
+          "feed_in_correction": "Correctie op de vergoeding (€/kWh)",
+          "saldering_until": "Saldering geldt tot",
+          "battery_price": "Aanschafprijs van de accu's (€)",
+          "battery_cycles": "Aantal laadcycli",
+          "trade_margin": "Minimale winst per verkochte kWh (€)"
+        },
+        "data_description": {
+          "feed_in_basis": "Een dynamisch contract betaalt per kwartier, dus dit is een rekenregel en geen bedrag. Kies wat je leverancier betaalt: de kale marktprijs, de marktprijs inclusief btw, of een vast bedrag. Weet je het niet zeker, laat dan Marktprijs staan: dat is de voorzichtige keuze, hij verkoopt dan eerder te weinig dan te veel.",
+          "feed_in_fixed": "Alleen gebruikt als de basis Vast bedrag is.",
+          "feed_in_correction": "Komt bovenop de basis. Rekent je leverancier terugleverkosten, vul die dan negatief in, bijvoorbeeld -0,02.",
+          "saldering_until": "De eerste dag waarop saldering niet meer geldt, wettelijk 1 januari 2027. Tot die datum wordt de energiebelasting op een teruggeleverde kWh verrekend, en telt die mee in wat terugleveren oplevert. Daarna niet meer, en stopt verkopen vanzelf met lonen.",
+          "battery_price": "Wat alle accu's samen gekost hebben. Samen met het aantal cycli en de gemeten capaciteit wordt daaruit de slijtage per kWh berekend. Leeg (0) betekent: slijtage onbekend, en dan verkoopt hij niet - een geschatte slijtage zou de accu's óf opgebruiken óf nooit laten verkopen.",
+          "battery_cycles": "Het aantal volledige laadcycli uit de specificaties van de accu's.",
+          "trade_margin": "Wat een verkochte kWh minstens moet opleveren na het terugkopen (inclusief rendementsverlies) en de slijtage. Hoger is voorzichtiger."
         }
       },
       "phases": {
@@ -306,6 +329,7 @@
           "solar_headroom": "Koopt niet in, de zon past er nog in",
           "cheaper_tomorrow": "Houdt in, er komt een goedkopere dag aan",
           "cheaper_later": "Houdt in, later vandaag goedkoper",
+          "trade_sell": "Verkoopt aan het net, het loont",
           "phase_limit": "Afgeremd door de hoofdzekering",
           "phase_detect": "Meten welke accu op welke fase zit",
           "recovering": "Eerst terugladen voordat hij weer ontlaadt",
@@ -353,6 +377,28 @@
       },
       "gas_untaxed_price": {
         "name": "Gasprijs zonder energiebelasting"
+      },
+      "savings_today": {
+        "name": "Besparing vandaag"
+      },
+      "savings_this_month": {
+        "name": "Besparing deze maand"
+      },
+      "savings_total": {
+        "name": "Besparing sinds start"
+      },
+      "payback": {
+        "name": "Terugverdientijd"
+      },
+      "trade_status": {
+        "name": "Slim handelen status",
+        "state": {
+          "off": "Uit",
+          "not_dynamic": "Niet in Dynamisch",
+          "selling": "Verkoopt",
+          "would_sell": "Zou verkopen (schaduw)",
+          "waiting": "Wacht op een piek die loont"
+        }
       }
     },
     "select": {
@@ -365,6 +411,14 @@
           "pause": "Pauze",
           "dynamic": "Dynamisch tarief",
           "external": "Extern plan (EMHASS)"
+        }
+      },
+      "trade_mode": {
+        "name": "Slim handelen",
+        "state": {
+          "off": "Uit",
+          "shadow": "Schaduw (alleen bijhouden)",
+          "on": "Aan"
         }
       }
     },
@@ -388,6 +442,9 @@
       },
       "buy_ceiling_max": {
         "name": "Inkopen tot: hoogstens"
+      },
+      "sell_floor": {
+        "name": "Verkopen tot: minstens"
       }
     },
     "button": {
@@ -422,6 +479,13 @@
       "options": {
         "published": "Zoals de leverancier ze publiceert (per kwartier als die dat doet)",
         "hourly": "Per uur"
+      }
+    },
+    "feed_in_basis": {
+      "options": {
+        "market": "Marktprijs",
+        "market_vat": "Marktprijs inclusief btw",
+        "fixed": "Vast bedrag per kWh"
       }
     }
   }

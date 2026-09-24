@@ -93,6 +93,14 @@ MAX_PRICE_AGE = 36 * 3600
 CONF_CHEAP_HOURS = "cheap_hours"                # hours per day to grid-charge on
 CONF_CHARGE_BELOW_SOC = "charge_below_soc"      # buy up to here while unmeasured
 CONF_FILL_BEFORE_DEAR_DAY = "fill_before_dear_day"  # buy to the max before a dearer day
+# selling to the grid - see trading.py
+CONF_FEED_IN_BASIS = "feed_in_basis"            # market / market_vat / fixed
+CONF_FEED_IN_FIXED = "feed_in_fixed"            # EUR/kWh, when the basis is fixed
+CONF_FEED_IN_CORRECTION = "feed_in_correction"  # EUR/kWh on top; negative = a fee
+CONF_SALDERING_UNTIL = "saldering_until"        # the first day it no longer holds
+CONF_BATTERY_PRICE = "battery_price"            # EUR, all packs together
+CONF_BATTERY_CYCLES = "battery_cycles"          # rated full cycles
+CONF_TRADE_MARGIN = "trade_margin"              # EUR/kWh a sale must clear
 # The reference a rank does not have. "The cheapest three hours of what is
 # left" always finds three, however dear they are - at 22:00 with only today
 # published it returned the most expensive hour of the day and the dashboard
@@ -136,6 +144,24 @@ DEFAULT_CHARGE_BELOW_SOC = 40
 #: setting somebody chose, so it is opted into rather than arriving with an
 #: update. It never overrides the solar ceiling - see `_buy_ceiling`.
 DEFAULT_FILL_BEFORE_DEAR_DAY = False
+#: The conservative basis: the bare market price. A contract that pays more
+#: than that only makes selling look better, so a site that has not said
+#: otherwise sells less, never more.
+DEFAULT_FEED_IN_BASIS = "market"
+DEFAULT_FEED_IN_FIXED = 0.0
+DEFAULT_FEED_IN_CORRECTION = 0.0
+#: The Dutch netting scheme ends on 1 January 2027. A setting rather than a
+#: constant because a date set in law can still move, and because the owner
+#: should be able to see the day the arithmetic changes.
+DEFAULT_SALDERING_UNTIL = "2027-01-01"
+#: No price, no wear, no selling: a guessed wear would either sell the packs to
+#: death or never sell at all, so it waits to be told.
+DEFAULT_BATTERY_PRICE = 0.0
+DEFAULT_BATTERY_CYCLES = 6000
+DEFAULT_TRADE_MARGIN = 0.05
+#: How far selling may empty the packs. Its own line, beside the SoC reserve -
+#: the higher of the two wins.
+DEFAULT_SELL_FLOOR = 30
 DEFAULT_SOLAR_FORECAST_MAX = 0        # 0 = ignore the forecast entirely
 # Rank the cheap hours over a rolling window rather than everything published:
 # with tomorrow already known, a 48 h ranking can decide nothing today is worth
@@ -153,6 +179,12 @@ DEFAULT_FAST_CHARGE_HOLD = True
 # than as a separate clamp - so the SoC weighting tapers off towards it instead
 # of falling off a cliff. 0 = off, which is the default: nothing is mandatory.
 DEFAULT_SOC_RESERVE = 0
+
+#: Selling to the grid: off, only recording what it would do, or doing it.
+TRADE_OFF = "off"
+TRADE_SHADOW = "shadow"
+TRADE_ON = "on"
+TRADE_MODES = [TRADE_OFF, TRADE_SHADOW, TRADE_ON]
 
 # --- Recovering after being emptied ------------------------------------------
 # The floor is one threshold, so it is both where discharging stops and where it
@@ -279,6 +311,7 @@ POLICY_BUY_WINDOW = "buy_window"              # a cheap hour: not selling what w
 POLICY_SOLAR_HEADROOM = "solar_headroom"      # not buying, the sun still fits
 POLICY_CHEAPER_TOMORROW = "cheaper_tomorrow"  # holding back, a cheaper day is coming
 POLICY_CHEAPER_LATER = "cheaper_later"        # holding back, a cheaper window today
+POLICY_TRADE_SELL = "trade_sell"              # selling to the grid, it pays
 POLICY_EXTERNAL = "external_plan"             # following someone else's plan
 POLICY_EXTERNAL_STALE = "external_stale"      # plan went quiet, regulating ourselves
 POLICY_DYNAMIC_NO_PRICES = "dynamic_no_prices"  # dynamic, but the sensor is mute
@@ -302,6 +335,7 @@ POLICIES = [
     POLICY_SOLAR_HEADROOM,
     POLICY_CHEAPER_TOMORROW,
     POLICY_CHEAPER_LATER,
+    POLICY_TRADE_SELL,
     POLICY_EXTERNAL,
     POLICY_EXTERNAL_STALE,
     POLICY_DYNAMIC_NO_PRICES,
@@ -521,6 +555,45 @@ SOLAR_CAPTURE_ROOM_MARGIN = 3.0
 #: than the reporting step it protects against is not worth having, and much
 #: larger would start leaving real room unbought.
 BUY_CEILING_BAND = 2.0
+
+#: What the packs are worth, counted beside what they charged: the money
+#: saved against the same house without them - valued with saldering and
+#: without, because the scheme ends and a payback time should not assume it
+#: lasts - what selling earned over its refill and wear, what shadow would
+#: have, and how many hours were counted at all, so an average is never taken
+#: over time nobody was measuring.
+MONEY_FIELDS = (
+    "saved_eur",
+    "saved_after_eur",
+    # on the footing of the tick it was counted in - what has really been
+    # saved so far, which a payback time subtracts from the price
+    "saved_actual_eur",
+    "traded_kwh",
+    "traded_eur",
+    "shadow_kwh",
+    "shadow_eur",
+    "counted_h",
+)
+
+#: Below this many counted days a payback time is shown but marked as not yet
+#: to be relied on: a few weeks of September say little about a year.
+PAYBACK_RELIABLE_DAYS = 30
+#: and below this it is not shown at all - one day is an anecdote
+PAYBACK_MIN_HOURS = 24.0
+
+#: what the trade status sensor can say
+TRADE_STATE_OFF = "off"
+TRADE_STATE_NOT_DYNAMIC = "not_dynamic"
+TRADE_STATE_SELLING = "selling"
+TRADE_STATE_WOULD_SELL = "would_sell"
+TRADE_STATE_WAITING = "waiting"
+TRADE_STATES = [
+    TRADE_STATE_OFF,
+    TRADE_STATE_NOT_DYNAMIC,
+    TRADE_STATE_SELLING,
+    TRADE_STATE_WOULD_SELL,
+    TRADE_STATE_WAITING,
+]
 
 PERIOD_HISTORY = {
     PERIOD_DAY: 62,

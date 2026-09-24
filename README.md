@@ -211,6 +211,7 @@ no manual resource step:
 | --- | --- |
 | **Battery Management Card** | The control panel: on/off, fast charge, state of charge per pack, and the price chart underneath. |
 | **Battery Management Prices** | Only the prices — current price large, today's bars, and the cheapest and dearest hour with their times. |
+| **Battery Management Trading** | Selling to the grid: Off / Shadow / On, whether it pays right now with the sum written out, what the packs have saved, and the payback time. See [Selling to the grid](#selling-to-the-grid). |
 
 ### Adding one
 
@@ -781,6 +782,9 @@ they never sit idle merely because they are inside a window.
 | **Dynamic tariff** | Grid-zero plus buying on the cheapest hours and saving the charge for the dearest. Only offered once a price sensor is configured. |
 | **External plan** | Executes a plan from elsewhere (EMHASS) through the `set_setpoint` service. Hands control back if no plan arrives. |
 
+A second select, **Smart trading**, sits beside it: Off, Shadow or On. It only
+acts in Dynamic tariff — see [Selling to the grid](#selling-to-the-grid).
+
 ### Numbers
 
 | Number | What it does |
@@ -788,6 +792,7 @@ they never sit idle merely because they are inside a window.
 | **SoC reserve** | Charge held back, in every mode. Raises each pack's *own* discharge floor rather than clamping the pair, so the split tapers towards it and a fuller pack carries the load alone. 0 = off. |
 | **Buy up to: at least** | Floor under the computed charge ceiling. Use it when the solar forecast is too gloomy to trust. |
 | **Buy up to: at most** | Cap on the computed charge ceiling. Use it when the forecast under-reads, which would otherwise let it buy more than needed. |
+| **Sell down to: at least** | How far selling to the grid may empty a pack. The reserve still applies underneath; the higher of the two wins. |
 
 The last two bound grid buying only. Charging from your own surplus is never
 capped — that would be throwing sun away.
@@ -811,6 +816,9 @@ capped — that would be throwing sun away.
 | **Price without energy tax** | This hour's all-in price less the energy tax — what Frank's app shows as *het dynamische deel*. The tax is the same every hour and billed apart, so the app leaves it out; point the Energy dashboard at this sensor to make the two agree. The tax is still paid, on the invoice. | not on the direct route |
 | **Gas price** | This gas day's all-in price per m³, from Frank. For the Energy dashboard's gas cost only — nothing here steers on gas. Set per gas day, so the same number all day. | not on the direct route, or Frank gave no gas price (the diagnostics say why under `gas_error`) |
 | **Gas price without energy tax** | The same less the energy tax, to agree with Frank's app. | as above |
+| **Savings today / this month / since start** | What the packs saved, in EUR, against the same house without them: the import they replaced at the all-in price, less the export they gave up at what your contract pays. Shown on the footing that applies today (with saldering until it ends); the attributes carry both, plus what selling earned (`traded_kwh`, `traded_eur`) and what shadow would have (`shadow_kwh`, `shadow_eur`). | never (nought until the first counted tick) |
+| **Payback time** | In how many years the packs pay for themselves on a dynamic contract **without** saldering: purchase price ÷ the yearly saving on that footing. The attributes add the same with saldering, `years_to_go` from today (saldering at its rate until it ends, then without, less what is already saved), the yearly savings and `counted_days`. `reliable` turns true after 30 counted days. | no purchase price, or less than a day counted |
+| **Smart trading status** | `selling`, `would_sell` (shadow), `waiting`, `off` or `not_dynamic`. The attributes carry the three prices it weighed — `export_value_eur_kwh`, `refill_eur_kwh`, `wear_eur_kwh` — the `margin_eur_kwh` they come to, and `why` it is not selling. | never |
 | **Plan** | Today's cheap and dear hours with their prices, plus the numbers the ceiling was computed from, all in attributes. Its `hours` attribute is the whole series, each slot carrying the `role` it belongs to — `cheap`, `dear` or `normal` — which is what the card's chart is drawn from. | never |
 | **Fuse headroom** | Amps still available on **the busiest single leg** — not a total, and not per leg. It is the one that would trip first; `tightest_phase` in the attributes says which. Measured against the usable limit (the fuse less your margin), so the margin is still there underneath. Per-leg detail — `amps` through the fuse, `amps_without_us`, headroom, and which packs sit on it — is in the attributes. | no per-phase sensors configured |
 | **Phase detection** | Whether it knows which pack is on which leg, and how it found out. The `probes` attribute holds the measurements behind each placement. | never |
@@ -846,6 +854,7 @@ capped — that would be throwing sun away.
 | Holding back, cheaper later today | A cheaper window follows the coming peak; buying stops at the floor until then |
 | Not buying, the sun still fits | What is coming free would not fit if it bought now |
 | Dynamic, but no prices available | The mode is on but the price sensor is mute |
+| Selling to the grid, it pays | Smart trading is On and this slot earns more than the refill and the wear |
 | Following an external plan | EMHASS or similar is driving |
 | External plan went quiet | It stopped arriving; back to following the meter |
 | Fast charging / Charged, keeping full | The override is running |
@@ -1141,6 +1150,76 @@ own, so they can be graphed.
 The plan deliberately does **not** predict the setpoint. That depends on the
 house minute by minute, and a graph claiming otherwise would look authoritative
 and be wrong.
+
+## Selling to the grid
+
+Off by default, and it stays off until you fill in what the packs cost. With
+**Smart trading** on, Dynamic tariff also sells: in a slot where a kilowatt
+hour sent back earns more than buying it back later costs, it discharges the
+packs at full power — within the fuse — down to **Sell down to: at least**.
+
+Per slot it weighs three prices, all in *Configure → Smart trading*:
+
+| | Where it comes from |
+| --- | --- |
+| **What it earns** | Your contract's rule: the bare market price, the market price with VAT, or a fixed rate, plus a correction (a feed-in fee goes in negative). While saldering lasts the energy tax of that slot is added, because it is netted. |
+| **What refilling costs** | The mean of the cheapest hours still ahead — the same hours buying ranks — divided by 0.88 for the round trip. |
+| **What it wears off** | The packs' purchase price ÷ (rated cycles × the measured capacity). EUR 5000 over 6000 cycles of 28 kWh is 3 cents a kWh. |
+
+It sells when *earns − refill ÷ 0.88 − wear* is at least the **minimum
+profit** (5 cents by default), and every pack is more than two points above
+its sell line. It then carries on to the line and does not restart in that
+slot. It never sells in an hour it is buying in, and only in Dynamic tariff.
+
+**Saldering.** Until the date in the settings (1 January 2027 by law) the
+energy tax comes back on everything fed in, which roughly doubles what a peak
+earns. After that date selling stops paying on most evenings by itself — the
+same peak that earned 18 cents a kWh earns 2. Nothing needs switching off.
+
+**Shadow first.** In Shadow it decides exactly as On would and commands
+nothing; what it would have sold is counted in `shadow_kwh` and `shadow_eur`
+on the savings sensors. Shadow never empties a pack, so it keeps its own
+account of what it has "sold" and stops where the real packs would have, until
+the next buy fills them again. Dry run with trading On counts as shadow too.
+
+**What was saved.** The savings sensors count every tick, whoever is driving:
+the same house without packs would have drawn *meter + packs*, and the
+difference in what the two cost is the saving. Pack power is the measured
+battery power sensor where one is configured, the command read back otherwise.
+Both footings are kept — with saldering and without — so a payback time can be
+read on the one that will actually apply. A day can come out negative: sun
+stored costs the export it replaced, and is only repaid when it is used.
+
+Every tick's verdict is in the trace (`export_value_eur_kwh`,
+`refill_eur_kwh`, `sell_margin_eur_kwh`, `trade_why`) and in the diagnostics
+under `trading`. `trade_why` says what stopped it: `no_battery_price`,
+`no_capacity` (measure the full-charge time), `no_export_value` (a third-party
+price sensor has no market price — only a fixed rate works there), or
+`margin_too_small`.
+
+### The payback time
+
+**Payback time** answers the question as asked: with a dynamic contract, and
+once feeding back no longer nets, in how many years do the packs repay what
+they cost? It is the purchase price over the yearly saving *without*
+saldering, where the yearly saving is what has been saved per counted hour,
+times a year. With saldering sits beside it, and `years_to_go` is the one that
+will actually come true from today: saldering's rate until the end date,
+the rate without it after, less what is already saved.
+
+It extrapolates, so read it with the measurement: a few weeks in September say
+little about a winter, when there is less sun to shift and the peaks differ.
+The card says how many days it rests on, and calls anything under a month too
+short to build on.
+
+### The trading dashboard
+
+The **Battery Management Trading** card finds its own entities, so adding it
+needs no YAML. For a whole view — the card, savings per day and per month as
+bars, and when it sold beside the price — paste
+[`dashboards/slim-handelen.yaml`](dashboards/slim-handelen.yaml) into the raw
+configuration editor. The graphs name entity ids; on a Dutch install check them
+under *Settings → Entities* first, as the file explains.
 
 ## External plan (EMHASS)
 

@@ -36,7 +36,18 @@ from .phases import (
 )
 from .suppliers import FETCHERS, SOURCE_ENTITY, SOURCE_NONE
 from .trace import Trace
+from .trading import (
+    FeedIn,
+    export_value,
+    grid_cost,
+    payback_remaining,
+    sell_margin,
+    simple_payback,
+    wear_per_kwh,
+    yearly,
+)
 from .prices import (
+    cheap_mean,
     cheapest_slots,
     cheaper_beyond,
     dearest_slots,
@@ -81,6 +92,13 @@ from .const import (
     CONF_TRACE_DAYS,
     CONF_FAST_CHARGE_HOLD,
     CONF_FILL_BEFORE_DEAR_DAY,
+    CONF_BATTERY_CYCLES,
+    CONF_BATTERY_PRICE,
+    CONF_FEED_IN_BASIS,
+    CONF_FEED_IN_CORRECTION,
+    CONF_FEED_IN_FIXED,
+    CONF_SALDERING_UNTIL,
+    CONF_TRADE_MARGIN,
     CONF_BATTERY_POWER_SENSOR,
     CONF_CHARGE_BELOW_SOC,
     CONF_CHEAP_HOURS,
@@ -105,6 +123,18 @@ from .const import (
     DEFAULT_EXTERNAL_TIMEOUT,
     DEFAULT_FAST_CHARGE_HOLD,
     DEFAULT_FILL_BEFORE_DEAR_DAY,
+    DEFAULT_BATTERY_CYCLES,
+    DEFAULT_BATTERY_PRICE,
+    DEFAULT_FEED_IN_BASIS,
+    DEFAULT_FEED_IN_CORRECTION,
+    DEFAULT_FEED_IN_FIXED,
+    DEFAULT_SALDERING_UNTIL,
+    DEFAULT_SELL_FLOOR,
+    DEFAULT_TRADE_MARGIN,
+    TRADE_MODES,
+    TRADE_OFF,
+    TRADE_ON,
+    TRADE_SHADOW,
     DEFAULT_CHARGE_BELOW_SOC,
     DEFAULT_CHEAP_HOURS,
     DEFAULT_PRICE_MARGIN,
@@ -145,6 +175,14 @@ from .const import (
     FLOW_DISCHARGE,
     MAX_PRICE_AGE,
     MAX_ENERGY_GAP_INTERVALS,
+    MONEY_FIELDS,
+    PAYBACK_MIN_HOURS,
+    PAYBACK_RELIABLE_DAYS,
+    TRADE_STATE_NOT_DYNAMIC,
+    TRADE_STATE_OFF,
+    TRADE_STATE_SELLING,
+    TRADE_STATE_WAITING,
+    TRADE_STATE_WOULD_SELL,
     PERIOD_DAY,
     PERIOD_HISTORY,
     BUY_CEILING_BAND,
@@ -171,6 +209,7 @@ from .const import (
     POLICY_DISABLED,
     POLICY_BUY_WINDOW,
     POLICY_CHEAPER_LATER,
+    POLICY_TRADE_SELL,
     POLICY_CHEAPER_TOMORROW,
     POLICY_DYNAMIC_CHARGE,
     POLICY_SOLAR_HEADROOM,
@@ -339,6 +378,14 @@ class UnitStatus:
     flow: str | None = None
 
 
+def _parse_day(value, fallback: str) -> date:
+    """A date from settings, or the fallback when it is missing or garbled."""
+    try:
+        return date.fromisoformat(str(value)) if value else date.fromisoformat(fallback)
+    except ValueError:
+        return date.fromisoformat(fallback)
+
+
 class BatteryCoordinator:
     """Runs the periodic control loop and holds shared state."""
 
@@ -375,6 +422,26 @@ class BatteryCoordinator:
         )
         self._full_charge_minutes: float = float(
             data.get(CONF_FULL_CHARGE_MINUTES, DEFAULT_FULL_CHARGE_MINUTES)
+        )
+        # selling to the grid: the owner's contract and the owner's packs
+        self._feed_in = FeedIn(
+            basis=str(data.get(CONF_FEED_IN_BASIS) or DEFAULT_FEED_IN_BASIS),
+            fixed=float(data.get(CONF_FEED_IN_FIXED, DEFAULT_FEED_IN_FIXED)),
+            correction=float(
+                data.get(CONF_FEED_IN_CORRECTION, DEFAULT_FEED_IN_CORRECTION)
+            ),
+        )
+        self._saldering_until: date = _parse_day(
+            data.get(CONF_SALDERING_UNTIL), DEFAULT_SALDERING_UNTIL
+        )
+        self._battery_price: float = float(
+            data.get(CONF_BATTERY_PRICE, DEFAULT_BATTERY_PRICE)
+        )
+        self._battery_cycles: float = float(
+            data.get(CONF_BATTERY_CYCLES, DEFAULT_BATTERY_CYCLES)
+        )
+        self._trade_margin: float = float(
+            data.get(CONF_TRADE_MARGIN, DEFAULT_TRADE_MARGIN)
         )
         self._price_sensor: str | None = data.get(CONF_PRICE_SENSOR) or None
         self._price_resolution: str = (
@@ -492,6 +559,11 @@ class BatteryCoordinator:
         self.status: str = "idle"           # idle | charging | discharging | fast_charge | off | degraded
         self.soc_reserve: float = float(DEFAULT_SOC_RESERVE)
         self.buy_ceiling_min: float = float(DEFAULT_BUY_CEILING_MIN)
+        #: Selling to the grid. Off unless asked for, and asked for on the
+        #: device page rather than in a settings form, so it can be tried in
+        #: shadow and switched off from a dashboard without a reload.
+        self.trade_mode: str = TRADE_OFF
+        self.sell_floor: float = float(DEFAULT_SELL_FLOOR)
         self.buy_ceiling_max: float = float(DEFAULT_BUY_CEILING_MAX)
         self.mode: str = DEFAULT_MODE
         self.active_policy: str = POLICY_DISABLED
@@ -533,10 +605,16 @@ class BatteryCoordinator:
                 # period already in progress when this counter arrived would
                 # otherwise close on a partial day and read as a bumper one.
                 "produced_room_wh": None,
+                **{field: 0.0 for field in MONEY_FIELDS},
                 "history": {},
             }
             for name in PERIODS
         }
+        #: the money figures since counting began, for a payback time; the
+        #: periods above are the same accumulation read shorter
+        self.money: dict[str, float] = {field: 0.0 for field in MONEY_FIELDS}
+        #: the local day the money was first counted on
+        self.money_since: str | None = None
         #: ticks since the production sensor last moved, and how many of them
         #: had room. The sensor steps every few minutes, so a step is shared
         #: out over the ticks it covers rather than credited to whichever tick
@@ -549,6 +627,14 @@ class BatteryCoordinator:
         #: when the counters were last advanced, so the elapsed time is
         #: measured rather than assumed - a tick can be late
         self._charged_at: float | None = None
+        #: the same for the money, which has its own reasons to skip a tick
+        self._money_at: float | None = None
+        #: what selling would have sent out this tick, for the shadow count
+        self._trade_sell_w: float = 0.0
+        #: energy shadow has "sold" since the packs last bought. Shadow never
+        #: empties a pack, so without this it would go on selling the same
+        #: kilowatt hours all evening and flatter itself by the peak's length.
+        self._shadow_sold_kwh: float = 0.0
         #: whether the packs are currently above the min-output floor. Starts
         #: idle, so a restart never opens with a command too small to hold.
         self._above_min_output: bool = False
@@ -572,6 +658,15 @@ class BatteryCoordinator:
         #: a pack resting on the line reads either side of it, and each dip
         #: would otherwise be a fresh purchase at full power.
         self._topped_up_slot: str | None = None
+        #: the same two latches for selling: the slot a sale started in, and
+        #: the one in which it reached its line and is not restarted
+        self._selling_slot: str | None = None
+        self._sold_out_slot: str | None = None
+        #: this tick's selling, real and shadow, for the trace and the counters
+        self.trade_selling: bool = False
+        self.trade_would_sell: bool = False
+        #: the numbers behind the last decision, None while not trading
+        self.last_trade_verdict: dict | None = None
         # which leg each unit sits on (1-based), and how we came to believe it
         self.unit_phase: dict[str, int | None] = {u.name: None for u in self._units}
         self.phase_detection: str = PHASE_DETECT_UNKNOWN
@@ -640,6 +735,8 @@ class BatteryCoordinator:
             "soc_reserve": self.soc_reserve,
             "buy_ceiling_min": self.buy_ceiling_min,
             "buy_ceiling_max": self.buy_ceiling_max,
+            "trade_mode": self.trade_mode,
+            "sell_floor": self.sell_floor,
             "dry_run": self.dry_run,
             "mode": self.mode,
             "recovering": dict(self.recovering),
@@ -661,10 +758,13 @@ class BatteryCoordinator:
                     "produced_wh": state["produced_wh"],
                     "produced_room_wh": state["produced_room_wh"],
                     "grid_wh": state["grid_wh"],
+                    **{field: state[field] for field in MONEY_FIELDS},
                     "history": dict(state["history"]),
                 }
                 for name, state in self.periods.items()
             },
+            "money": dict(self.money),
+            "money_since": self.money_since,
             # a record of hours that have gone, so a restart at noon does not
             # grey out the morning the chart is being consulted about
             "price_history": dict(self.price_history),
@@ -696,9 +796,13 @@ class BatteryCoordinator:
             self.dry_run = bool(stored["dry_run"])
         if stored and stored.get("mode") in self.available_modes:
             self.mode = stored["mode"]
-        for key in ("buy_ceiling_min", "buy_ceiling_max"):
+        for key in ("buy_ceiling_min", "buy_ceiling_max", "sell_floor"):
             if stored and stored.get(key) is not None:
                 setattr(self, key, float(stored[key]))
+        # restored like the other sliders, whether or not the coordinator was
+        # switched on: it is a choice the owner made, not runtime state
+        if stored and stored.get("trade_mode") in TRADE_MODES:
+            self.trade_mode = stored["trade_mode"]
         for name, count in (stored or {}).get("phase_attempts", {}).items():
             if name in self.phase_attempts:
                 self.phase_attempts[name] = int(count)
@@ -724,6 +828,11 @@ class BatteryCoordinator:
             if stored and stored.get(key) is not None:
                 setattr(self, key, float(stored[key]))
         self._restore_periods(stored)
+        for field, value in ((stored or {}).get("money") or {}).items():
+            if field in self.money and value is not None:
+                self.money[field] = float(value)
+        if stored and stored.get("money_since"):
+            self.money_since = str(stored["money_since"])
         if stored and stored.get("soc_reserve") is not None:
             # a user setting, not runtime state: restore it even when the
             # coordinator was switched off, and regardless of age
@@ -2035,6 +2144,129 @@ class BatteryCoordinator:
         self._buying_slot = key
         return True, POLICY_DYNAMIC_CHARGE
 
+    # -- selling to the grid -------------------------------------------------
+
+    def saldering_active(self) -> bool:
+        """Is the netting scheme still in force today?"""
+        return dt_util.as_local(dt_util.utcnow()).date() < self._saldering_until
+
+    def export_value_now(self, saldering: bool | None = None) -> float | None:
+        """What a kilowatt hour fed back earns in this slot, in EUR.
+
+        The energy tax is read per slot as the all-in price less the untaxed
+        one - both from the supplier - rather than as a fixed figure, because
+        it is exactly what is added back under saldering. None off the direct
+        route: a third-party sensor publishes one number and nothing is known
+        about its parts.
+        """
+        current = self.current_price()
+        untaxed = self._current_component("untaxed_prices")
+        tax = (
+            current["price"] - untaxed
+            if current is not None and untaxed is not None
+            else None
+        )
+        if saldering is None:
+            saldering = self.saldering_active()
+        return export_value(
+            self._feed_in, self._current_component("market_prices"), tax, saldering
+        )
+
+    def battery_wear(self) -> float | None:
+        """EUR per kWh through the packs, from what the owner paid for them."""
+        return wear_per_kwh(
+            self._battery_price, self._battery_cycles, self.usable_capacity_kwh()
+        )
+
+    def refill_price(self) -> float | None:
+        """What buying a sold kilowatt hour back is expected to cost.
+
+        The mean of the cheapest `cheap_hours` still ahead, which is exactly
+        how the buying ranks them - a sale is only worth what the purchase that
+        replaces it costs, and that purchase will be made there.
+        """
+        slots = self._price_forecast()
+        if not slots:
+            return None
+        now = dt_util.utcnow()
+        ahead = [s for s in slots_in_window(slots, now, PRICE_WINDOW_HOURS) if s.start > now]
+        return cheap_mean(ahead, self._cheap_hours)
+
+    def trade_verdict(self) -> dict:
+        """Every number behind "sell now or not", for the trace and the card.
+
+        `margin` is None whenever any input is unknown, and `why` says which.
+        """
+        verdict = {
+            "value": self.export_value_now(),
+            "refill": self.refill_price(),
+            "wear": self.battery_wear(),
+            "margin": None,
+            "saldering": self.saldering_active(),
+            "why": None,
+        }
+        # the owner's purchase price is the switch: until it is filled in, the
+        # cost of a cycle is unknown and nothing is ever sold
+        if self._battery_price <= 0:
+            verdict["why"] = "no_battery_price"
+            return verdict
+        for key, why in (
+            ("wear", "no_capacity"),
+            ("value", "no_export_value"),
+            ("refill", "no_refill_price"),
+        ):
+            if verdict[key] is None:
+                verdict["why"] = why
+                return verdict
+        verdict["margin"] = sell_margin(
+            verdict["value"], verdict["refill"], verdict["wear"]
+        )
+        if verdict["margin"] < self._trade_margin:
+            verdict["why"] = "margin_too_small"
+        return verdict
+
+    def _sell_line(self, unit: UnitState) -> float:
+        """How far selling may take this pack: the higher of its own floor
+        (limit and reserve) and the owner's sell floor."""
+        return max(self._discharge_floor(unit), self.sell_floor)
+
+    def _trade_should_sell(self, online: dict) -> bool:
+        """Sell to the grid this tick? Decided the same in shadow as when on.
+
+        Every pack must be above its sell line: selling stops as soon as one
+        reaches it rather than draining the fuller one further, which is the
+        careful reading of a floor. Started with more room than the band and
+        run to the line itself, then not restarted in that slot - the same
+        hysteresis as buying, for the same reason: a pack resting on a line
+        reads either side of it.
+        """
+        self.last_trade_verdict = None
+        if self.trade_mode == TRADE_OFF or self.mode != MODE_DYNAMIC or not online:
+            return False
+        slots = self._price_forecast()
+        current = slot_at(slots, dt_util.utcnow()) if slots else None
+        if current is None:
+            return False
+        verdict = self.last_trade_verdict = self.trade_verdict()
+        if verdict["why"] is not None:
+            return False
+        key = _slot_key(current)
+        if self._sold_out_slot == key:
+            return False
+        started = self._selling_slot == key
+        # shadow judges the packs as they would be had it really sold
+        drawn = 0.0
+        capacity = self.usable_capacity_kwh()
+        if self.trade_mode == TRADE_SHADOW and capacity:
+            drawn = self._shadow_sold_kwh / capacity * 100.0
+        room = min(s.soc - drawn - self._sell_line(s) for s in online.values())
+        if room <= (0.0 if started else BUY_CEILING_BAND):
+            if started:
+                self._sold_out_slot = key
+            return False
+        self._selling_slot = key
+        return True
+
     def minutes_to_full(self) -> int | None:
         """How long a fast charge would take from right now, in minutes.
 
@@ -2123,6 +2355,25 @@ class BatteryCoordinator:
             self.buy_ceiling_min = max(0.0, min(100.0, float(low)))
         if high is not None:
             self.buy_ceiling_max = max(0.0, min(100.0, float(high)))
+        await self._store.async_save(self._state_to_save())
+        self._notify()
+        if self.enabled:
+            await self._async_tick(dt_util.utcnow())
+
+    async def async_set_trade_mode(self, option: str) -> None:
+        """Off, shadow or on. Takes effect on the next tick."""
+        if option not in TRADE_MODES:
+            raise ValueError(f"unknown trade mode {option!r}")
+        self.trade_mode = option
+        self._selling_slot = self._sold_out_slot = None
+        await self._store.async_save(self._state_to_save())
+        self._notify()
+        if self.enabled:
+            await self._async_tick(dt_util.utcnow())
+
+    async def async_set_sell_floor(self, value: float) -> None:
+        """How far selling may empty the packs, in percent."""
+        self.sell_floor = max(0.0, min(100.0, float(value)))
         await self._store.async_save(self._state_to_save())
         self._notify()
         if self.enabled:
@@ -2460,6 +2711,28 @@ class BatteryCoordinator:
                     for name in PERIODS
                 },
                 "counts_charge_energy": self.counts_charge_energy,
+                # selling and savings: the settings, the last verdict and the
+                # money, so "why did it (not) sell" is answerable from a download
+                "trading": {
+                    "mode": self.trade_mode,
+                    "sell_floor": self.sell_floor,
+                    "feed_in": {
+                        "basis": self._feed_in.basis,
+                        "fixed": self._feed_in.fixed,
+                        "correction": self._feed_in.correction,
+                    },
+                    "saldering_until": self._saldering_until.isoformat(),
+                    "saldering": self.saldering_active(),
+                    "battery_price": self._battery_price,
+                    "battery_cycles": self._battery_cycles,
+                    "trade_margin": self._trade_margin,
+                    "wear_eur_kwh": self.battery_wear(),
+                    "last_verdict": self.last_trade_verdict,
+                    "selling": self.trade_selling,
+                    "would_sell": self.trade_would_sell,
+                    "shadow_sold_kwh": round(self._shadow_sold_kwh, 3),
+                },
+                "money": self.money_total_attributes(),
                 # the fuse protection, including the evidence behind each
                 # placement - a probe that guessed wrong is only findable here
                 "phase_protection": self.phase_report() if self.phase_protection else None,
@@ -2570,6 +2843,19 @@ class BatteryCoordinator:
             # publishes it; a third-party sensor gives one number and this
             # column stays empty.
             "market_price_eur_kwh": self.current_market_price(),
+            # selling: what was decided, and on what numbers. Written in shadow
+            # too - that column is the whole point of shadow.
+            "trade_mode": self.trade_mode,
+            "trade_selling": self.trade_selling,
+            "trade_would_sell": self.trade_would_sell,
+            "export_value_eur_kwh": (self.last_trade_verdict or {}).get("value"),
+            "refill_eur_kwh": (self.last_trade_verdict or {}).get("refill"),
+            "sell_margin_eur_kwh": (
+                None
+                if (self.last_trade_verdict or {}).get("margin") is None
+                else round(self.last_trade_verdict["margin"], 4)
+            ),
+            "trade_why": (self.last_trade_verdict or {}).get("why"),
             # cumulative kWh produced today, if a solar sensor is configured -
             # the diff between two rows is the only reading that can settle
             # "was that solar" without guessing from grid_w alone.
@@ -2722,7 +3008,9 @@ class BatteryCoordinator:
                 continue
             if entry.get("key"):
                 state["key"] = str(entry["key"])
-            for field in ("charged_wh", "grid_wh", "produced_wh", "produced_room_wh"):
+            for field in (
+                "charged_wh", "grid_wh", "produced_wh", "produced_room_wh", *MONEY_FIELDS
+            ):
                 if entry.get(field) is not None:
                     state[field] = float(entry[field])
             for key, figures in (entry.get("history") or {}).items():
@@ -2740,6 +3028,13 @@ class BatteryCoordinator:
                             None if figures.get("produced_room_kwh") is None
                             else float(figures["produced_room_kwh"])
                         ),
+                        # absent on days closed before the money was counted,
+                        # which then read as nought hours counted, not as
+                        # nought saved
+                        **{
+                            field: float(figures.get(field) or 0.0)
+                            for field in MONEY_FIELDS
+                        },
                     }
 
     def _roll_periods(self) -> None:
@@ -2778,6 +3073,7 @@ class BatteryCoordinator:
                         None if state["produced_room_wh"] is None
                         else round(state["produced_room_wh"] / 1000.0, 3)
                     ),
+                    **{field: round(state[field], 4) for field in MONEY_FIELDS},
                 }
                 for old in sorted(state["history"])[: -PERIOD_HISTORY[name]]:
                     del state["history"][old]
@@ -2786,6 +3082,8 @@ class BatteryCoordinator:
             state["grid_wh"] = 0.0
             state["produced_wh"] = 0.0
             state["produced_room_wh"] = 0.0
+            for field in MONEY_FIELDS:
+                state[field] = 0.0
 
     def period_started_at(self, name: str):
         """When the period in progress began, as local midnight.
@@ -2823,7 +3121,8 @@ class BatteryCoordinator:
         """
         return {
             key: {
-                **figures,
+                # the money rides on its own sensors; this dict is the energy
+                **{k: v for k, v in figures.items() if k not in MONEY_FIELDS},
                 "solar_kwh": round(
                     max(figures["charged_kwh"] - figures["grid_kwh"], 0.0), 3
                 ),
@@ -2965,6 +3264,209 @@ class BatteryCoordinator:
         for state in self.periods.values():
             state["charged_wh"] += total
             state["grid_wh"] += bought
+
+    def _accumulate_money(self, grid: float | None) -> None:
+        """What the packs saved this tick, and what selling earned.
+
+        Saved is a counterfactual on the meter: the same house without packs
+        would have drawn `grid + packs` (packs signed + discharging), and the
+        difference in what the two cost is the saving. Import is valued at the
+        all-in price, export at what the contract pays for it - twice, once
+        with the energy tax back under saldering and once without, so a
+        payback time can be read on either footing whatever today's is.
+
+        The pack power is the measured one where a sensor exists and the
+        command read back from the packs otherwise - whoever gave it, so a
+        shadow run is counted on the packs' real work too. Like the charge
+        counters it counts nothing rather than guess: no meter, no price, no
+        export value, no pack power, or a gap that was an outage.
+
+        The elapsed interval ran under the *previous* tick's command, so that
+        is the one the selling figures are credited to - which is why this
+        runs at the top of the tick, before a new decision is made.
+        """
+        # taken and cleared in one go: the decision further down this tick sets
+        # them again if it is reached, and a tick that returns early - switched
+        # off, fast charge, no meter - must not leave last tick's sale standing
+        selling, would_sell, sell_w = (
+            self.trade_selling, self.trade_would_sell, self._trade_sell_w
+        )
+        self.trade_selling = self.trade_would_sell = False
+        self._trade_sell_w = 0.0
+
+        now = time.time()
+        previous, self._money_at = self._money_at, now
+        if previous is None or grid is None:
+            return
+        elapsed = now - previous
+        if elapsed <= 0 or elapsed > self._interval * MAX_ENERGY_GAP_INTERVALS:
+            return
+        current = self.current_price()
+        packs = self._other_controller_power()
+        if current is None or packs is None:
+            return
+        values = {
+            "saved_eur": self.export_value_now(saldering=True),
+            "saved_after_eur": self.export_value_now(saldering=False),
+        }
+        if None in values.values():
+            return
+        hours = elapsed / 3600.0
+        price = current["price"]
+        without = grid + packs
+        figures = {
+            field: grid_cost(without, price, value, hours) - grid_cost(grid, price, value, hours)
+            for field, value in values.items()
+        }
+        figures["saved_actual_eur"] = figures[
+            "saved_eur" if self.saldering_active() else "saved_after_eur"
+        ]
+        figures["counted_h"] = hours
+        margin = (self.last_trade_verdict or {}).get("margin")
+        live = self.enabled and not self.dry_run
+        if margin is not None and selling and live:
+            # the export, not the pack output: whatever covered the house
+            # would have covered it under grid-zero too
+            kwh = max(-grid, 0.0) * hours / 1000.0
+            figures["traded_kwh"] = kwh
+            figures["traded_eur"] = kwh * margin
+        elif margin is not None and (would_sell or selling):
+            # what full output would have sent out past the house's own draw
+            kwh = max(sell_w - max(without, 0.0), 0.0) * hours / 1000.0
+            figures["shadow_kwh"] = kwh
+            figures["shadow_eur"] = kwh * margin
+            self._shadow_sold_kwh += kwh
+        if self.money_since is None:
+            self.money_since = dt_util.now().date().isoformat()
+        for field, amount in figures.items():
+            self.money[field] += amount
+            for state in self.periods.values():
+                state[field] += amount
+
+    def money_attributes(self, name: str) -> dict:
+        """One period's money, beside the total since counting began.
+
+        Built here rather than in `sensor.py` so its shape is pinned by the
+        stubbed run - see `period_attributes`.
+        """
+        state = self.periods[name]
+        return {
+            "period": name,
+            "key": state["key"],
+            **{field: round(state[field], 4) for field in MONEY_FIELDS},
+            "total": {field: round(value, 4) for field, value in self.money.items()},
+            "since": self.money_since,
+            "saldering": self.saldering_active(),
+            "history": {
+                key: {field: figures.get(field, 0.0) for field in MONEY_FIELDS}
+                for key, figures in sorted(state["history"].items())
+            },
+        }
+
+    def period_saved_eur(self, name: str) -> float:
+        """The saving on the footing that applies today."""
+        field = "saved_eur" if self.saldering_active() else "saved_after_eur"
+        return round(self.periods[name][field], 2)
+
+    def saved_total_eur(self) -> float:
+        """Everything saved since counting began, on today's footing."""
+        field = "saved_eur" if self.saldering_active() else "saved_after_eur"
+        return round(self.money[field], 2)
+
+    def payback(self) -> dict:
+        """How long the packs take to pay for themselves, three ways.
+
+        `years_without_saldering` is the owner's question - "in how many years
+        with a dynamic contract, once feeding back no longer nets" - as the
+        purchase price over the yearly saving on that footing. The same with
+        saldering beside it, and `years_to_go`: from today, with what has been
+        saved already taken off, saldering at its rate until it ends and the
+        rate without it after. All three extrapolate the hours counted to a
+        year, so a summer-only measurement flatters them; `reliable` says
+        whether a month has been counted yet.
+        """
+        counted = self.money["counted_h"]
+        per_year_with = yearly(self.money["saved_eur"], counted)
+        per_year_after = yearly(self.money["saved_after_eur"], counted)
+        today = dt_util.as_local(dt_util.utcnow()).date()
+        saldering_left = (self._saldering_until - today).days / 365.25
+        known = self._battery_price > 0 and counted >= PAYBACK_MIN_HOURS
+
+        def rounded(value):
+            return None if value is None else round(value, 1)
+
+        return {
+            "known": known,
+            "years_without_saldering": rounded(
+                simple_payback(self._battery_price, per_year_after)
+            ) if known else None,
+            "years_with_saldering": rounded(
+                simple_payback(self._battery_price, per_year_with)
+            ) if known else None,
+            "years_to_go": rounded(
+                payback_remaining(
+                    self._battery_price,
+                    self.money["saved_actual_eur"],
+                    per_year_with,
+                    per_year_after,
+                    saldering_left,
+                )
+            ) if known else None,
+            "yearly_saving_with_saldering_eur": (
+                None if per_year_with is None else round(per_year_with, 2)
+            ),
+            "yearly_saving_without_saldering_eur": (
+                None if per_year_after is None else round(per_year_after, 2)
+            ),
+            "saved_so_far_eur": round(self.money["saved_actual_eur"], 2),
+            "battery_price_eur": self._battery_price,
+            "counted_days": round(counted / 24.0, 1),
+            "reliable": counted / 24.0 >= PAYBACK_RELIABLE_DAYS,
+            "since": self.money_since,
+            "saldering_until": self._saldering_until.isoformat(),
+        }
+
+    def trade_state(self) -> str:
+        """One word for what selling is doing, for the card and for history."""
+        # switched off, nothing is decided at all - "waiting" would be a lie
+        if self.trade_mode == TRADE_OFF or not self.enabled:
+            return TRADE_STATE_OFF
+        if self.mode != MODE_DYNAMIC:
+            return TRADE_STATE_NOT_DYNAMIC
+        if self.trade_selling:
+            return TRADE_STATE_SELLING
+        if self.trade_would_sell:
+            return TRADE_STATE_WOULD_SELL
+        return TRADE_STATE_WAITING
+
+    def trade_attributes(self) -> dict:
+        """The numbers behind `trade_state`, rounded for reading."""
+        verdict = self.last_trade_verdict or {}
+
+        def cents(key):
+            value = verdict.get(key)
+            return None if value is None else round(value, 4)
+
+        return {
+            "trade_mode": self.trade_mode,
+            "export_value_eur_kwh": cents("value"),
+            "refill_eur_kwh": cents("refill"),
+            "wear_eur_kwh": cents("wear"),
+            "margin_eur_kwh": cents("margin"),
+            "min_margin_eur_kwh": self._trade_margin,
+            "why": verdict.get("why"),
+            "saldering": self.saldering_active(),
+            "saldering_until": self._saldering_until.isoformat(),
+            "sell_floor": self.sell_floor,
+        }
+
+    def money_total_attributes(self) -> dict:
+        return {
+            **{field: round(value, 4) for field, value in self.money.items()},
+            "since": self.money_since,
+            "saldering": self.saldering_active(),
+            "saldering_until": self._saldering_until.isoformat(),
+        }
 
     def _accumulate_solar(self) -> None:
         """Count what the panels made, beside what reached the packs.
@@ -3795,6 +4297,7 @@ class BatteryCoordinator:
             # the packs still charge while the kill-switch is off - native
             # self-consumption is doing it - and that energy is just as real
             self._accumulate_charge(self.last_grid_observed)
+            self._accumulate_money(self.last_grid_observed)
             self._notify()
             return
         try:
@@ -3867,6 +4370,7 @@ class BatteryCoordinator:
             # ---- NORMAL grid-zero control ----------------------------------
             grid = self._read_float(self._grid_sensor)
             self._accumulate_charge(grid)
+            self._accumulate_money(grid)
             if grid is None:
                 _LOGGER.debug(
                     "grid sensor %s unreadable; holding setpoint at %.0f W",
@@ -3974,6 +4478,23 @@ class BatteryCoordinator:
                     upper = min(upper, 0.0)
                     buy_window_policy = POLICY_BUY_WINDOW
 
+            # Selling is the mirror image of buying: a forced value, not a
+            # bound, because there is no deficit to regulate against. Never in
+            # an hour earmarked for buying, and decided in shadow exactly as
+            # when on - only the command is withheld.
+            trade_sell = (
+                not dynamic_charge
+                and buy_window_policy is None
+                and self._trade_should_sell(online)
+            )
+            if dynamic_charge:
+                # bought back: shadow's packs are as full as the real ones again
+                self._shadow_sold_kwh = 0.0
+            self.trade_selling = trade_sell and self.trade_mode == TRADE_ON
+            self.trade_would_sell = trade_sell and self.trade_mode == TRADE_SHADOW
+            self._trade_sell_w = float(upper) if trade_sell else 0.0
+            trade_policy = POLICY_TRADE_SELL if self.trade_selling else None
+
             external_sp, external_policy = (None, None)
             if self.mode == MODE_EXTERNAL:
                 external_sp, external_policy = self._external_target()
@@ -3986,6 +4507,9 @@ class BatteryCoordinator:
             sp_before, gain_used, sp_reason = self.setpoint, None, "integrate"
             if dynamic_charge:
                 sp, sp_reason = -maxchg, "dynamic_buy"
+            elif self.trade_selling:
+                # everything the packs and the fuse allow; the clamp still holds
+                sp, sp_reason = upper, "trade_sell"
             elif external_sp is not None:
                 # the plan proposes; the clamp below still disposes
                 sp, sp_reason = external_sp, "external_plan"
@@ -4013,6 +4537,7 @@ class BatteryCoordinator:
 
             self.active_policy = (
                 dynamic_policy
+                or trade_policy
                 or buy_window_policy
                 or external_policy
                 or phase_policy
