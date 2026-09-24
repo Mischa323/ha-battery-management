@@ -18,6 +18,7 @@ import pytest
 from custom_components.battery_management import coordinator as coordinator_module
 from custom_components.battery_management.const import (
     CONF_BATTERY_PRICE,
+    CONF_CHARGE_BELOW_SOC,
     CONF_CHEAP_HOURS,
     CONF_FEED_IN_BASIS,
     CONF_FEED_IN_FIXED,
@@ -27,6 +28,7 @@ from custom_components.battery_management.const import (
     FLOW_DISCHARGE,
     MODE_DYNAMIC,
     MODE_GRID_ZERO,
+    POLICY_DYNAMIC_CHARGE,
     POLICY_GRID_ZERO,
     POLICY_TRADE_SELL,
     TRADE_OFF,
@@ -215,6 +217,33 @@ async def test_a_third_party_price_sensor_sells_only_on_a_fixed_rate(trading):
     )
     await fixed.coordinator._async_tick(None)
     assert fixed.coordinator.trade_selling is True
+
+
+async def test_the_refill_is_bought_later_not_now(trading):
+    """A sold kWh cannot be bought back in the slot it was sold in, so the
+    current slot is no candidate for the refill even when it is the cheapest."""
+    system = trading(peak=0.12)
+
+    assert system.coordinator.refill_price() == pytest.approx(0.15)
+
+
+async def test_never_sells_in_an_hour_it_is_buying_in(trading):
+    """A fixed feed-in rate above the cheapest hour would make both look
+    right at once. Buying wins: it is what the cheap hour is for, and a pack
+    told to do both would do neither."""
+    system = trading(
+        soc=(35.0, 35.0),
+        peak=0.02,
+        **{CONF_FEED_IN_BASIS: "fixed", CONF_FEED_IN_FIXED: 0.40,
+           CONF_CHARGE_BELOW_SOC: 40},
+    )
+    system.coordinator.sell_floor = 0
+
+    await system.coordinator._async_tick(None)
+
+    assert system.coordinator.active_policy == POLICY_DYNAMIC_CHARGE
+    assert system.coordinator.setpoint == -7000
+    assert system.coordinator.trade_selling is False
 
 
 async def test_does_not_start_just_above_the_sell_floor(trading):
