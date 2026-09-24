@@ -377,6 +377,15 @@
       },
       "gas_untaxed_price": {
         "name": "Gas price without energy tax"
+      },
+      "savings_today": {
+        "name": "Savings today"
+      },
+      "savings_this_month": {
+        "name": "Savings this month"
+      },
+      "savings_total": {
+        "name": "Savings since start"
       }
     },
     "select": {

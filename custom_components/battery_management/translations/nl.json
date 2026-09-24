@@ -377,6 +377,15 @@
       },
       "gas_untaxed_price": {
         "name": "Gasprijs zonder energiebelasting"
+      },
+      "savings_today": {
+        "name": "Besparing vandaag"
+      },
+      "savings_this_month": {
+        "name": "Besparing deze maand"
+      },
+      "savings_total": {
+        "name": "Besparing sinds start"
       }
     },
     "select": {

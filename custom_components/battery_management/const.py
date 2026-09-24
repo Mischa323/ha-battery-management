@@ -556,6 +556,22 @@ SOLAR_CAPTURE_ROOM_MARGIN = 3.0
 #: larger would start leaving real room unbought.
 BUY_CEILING_BAND = 2.0
 
+#: What the packs are worth, counted beside what they charged: the money
+#: saved against the same house without them - valued with saldering and
+#: without, because the scheme ends and a payback time should not assume it
+#: lasts - what selling earned over its refill and wear, what shadow would
+#: have, and how many hours were counted at all, so an average is never taken
+#: over time nobody was measuring.
+MONEY_FIELDS = (
+    "saved_eur",
+    "saved_after_eur",
+    "traded_kwh",
+    "traded_eur",
+    "shadow_kwh",
+    "shadow_eur",
+    "counted_h",
+)
+
 PERIOD_HISTORY = {
     PERIOD_DAY: 62,
     PERIOD_WEEK: 53,

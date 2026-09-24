@@ -166,6 +166,7 @@ from .const import (
     FLOW_DISCHARGE,
     MAX_PRICE_AGE,
     MAX_ENERGY_GAP_INTERVALS,
+    MONEY_FIELDS,
     PERIOD_DAY,
     PERIOD_HISTORY,
     BUY_CEILING_BAND,
@@ -588,10 +589,16 @@ class BatteryCoordinator:
                 # period already in progress when this counter arrived would
                 # otherwise close on a partial day and read as a bumper one.
                 "produced_room_wh": None,
+                **{field: 0.0 for field in MONEY_FIELDS},
                 "history": {},
             }
             for name in PERIODS
         }
+        #: the money figures since counting began, for a payback time; the
+        #: periods above are the same accumulation read shorter
+        self.money: dict[str, float] = {field: 0.0 for field in MONEY_FIELDS}
+        #: the local day the money was first counted on
+        self.money_since: str | None = None
         #: ticks since the production sensor last moved, and how many of them
         #: had room. The sensor steps every few minutes, so a step is shared
         #: out over the ticks it covers rather than credited to whichever tick
@@ -604,6 +611,14 @@ class BatteryCoordinator:
         #: when the counters were last advanced, so the elapsed time is
         #: measured rather than assumed - a tick can be late
         self._charged_at: float | None = None
+        #: the same for the money, which has its own reasons to skip a tick
+        self._money_at: float | None = None
+        #: what selling would have sent out this tick, for the shadow count
+        self._trade_sell_w: float = 0.0
+        #: energy shadow has "sold" since the packs last bought. Shadow never
+        #: empties a pack, so without this it would go on selling the same
+        #: kilowatt hours all evening and flatter itself by the peak's length.
+        self._shadow_sold_kwh: float = 0.0
         #: whether the packs are currently above the min-output floor. Starts
         #: idle, so a restart never opens with a command too small to hold.
         self._above_min_output: bool = False
@@ -727,10 +742,13 @@ class BatteryCoordinator:
                     "produced_wh": state["produced_wh"],
                     "produced_room_wh": state["produced_room_wh"],
                     "grid_wh": state["grid_wh"],
+                    **{field: state[field] for field in MONEY_FIELDS},
                     "history": dict(state["history"]),
                 }
                 for name, state in self.periods.items()
             },
+            "money": dict(self.money),
+            "money_since": self.money_since,
             # a record of hours that have gone, so a restart at noon does not
             # grey out the morning the chart is being consulted about
             "price_history": dict(self.price_history),
@@ -794,6 +812,11 @@ class BatteryCoordinator:
             if stored and stored.get(key) is not None:
                 setattr(self, key, float(stored[key]))
         self._restore_periods(stored)
+        for field, value in ((stored or {}).get("money") or {}).items():
+            if field in self.money and value is not None:
+                self.money[field] = float(value)
+        if stored and stored.get("money_since"):
+            self.money_since = str(stored["money_since"])
         if stored and stored.get("soc_reserve") is not None:
             # a user setting, not runtime state: restore it even when the
             # coordinator was switched off, and regardless of age
@@ -2215,7 +2238,12 @@ class BatteryCoordinator:
         if self._sold_out_slot == key:
             return False
         started = self._selling_slot == key
-        room = min(s.soc - self._sell_line(s) for s in online.values())
+        # shadow judges the packs as they would be had it really sold
+        drawn = 0.0
+        capacity = self.usable_capacity_kwh()
+        if self.trade_mode == TRADE_SHADOW and capacity:
+            drawn = self._shadow_sold_kwh / capacity * 100.0
+        room = min(s.soc - drawn - self._sell_line(s) for s in online.values())
         if room <= (0.0 if started else BUY_CEILING_BAND):
             if started:
                 self._sold_out_slot = key
@@ -2942,7 +2970,9 @@ class BatteryCoordinator:
                 continue
             if entry.get("key"):
                 state["key"] = str(entry["key"])
-            for field in ("charged_wh", "grid_wh", "produced_wh", "produced_room_wh"):
+            for field in (
+                "charged_wh", "grid_wh", "produced_wh", "produced_room_wh", *MONEY_FIELDS
+            ):
                 if entry.get(field) is not None:
                     state[field] = float(entry[field])
             for key, figures in (entry.get("history") or {}).items():
@@ -2960,6 +2990,13 @@ class BatteryCoordinator:
                             None if figures.get("produced_room_kwh") is None
                             else float(figures["produced_room_kwh"])
                         ),
+                        # absent on days closed before the money was counted,
+                        # which then read as nought hours counted, not as
+                        # nought saved
+                        **{
+                            field: float(figures.get(field) or 0.0)
+                            for field in MONEY_FIELDS
+                        },
                     }
 
     def _roll_periods(self) -> None:
@@ -2998,6 +3035,7 @@ class BatteryCoordinator:
                         None if state["produced_room_wh"] is None
                         else round(state["produced_room_wh"] / 1000.0, 3)
                     ),
+                    **{field: round(state[field], 4) for field in MONEY_FIELDS},
                 }
                 for old in sorted(state["history"])[: -PERIOD_HISTORY[name]]:
                     del state["history"][old]
@@ -3006,6 +3044,8 @@ class BatteryCoordinator:
             state["grid_wh"] = 0.0
             state["produced_wh"] = 0.0
             state["produced_room_wh"] = 0.0
+            for field in MONEY_FIELDS:
+                state[field] = 0.0
 
     def period_started_at(self, name: str):
         """When the period in progress began, as local midnight.
@@ -3043,7 +3083,8 @@ class BatteryCoordinator:
         """
         return {
             key: {
-                **figures,
+                # the money rides on its own sensors; this dict is the energy
+                **{k: v for k, v in figures.items() if k not in MONEY_FIELDS},
                 "solar_kwh": round(
                     max(figures["charged_kwh"] - figures["grid_kwh"], 0.0), 3
                 ),
@@ -3185,6 +3226,110 @@ class BatteryCoordinator:
         for state in self.periods.values():
             state["charged_wh"] += total
             state["grid_wh"] += bought
+
+    def _accumulate_money(self, grid: float | None) -> None:
+        """What the packs saved this tick, and what selling earned.
+
+        Saved is a counterfactual on the meter: the same house without packs
+        would have drawn `grid + packs` (packs signed + discharging), and the
+        difference in what the two cost is the saving. Import is valued at the
+        all-in price, export at what the contract pays for it - twice, once
+        with the energy tax back under saldering and once without, so a
+        payback time can be read on either footing whatever today's is.
+
+        The pack power is the measured one where a sensor exists and the
+        command read back from the packs otherwise - whoever gave it, so a
+        shadow run is counted on the packs' real work too. Like the charge
+        counters it counts nothing rather than guess: no meter, no price, no
+        export value, no pack power, or a gap that was an outage.
+
+        The elapsed interval ran under the *previous* tick's command, so that
+        is the one the selling figures are credited to - which is why this
+        runs at the top of the tick, before a new decision is made.
+        """
+        now = time.time()
+        previous, self._money_at = self._money_at, now
+        if previous is None or grid is None:
+            return
+        elapsed = now - previous
+        if elapsed <= 0 or elapsed > self._interval * MAX_ENERGY_GAP_INTERVALS:
+            return
+        current = self.current_price()
+        packs = self._other_controller_power()
+        if current is None or packs is None:
+            return
+        values = {
+            "saved_eur": self.export_value_now(saldering=True),
+            "saved_after_eur": self.export_value_now(saldering=False),
+        }
+        if None in values.values():
+            return
+        hours = elapsed / 3600.0
+        price = current["price"]
+        without = grid + packs
+        figures = {
+            field: grid_cost(without, price, value, hours) - grid_cost(grid, price, value, hours)
+            for field, value in values.items()
+        }
+        figures["counted_h"] = hours
+        margin = (self.last_trade_verdict or {}).get("margin")
+        live = self.enabled and not self.dry_run
+        if margin is not None and self.trade_selling and live:
+            # the export, not the pack output: whatever covered the house
+            # would have covered it under grid-zero too
+            kwh = max(-grid, 0.0) * hours / 1000.0
+            figures["traded_kwh"] = kwh
+            figures["traded_eur"] = kwh * margin
+        elif margin is not None and (self.trade_would_sell or self.trade_selling):
+            # what full output would have sent out past the house's own draw
+            kwh = max(self._trade_sell_w - max(without, 0.0), 0.0) * hours / 1000.0
+            figures["shadow_kwh"] = kwh
+            figures["shadow_eur"] = kwh * margin
+            self._shadow_sold_kwh += kwh
+        if self.money_since is None:
+            self.money_since = dt_util.now().date().isoformat()
+        for field, amount in figures.items():
+            self.money[field] += amount
+            for state in self.periods.values():
+                state[field] += amount
+
+    def money_attributes(self, name: str) -> dict:
+        """One period's money, beside the total since counting began.
+
+        Built here rather than in `sensor.py` so its shape is pinned by the
+        stubbed run - see `period_attributes`.
+        """
+        state = self.periods[name]
+        return {
+            "period": name,
+            "key": state["key"],
+            **{field: round(state[field], 4) for field in MONEY_FIELDS},
+            "total": {field: round(value, 4) for field, value in self.money.items()},
+            "since": self.money_since,
+            "saldering": self.saldering_active(),
+            "history": {
+                key: {field: figures.get(field, 0.0) for field in MONEY_FIELDS}
+                for key, figures in sorted(state["history"].items())
+            },
+        }
+
+    def period_saved_eur(self, name: str) -> float:
+        """The saving on the footing that applies today."""
+        field = "saved_eur" if self.saldering_active() else "saved_after_eur"
+        return round(self.periods[name][field], 2)
+
+    def saved_total_eur(self) -> float:
+        """Everything saved since counting began, on today's footing."""
+        field = "saved_eur" if self.saldering_active() else "saved_after_eur"
+        return round(self.money[field], 2)
+
+    def money_total_attributes(self) -> dict:
+        return {
+            **{field: round(value, 4) for field, value in self.money.items()},
+            "since": self.money_since,
+            "saldering": self.saldering_active(),
+            "saldering_until": self._saldering_until.isoformat(),
+        }
 
     def _accumulate_solar(self) -> None:
         """Count what the panels made, beside what reached the packs.
@@ -4015,6 +4160,7 @@ class BatteryCoordinator:
             # the packs still charge while the kill-switch is off - native
             # self-consumption is doing it - and that energy is just as real
             self._accumulate_charge(self.last_grid_observed)
+            self._accumulate_money(self.last_grid_observed)
             self._notify()
             return
         try:
@@ -4087,6 +4233,7 @@ class BatteryCoordinator:
             # ---- NORMAL grid-zero control ----------------------------------
             grid = self._read_float(self._grid_sensor)
             self._accumulate_charge(grid)
+            self._accumulate_money(grid)
             if grid is None:
                 _LOGGER.debug(
                     "grid sensor %s unreadable; holding setpoint at %.0f W",
@@ -4203,8 +4350,12 @@ class BatteryCoordinator:
                 and buy_window_policy is None
                 and self._trade_should_sell(online)
             )
+            if dynamic_charge:
+                # bought back: shadow's packs are as full as the real ones again
+                self._shadow_sold_kwh = 0.0
             self.trade_selling = trade_sell and self.trade_mode == TRADE_ON
             self.trade_would_sell = trade_sell and self.trade_mode == TRADE_SHADOW
+            self._trade_sell_w = float(upper) if trade_sell else 0.0
             trade_policy = POLICY_TRADE_SELL if self.trade_selling else None
 
             external_sp, external_policy = (None, None)
