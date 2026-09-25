@@ -159,6 +159,15 @@ function render(overrides, config = {}) {
     text("trsum"));
   check("names saldering and its end", /Saldering tot 1 januari 2027/.test(text("trsal")), text("trsal"));
 
+  check("a refill partly from the sun says so, and is not called a purchase",
+    tradeSum({ ...TRADE, refill_eur_kwh: 0.17, refill_solar_share: 0.6 })
+      .includes("terugvullen €0,170 (60 % zon)"),
+    tradeSum({ ...TRADE, refill_eur_kwh: 0.17, refill_solar_share: 0.6 }));
+  check("without the sun it is a purchase",
+    tradeSum({ ...TRADE, refill_solar_share: 0 }).includes("terugkopen €0,190") &&
+    tradeSum({ ...TRADE, refill_solar_share: null }).includes("terugkopen €0,190"),
+    tradeSum({ ...TRADE, refill_solar_share: 0 }));
+
   const sum = tradeSum({ ...TRADE, export_value_eur_kwh: null });
   check("no sum when an input is missing", sum === null, sum);
 }

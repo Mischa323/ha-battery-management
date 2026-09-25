@@ -192,6 +192,7 @@ async def test_the_status_carries_the_three_prices(trading):
     assert attributes["min_margin_eur_kwh"] == 0.05
     assert set(attributes) == {
         "trade_mode", "export_value_eur_kwh", "refill_eur_kwh", "wear_eur_kwh",
+        "refill_grid_eur_kwh", "refill_solar_eur_kwh", "refill_solar_share",
         "margin_eur_kwh", "min_margin_eur_kwh", "why", "saldering",
         "saldering_until", "sell_floor",
     }

@@ -2317,8 +2317,15 @@ function tradeSum(attrs) {
     return null;
   }
   const margin = attrs.margin_eur_kwh;
+  // Where the refill comes from, when the sun has a share in it: "terugkopen"
+  // alone would read as a grid purchase at a price no grid hour has.
+  const share = attrs.refill_solar_share;
+  const refill =
+    share > 0
+      ? "terugvullen " + euro(r, 3) + " (" + Math.round(share * 100) + " % zon)"
+      : "terugkopen " + euro(r, 3);
   return (
-    "Opbrengst " + euro(v, 3) + " − terugkopen " + euro(r, 3) +
+    "Opbrengst " + euro(v, 3) + " − " + refill +
     " ÷ 0,88 − slijtage " + euro(w, 3) + " = " + euro(margin, 3) +
     " per kWh (drempel " + euro(attrs.min_margin_eur_kwh, 3) + ")"
   );

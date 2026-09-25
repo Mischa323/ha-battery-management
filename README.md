@@ -1164,13 +1164,29 @@ Per slot it weighs three prices, all in *Configure → Smart trading*:
 | | Where it comes from |
 | --- | --- |
 | **What it earns** | Your contract's rule: the bare market price, the market price with VAT, or a fixed rate, plus a correction (a feed-in fee goes in negative). While saldering lasts the energy tax of that slot is added, because it is netted. |
-| **What refilling costs** | The mean of the cheapest hours still ahead — the same hours buying ranks — divided by 0.88 for the round trip. |
+| **What refilling costs** | The mean of the cheapest hours still ahead — the same hours buying ranks — divided by 0.88 for the round trip. When the sun will refill the sale instead, that share costs what the sun would have earned going to the grid between 10:00 and 16:00 — see *Refilled by the sun* below. |
 | **What it wears off** | The packs' purchase price ÷ (rated cycles × the measured capacity). EUR 5000 over 6000 cycles of 28 kWh is 3 cents a kWh. |
 
 It sells when *earns − refill ÷ 0.88 − wear* is at least the **minimum
 profit** (5 cents by default), and every pack is more than two points above
 its sell line. It then carries on to the line and does not restart in that
 slot. It never sells in an hour it is buying in, and only in Dynamic tariff.
+
+**Refilled by the sun.** A kWh sold tonight need not come back from the
+grid: if tomorrow's sun fills the packs anyway, it comes back for what that sun
+would have earned exported — usually less than the cheapest grid hour. Only
+the sun *beyond* the room the packs already have by sunrise refills a sale:
+first the room there is now, then what the house draws from them overnight
+(measured, as a slow average of meter plus packs), and only then the slice the
+sale emptied. A sale before noon counts on the same day's sun, one after noon
+on the next day's. The sun into the packs is the forecast times the measured
+capture share (see *How much of the sun actually arrives*), so nothing is
+counted until that share has a few days behind it — the forecast alone is
+what the panels make, and most of it the house takes first. Tomorrow's
+forecast comes from *Configure → Solar → Solar forecast tomorrow*, or, left
+empty, from the `…_tomorrow` twins of the today sensors, which is how
+Forecast.Solar names them. The card writes the refill as *terugvullen €0,170
+(60 % zon)*; the trace has `refill_solar_share`.
 
 **Saldering.** Until the date in the settings (1 January 2027 by law) the
 energy tax comes back on everything fed in, which roughly doubles what a peak
