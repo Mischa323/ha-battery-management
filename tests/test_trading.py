@@ -154,3 +154,41 @@ def test_a_loss_during_saldering_just_passes_the_time():
 def test_never_repaid_after_saldering_is_none():
     assert payback_remaining(5000, 0, 200, 0, 0.25) is None
     assert payback_remaining(0, 0, 200, 500, 0.25) is None
+
+
+# -- refilling from the sun ----------------------------------------------------
+
+from custom_components.battery_management.trading import (  # noqa: E402
+    blended_refill,
+    solar_refill_share,
+)
+
+
+def test_the_sun_fills_the_room_there_already_was_first():
+    """5 kWh empty anyway, 3 kWh sold, 12 kWh of sun: all of the sale back."""
+    assert solar_refill_share(12.0, 5.0, 3.0) == 1.0
+
+
+def test_a_night_that_empties_the_packs_leaves_the_sale_to_the_grid():
+    """10 kWh of room by sunrise and 10 kWh of sun: none of it reaches the
+    slice the sale emptied."""
+    assert solar_refill_share(10.0, 10.0, 3.0) == 0.0
+
+
+def test_part_of_the_sale_can_come_back():
+    assert solar_refill_share(11.5, 10.0, 3.0) == pytest.approx(0.5)
+
+
+def test_no_sun_no_share():
+    assert solar_refill_share(None, 0.0, 3.0) == 0.0
+    assert solar_refill_share(0.0, 0.0, 3.0) == 0.0
+    assert solar_refill_share(10.0, 0.0, 0.0) == 0.0
+
+
+def test_the_refill_is_blended_by_that_share():
+    assert blended_refill(0.20, 0.14, 0.5) == pytest.approx(0.17)
+    assert blended_refill(0.20, 0.14, 0.0) == 0.20
+    assert blended_refill(0.20, 0.14, 1.0) == 0.14
+    assert blended_refill(None, 0.14, 1.0) == 0.14
+    assert blended_refill(None, 0.14, 0.5) is None
+    assert blended_refill(0.20, None, 0.7) == 0.20

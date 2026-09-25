@@ -118,6 +118,10 @@ DEFAULT_PRICE_MARGIN = 0.05
 CONF_SOLAR_FORECAST_SENSORS = "solar_forecast_sensors"
 # Optional: subtract what is already in, turning a day total into a remainder.
 CONF_SOLAR_PRODUCED_SENSOR = "solar_produced_sensor"
+#: tomorrow's forecast, for refilling a sale from the sun. Optional: left
+#: empty, the "today" sensors are looked for with "tomorrow" in their place,
+#: which is how Forecast.Solar names them.
+CONF_SOLAR_FORECAST_TOMORROW_SENSORS = "solar_forecast_tomorrow_sensors"
 CONF_SOLAR_FORECAST_SENSOR = "solar_forecast_sensor"   # single, kept for old entries
 CONF_SOLAR_FORECAST_MAX = "solar_forecast_max"  # fallback when capacity is unknown
 
@@ -594,6 +598,13 @@ TRADE_STATES = [
     TRADE_STATE_WOULD_SELL,
     TRADE_STATE_WAITING,
 ]
+
+#: The hours in which the sun is taken to refill the packs, local time. What a
+#: kilowatt hour of it would have earned exported is read over these, and a
+#: sale before `SOLAR_REFILL_NOON` is taken to be refilled by the same day's
+#: sun, one after it by the next day's.
+SOLAR_REFILL_HOURS = (10, 16)
+SOLAR_REFILL_NOON = 12
 
 PERIOD_HISTORY = {
     PERIOD_DAY: 62,

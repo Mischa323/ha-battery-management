@@ -164,12 +164,14 @@
         "data": {
           "solar_forecast_sensors": "Solar forecast sensors",
           "solar_produced_sensor": "Produced so far today",
-          "solar_forecast_max": "Fallback: skip buying above this many kWh expected"
+          "solar_forecast_max": "Fallback: skip buying above this many kWh expected",
+          "solar_forecast_tomorrow_sensors": "Solar forecast tomorrow (optional)"
         },
         "data_description": {
           "solar_forecast_sensors": "Pick every roof plane; they are summed. Prefer the 'remaining today' variants - a whole-day total is right at 02:00 and wrong at 17:00.",
           "solar_produced_sensor": "Only needed if the sensors above give a day total: this is subtracted, leaving what is still to come.",
-          "solar_forecast_max": "Only used while the charge time is unmeasured, since without a capacity there is no way to turn kWh into a percentage. 0 ignores the forecast."
+          "solar_forecast_max": "Only used while the charge time is unmeasured, since without a capacity there is no way to turn kWh into a percentage. 0 ignores the forecast.",
+          "solar_forecast_tomorrow_sensors": "Only used by smart trading, to count on tomorrow's sun refilling what was sold tonight. Leave empty to use the \"tomorrow\" twins of the sensors above, which is how Forecast.Solar names them."
         }
       },
       "trading": {

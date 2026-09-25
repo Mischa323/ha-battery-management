@@ -164,12 +164,14 @@
         "data": {
           "solar_forecast_sensors": "Zonverwachting-sensoren",
           "solar_produced_sensor": "Vandaag al geproduceerd",
-          "solar_forecast_max": "Terugval: niet inkopen boven zoveel kWh verwacht"
+          "solar_forecast_max": "Terugval: niet inkopen boven zoveel kWh verwacht",
+          "solar_forecast_tomorrow_sensors": "Zonverwachting morgen (optioneel)"
         },
         "data_description": {
           "solar_forecast_sensors": "Kies elk dakvlak; ze worden opgeteld. Liefst de 'resterend vandaag'-varianten - een dagtotaal klopt om 02:00 en niet om 17:00.",
           "solar_produced_sensor": "Alleen nodig als hierboven een dagtotaal staat: dit wordt eraf getrokken, zodat overblijft wat er nog komt.",
-          "solar_forecast_max": "Alleen gebruikt zolang de laadduur ongemeten is, want zonder capaciteit is kWh niet in procenten om te rekenen. 0 negeert de verwachting."
+          "solar_forecast_max": "Alleen gebruikt zolang de laadduur ongemeten is, want zonder capaciteit is kWh niet in procenten om te rekenen. 0 negeert de verwachting.",
+          "solar_forecast_tomorrow_sensors": "Alleen gebruikt door slim handelen, om te rekenen met de zon van morgen die terugvult wat vanavond verkocht is. Laat leeg om de \"tomorrow\"-varianten van de sensoren hierboven te gebruiken; zo noemt Forecast.Solar ze."
         }
       },
       "trading": {

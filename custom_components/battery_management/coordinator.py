@@ -38,6 +38,8 @@ from .suppliers import FETCHERS, SOURCE_ENTITY, SOURCE_NONE
 from .trace import Trace
 from .trading import (
     FeedIn,
+    blended_refill,
+    solar_refill_share,
     export_value,
     grid_cost,
     payback_remaining,
@@ -176,6 +178,9 @@ from .const import (
     MAX_PRICE_AGE,
     MAX_ENERGY_GAP_INTERVALS,
     MONEY_FIELDS,
+    CONF_SOLAR_FORECAST_TOMORROW_SENSORS,
+    SOLAR_REFILL_HOURS,
+    SOLAR_REFILL_NOON,
     PAYBACK_MIN_HOURS,
     PAYBACK_RELIABLE_DAYS,
     TRADE_STATE_NOT_DYNAMIC,
@@ -467,6 +472,9 @@ class BatteryCoordinator:
             single = data.get(CONF_SOLAR_FORECAST_SENSOR)
             forecast = [single] if single else []
         self._solar_forecast_sensors: list[str] = list(forecast)
+        self._solar_tomorrow_sensors: list[str] = list(
+            data.get(CONF_SOLAR_FORECAST_TOMORROW_SENSORS) or []
+        )
         self._solar_produced_sensor: str | None = (
             data.get(CONF_SOLAR_PRODUCED_SENSOR) or None
         )
@@ -635,6 +643,11 @@ class BatteryCoordinator:
         #: empties a pack, so without this it would go on selling the same
         #: kilowatt hours all evening and flatter itself by the peak's length.
         self._shadow_sold_kwh: float = 0.0
+        #: what the house draws when the sun is not covering it, in W, as a
+        #: slow average - how much the packs will give up overnight, which is
+        #: room the sun has to fill before it can refill anything sold
+        self._house_draw_w: float | None = None
+        self._house_draw_at: float | None = None
         #: whether the packs are currently above the min-output floor. Starts
         #: idle, so a restart never opens with a command too small to hold.
         self._above_min_output: bool = False
@@ -1778,6 +1791,29 @@ class BatteryCoordinator:
                 total += unit.unit_max * self._full_charge_minutes / 60.0 / 1000.0
         return total or None
 
+    def _tomorrow_sensors(self) -> list[str]:
+        """Tomorrow's forecast sensors: as configured, or the "today" ones with
+        "tomorrow" in their place where such an entity exists."""
+        if self._solar_tomorrow_sensors:
+            return self._solar_tomorrow_sensors
+        found = []
+        for entity_id in self._solar_forecast_sensors:
+            if "today" not in entity_id:
+                continue
+            twin = entity_id.replace("today", "tomorrow")
+            if self.hass.states.get(twin) is not None:
+                found.append(twin)
+        return found
+
+    def solar_tomorrow(self) -> float | None:
+        """kWh the panels are forecast to make tomorrow, or None when unknown."""
+        values = [
+            value
+            for value in (self._read_float(e) for e in self._tomorrow_sensors())
+            if value is not None
+        ]
+        return sum(values) if values else None
+
     def solar_expected(self) -> float | None:
         """How much of the sun still to come is expected to reach the packs.
 
@@ -2233,14 +2269,138 @@ class BatteryCoordinator:
         ahead = [s for s in slots_in_window(slots, now, PRICE_WINDOW_HOURS) if s.start > now]
         return cheap_mean(ahead, self._cheap_hours)
 
+    def _refill_context(self, slots) -> dict:
+        """What every refill in one pass shares: the sun, the room, the night.
+
+        Built once per decision or plan rather than per slot - the plan asks
+        about every quarter of two days, and these read entity states.
+        """
+        share, _days = self.solar_capture()
+        units = [
+            self._unit_snapshot(cfg) for cfg in self._units
+        ]
+        units = [u for u in units if u.online and u.soc is not None]
+        per_pack = (
+            [u.unit_max * self._full_charge_minutes / 60.0 / 1000.0 for u in units]
+            if self._full_charge_minutes > 0 else []
+        )
+        room = sum(
+            cap * max(u.charge_limit - u.soc, 0.0) / 100.0
+            for u, cap in zip(units, per_pack)
+        )
+        # the most the packs can give the house overnight after a sale: from
+        # the sell line down to their floor
+        night_room = sum(
+            cap * max(self._sell_line(u) - self._discharge_floor(u), 0.0) / 100.0
+            for u, cap in zip(units, per_pack)
+        )
+        remaining = self.solar_remaining()
+        tomorrow = self.solar_tomorrow()
+        return {
+            "share": share,
+            "sun_today": None if share is None or remaining is None else remaining * share,
+            "sun_tomorrow": None if share is None or tomorrow is None else tomorrow * share,
+            "room": room if per_pack else None,
+            "night_room": night_room,
+            "sold": self.energy_above_sell_line(),
+            "draw_w": self._house_draw_w,
+            "market": self._component_by_slot("market_prices"),
+            "untaxed": self._component_by_slot("untaxed_prices"),
+            "slots": slots,
+            "values": {},
+        }
+
+    def _export_value_at(self, slot, ctx) -> float | None:
+        """What a kWh fed back in `slot` earns, with saldering as on its day."""
+        key = _slot_key(slot)
+        tax = slot.price - ctx["untaxed"][key] if key in ctx["untaxed"] else None
+        saldering = dt_util.as_local(slot.start).date() < self._saldering_until
+        return export_value(self._feed_in, ctx["market"].get(key), tax, saldering)
+
+    def _solar_refill(self, slot, ctx) -> dict | None:
+        """How much of a sale in `slot` the sun puts back, and at what price.
+
+        The price is what that sun would otherwise have earned going to the
+        grid, over the hours it charges; the share is what it brings beyond
+        the room the packs have anyway by sunrise (see `solar_refill_share`).
+        None when any of it is unknown - an unmeasured capture share, no
+        forecast, no market prices for that day - and then the grid's price
+        stands alone, which is how it was before the sun was counted.
+        """
+        local = dt_util.as_local(slot.start)
+        today = dt_util.as_local(dt_util.utcnow()).date()
+        day = local.date() if local.hour < SOLAR_REFILL_NOON else local.date() + timedelta(days=1)
+        if day == today:
+            sun = ctx["sun_today"]
+        elif day == today + timedelta(days=1):
+            sun = ctx["sun_tomorrow"]
+        else:
+            return None
+        if sun is None or ctx["room"] is None or ctx["draw_w"] is None:
+            return None
+        if day not in ctx["values"]:
+            start, end = SOLAR_REFILL_HOURS
+            values = [
+                v
+                for s in ctx["slots"]
+                if dt_util.as_local(s.start).date() == day
+                and start <= dt_util.as_local(s.start).hour < end
+                for v in [self._export_value_at(s, ctx)]
+                if v is not None
+            ]
+            ctx["values"][day] = sum(values) / len(values) if values else None
+        value = ctx["values"][day]
+        if value is None:
+            return None
+        sunrise = dt_util.as_local(slot.end).replace(
+            year=day.year, month=day.month, day=day.day,
+            hour=SOLAR_REFILL_HOURS[0], minute=0, second=0, microsecond=0,
+        )
+        hours = max((sunrise - dt_util.as_local(slot.end)).total_seconds() / 3600.0, 0.0)
+        night = min(ctx["draw_w"] / 1000.0 * hours, ctx["night_room"])
+        # a pack with nothing above its line sells nothing; ask about the
+        # first kilowatt hour instead, which is the margin the decision needs
+        sold = ctx["sold"] if ctx["sold"] else 0.1
+        share = solar_refill_share(sun, ctx["room"] + night, sold)
+        return {"share": round(share, 3), "value": value, "sun_kwh": round(sun, 2),
+                "room_kwh": round(ctx["room"] + night, 2)}
+
+    def _grid_refill(self, slot, slots) -> float | None:
+        """The cheapest `cheap_hours` after `slot` - a kWh cannot be sold and
+        bought back in the same slot."""
+        ahead = [
+            s for s in slots_in_window(slots, slot.start, PRICE_WINDOW_HOURS)
+            if s.start > slot.start
+        ]
+        return cheap_mean(ahead, self._cheap_hours)
+
+    def _refill_for(self, slot, ctx) -> dict:
+        grid = self._grid_refill(slot, ctx["slots"])
+        solar = self._solar_refill(slot, ctx)
+        share = solar["share"] if solar else 0.0
+        return {
+            "refill": blended_refill(grid, solar["value"] if solar else None, share),
+            "grid": grid,
+            "solar": solar,
+        }
+
     def trade_verdict(self) -> dict:
         """Every number behind "sell now or not", for the trace and the card.
 
         `margin` is None whenever any input is unknown, and `why` says which.
         """
+        slots = self._price_forecast()
+        current = slot_at(slots, dt_util.utcnow()) if slots else None
+        refill = (
+            self._refill_for(current, self._refill_context(slots))
+            if current is not None
+            else {"refill": None, "grid": None, "solar": None}
+        )
         verdict = {
             "value": self.export_value_now(),
-            "refill": self.refill_price(),
+            "refill": refill["refill"],
+            "refill_grid": refill["grid"],
+            "solar": refill["solar"],
             "wear": self.battery_wear(),
             "margin": None,
             "saldering": self.saldering_active(),
@@ -2300,24 +2460,17 @@ class BatteryCoordinator:
         slots = slots if slots is not None else self._price_forecast()
         if wear is None or not slots:
             return {}
-        market = self._component_by_slot("market_prices")
-        untaxed = self._component_by_slot("untaxed_prices")
+        ctx = self._refill_context(slots)
         now = dt_util.utcnow()
         margins: dict[str, float] = {}
         for slot in slots:
             if slot.end <= now:
                 continue
             key = _slot_key(slot)
-            tax = slot.price - untaxed[key] if key in untaxed else None
-            saldering = dt_util.as_local(slot.start).date() < self._saldering_until
-            value = export_value(self._feed_in, market.get(key), tax, saldering)
+            value = self._export_value_at(slot, ctx)
             if value is None:
                 continue
-            ahead = [
-                s for s in slots_in_window(slots, slot.start, PRICE_WINDOW_HOURS)
-                if s.start > slot.start
-            ]
-            refill = cheap_mean(ahead, self._cheap_hours)
+            refill = self._refill_for(slot, ctx)["refill"]
             if refill is None:
                 continue
             margin = sell_margin(value, refill, wear)
@@ -2846,6 +2999,11 @@ class BatteryCoordinator:
                     "selling": self.trade_selling,
                     "would_sell": self.trade_would_sell,
                     "shadow_sold_kwh": round(self._shadow_sold_kwh, 3),
+                    "house_draw_w": (
+                        None if self._house_draw_w is None else round(self._house_draw_w)
+                    ),
+                    "solar_tomorrow_sensors": self._tomorrow_sensors(),
+                    "solar_tomorrow_kwh": self.solar_tomorrow(),
                 },
                 "money": self.money_total_attributes(),
                 # the fuse protection, including the evidence behind each
@@ -2965,6 +3123,9 @@ class BatteryCoordinator:
             "trade_would_sell": self.trade_would_sell,
             "export_value_eur_kwh": (self.last_trade_verdict or {}).get("value"),
             "refill_eur_kwh": (self.last_trade_verdict or {}).get("refill"),
+            # how much of that refill is the sun's, 0 to 1 - empty while the
+            # sun cannot be counted (see `_solar_refill`)
+            "refill_solar_share": ((self.last_trade_verdict or {}).get("solar") or {}).get("share"),
             "sell_margin_eur_kwh": (
                 None
                 if (self.last_trade_verdict or {}).get("margin") is None
@@ -3411,6 +3572,7 @@ class BatteryCoordinator:
 
         now = time.time()
         previous, self._money_at = self._money_at, now
+        self._track_house_draw(grid, now)
         if previous is None or grid is None:
             return
         elapsed = now - previous
@@ -3457,6 +3619,27 @@ class BatteryCoordinator:
             self.money[field] += amount
             for state in self.periods.values():
                 state[field] += amount
+
+    def _track_house_draw(self, grid: float | None, now: float) -> None:
+        """Follow what the house draws when the sun is not covering it.
+
+        Meter plus packs is the house less the sun; only positive readings
+        count, so a sunny afternoon does not drag it towards nought. An hour's
+        time constant: slow enough that a kettle does not move it, quick
+        enough that the evening's figure is the evening's.
+        """
+        previous, self._house_draw_at = self._house_draw_at, now
+        packs = self._other_controller_power() if grid is not None else None
+        if packs is None:
+            return
+        house = grid + packs
+        if house <= 0:
+            return
+        if self._house_draw_w is None or previous is None:
+            self._house_draw_w = house
+            return
+        weight = min(max(now - previous, 0.0) / 3600.0, 1.0)
+        self._house_draw_w += weight * (house - self._house_draw_w)
 
     def money_attributes(self, name: str) -> dict:
         """One period's money, beside the total since counting began.
@@ -3562,10 +3745,16 @@ class BatteryCoordinator:
             value = verdict.get(key)
             return None if value is None else round(value, 4)
 
+        solar = verdict.get("solar") or {}
         return {
             "trade_mode": self.trade_mode,
             "export_value_eur_kwh": cents("value"),
             "refill_eur_kwh": cents("refill"),
+            "refill_grid_eur_kwh": cents("refill_grid"),
+            "refill_solar_eur_kwh": (
+                None if solar.get("value") is None else round(solar["value"], 4)
+            ),
+            "refill_solar_share": solar.get("share"),
             "wear_eur_kwh": cents("wear"),
             "margin_eur_kwh": cents("margin"),
             "min_margin_eur_kwh": self._trade_margin,

@@ -155,3 +155,34 @@ def payback_remaining(
     if per_year_after is None or per_year_after <= 0:
         return None
     return left + remaining / per_year_after
+
+
+def solar_refill_share(sun_kwh: float | None, room_kwh: float, sold_kwh: float) -> float:
+    """How much of what is sold tonight the sun will put back, as a share.
+
+    The sun fills the packs from wherever they are: first the room there
+    would have been anyway (`room_kwh` - what is empty now, plus what the
+    house draws from them before the sun comes up), and only then the slice
+    the sale emptied. So the sun refills a sale only with what it brings
+    *beyond* that room, and a sunny day after a sale can still refill none of
+    it if the night emptied the packs further than the sun can fill.
+    """
+    if sun_kwh is None or sun_kwh <= 0 or sold_kwh <= 0:
+        return 0.0
+    room = max(room_kwh, 0.0)
+    extra = min(sun_kwh, room + sold_kwh) - min(sun_kwh, room)
+    return max(0.0, min(1.0, extra / sold_kwh))
+
+
+def blended_refill(
+    grid: float | None, solar: float | None, share: float
+) -> float | None:
+    """What refilling a sold kWh costs, the sun's share at what its export
+    would have earned and the rest at the grid's price."""
+    if solar is None or share <= 0:
+        return grid
+    if share >= 1:
+        return solar
+    if grid is None:
+        return None
+    return share * solar + (1 - share) * grid

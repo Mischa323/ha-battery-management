@@ -43,6 +43,7 @@ from .const import (
     CONF_SHADOW_SIMULATE,
     CONF_EXPENSIVE_HOURS,
     CONF_SOLAR_FORECAST_SENSORS,
+    CONF_SOLAR_FORECAST_TOMORROW_SENSORS,
     CONF_SOLAR_PRODUCED_SENSOR,
     CONF_DISCHARGE_LIMIT,
     CONF_DISCHARGE_RECOVERY,
@@ -360,6 +361,16 @@ def _solar_schema(defaults: dict) -> vol.Schema:
                 CONF_SOLAR_FORECAST_SENSORS,
                 description={
                     "suggested_value": defaults.get(CONF_SOLAR_FORECAST_SENSORS)
+                },
+            ): selector.EntitySelector(
+                selector.EntitySelectorConfig(domain="sensor", multiple=True)
+            ),
+            # tomorrow's, for refilling a sale from the sun; empty finds the
+            # "_tomorrow" twins of the sensors above by itself
+            vol.Optional(
+                CONF_SOLAR_FORECAST_TOMORROW_SENSORS,
+                description={
+                    "suggested_value": defaults.get(CONF_SOLAR_FORECAST_TOMORROW_SENSORS)
                 },
             ): selector.EntitySelector(
                 selector.EntitySelectorConfig(domain="sensor", multiple=True)
@@ -725,7 +736,10 @@ class BatteryManagementOptionsFlow(OptionsFlow):
         if user_input is not None:
             # an emptied picker must actually clear, not fall back to the old one
             return self._save(
-                user_input, CONF_SOLAR_FORECAST_SENSORS, CONF_SOLAR_PRODUCED_SENSOR
+                user_input,
+                CONF_SOLAR_FORECAST_SENSORS,
+                CONF_SOLAR_FORECAST_TOMORROW_SENSORS,
+                CONF_SOLAR_PRODUCED_SENSOR,
             )
         defaults = {**self._entry.data, **self._entry.options}
         return self.async_show_form(
