@@ -1167,9 +1167,15 @@ Per slot it weighs three prices, all in *Configure → Smart trading*:
 | **What refilling costs** | The mean of the cheapest hours still ahead — the same hours buying ranks — divided by 0.88 for the round trip. When the sun will refill the sale instead, that share costs what the sun would have earned going to the grid between 10:00 and 16:00 — see *Refilled by the sun* below. |
 | **What it wears off** | The packs' purchase price ÷ (rated cycles × the measured capacity). EUR 5000 over 6000 cycles of 28 kWh is 3 cents a kWh. |
 
-It sells when *earns − refill ÷ 0.88 − wear* is at least the **minimum
-profit** (5 cents by default), and every pack is more than two points above
-its sell line. It then carries on to the line and does not restart in that
+A slot *pays* when *earns − refill ÷ 0.88 − wear* is at least the **minimum
+profit** (5 cents by default). Of the slots that pay up to the next midday it
+then picks the **best**, the way buying picks the cheapest hours: as many as
+it takes until the first pack reaches its sell line at full power — at full
+power every pack gives its own maximum, so the emptier pack decides how long a
+sale lasts, not the total above the line. It sells only in those, so the
+evening's best quarters get the energy rather than the first one that clears
+the threshold; while it waits for a better one the card says so. It starts
+only with every pack more than two points above its sell line. It then carries on to the line and does not restart in that
 slot. It never sells in an hour it is buying in, and only in Dynamic tariff.
 
 **Refilled by the sun.** A kWh sold tonight need not come back from the
@@ -1204,7 +1210,9 @@ the next buy fills them again. Dry run with trading On counts as shadow too.
 the live decision asked of every slot ahead, with that slot's own prices,
 the cheapest refill *after* it, and saldering as it will be on that day —
 and the slots it did sell in (or would have, in shadow). Consecutive quarters
-read as one row, with the best margin of the run. A buy hour is never listed:
+read as one row, with the best margin of the run. Only the slots it will
+actually sell in are listed — the best ones, as many as the packs can fill —
+not every slot that would pay. A buy hour is never listed:
 the tick gives that hour to buying. What no price list can know is whether the
 packs will be above **Sell down to** when the hour comes, so the card says how
 many kWh sit above it right now. The same is on the Plan sensor: `sell`,

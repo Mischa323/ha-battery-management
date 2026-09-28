@@ -193,7 +193,7 @@ function render(overrides, config = {}) {
     text("trwhy") === TRADE_WHY.margin_too_small && !/Vul|meet/.test(text("trwhy")),
     text("trwhy"));
   check("every reason the coordinator gives has words",
-    ["no_battery_price", "no_capacity", "no_export_value", "no_refill_price", "margin_too_small"]
+    ["no_battery_price", "no_capacity", "no_export_value", "no_refill_price", "margin_too_small", "later", "at_sell_floor"]
       .every((k) => typeof TRADE_WHY[k] === "string"),
     Object.keys(TRADE_WHY));
 

@@ -2300,6 +2300,11 @@ const TRADE_WHY = {
     "Geen marktprijs beschikbaar. Met een prijssensor van buiten werkt alleen een vaste vergoeding.",
   no_refill_price: "Geen prijzen vooruit om het terugkopen mee te rekenen.",
   margin_too_small: "Levert nu te weinig op na terugkopen en slijtage.",
+  at_sell_floor:
+    "Een accu zit op of vlak boven \"Verkopen tot\": er is niets (meer) te verkopen.",
+  later:
+    "Levert nu genoeg op, maar een later kwartier levert meer op: daar gaat de lading heen. " +
+    "Zie het plan van vandaag.",
 };
 
 /**

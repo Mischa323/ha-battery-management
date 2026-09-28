@@ -12,6 +12,13 @@
 // minute. A test asserts that stays true.
 import { readFileSync } from "node:fs";
 process.env.TZ = "Europe/Amsterdam";
+// A fixed morning, so "six hours from now" is still today whenever the suite
+// runs. Taken from the real clock it failed every evening after 18:00, when
+// the hour a hold waits for had rolled into tomorrow and off today's list.
+// The card reads the time only through Date.now(), so this pins it for both.
+const _morning = new Date();
+_morning.setHours(8, 0, 0, 0);
+Date.now = () => _morning.getTime();
 const src = readFileSync(
   "custom_components/battery_management/www/battery-management-card.js",
   "utf8"
