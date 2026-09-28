@@ -1615,10 +1615,7 @@ class BatteryCoordinator:
 
         # `buying` is the plan - the few cheap hours the packs still have room
         # for, ranked over the rolling window the coordinator decides on.
-        buying = slots_to_buy(
-            slots, now, self._cheap_hours, PRICE_WINDOW_HOURS, self._price_margin,
-            self.hours_of_charge_needed(), until=self._buy_before(),
-        ) if slots else []
+        buying = self._buy_slots(slots, now) if slots else []
 
         # And what the hold is waiting *for*. `buying` stops at the coming peak,
         # so while a purchase is held for the cheaper far side it is empty -
@@ -1668,11 +1665,7 @@ class BatteryCoordinator:
         expected_at = {_slot_key(slot) for slot in later}
         # never in an hour earmarked for buying - the tick gives buying the
         # hour, so the plan must not promise a sale in it either
-        sell_at = {
-            key: margin
-            for key, margin in (self.sell_forecast(slots) if slots else {}).items()
-            if key not in buy_at
-        }
+        sell_at = self.planned_sell_slots(slots, buy_at) if slots else {}
         day_start = dt_util.as_local(now).replace(
             hour=0, minute=0, second=0, microsecond=0
         )
@@ -2478,6 +2471,97 @@ class BatteryCoordinator:
                 margins[key] = round(margin, 4)
         return margins
 
+    def _buy_slots(self, slots, now) -> list:
+        """The cheap hours the packs still have room for - the plan's buying."""
+        return slots_to_buy(
+            slots, now, self._cheap_hours, PRICE_WINDOW_HOURS, self._price_margin,
+            self.hours_of_charge_needed(), until=self._buy_before(),
+        )
+
+    def _sell_window_end(self, now):
+        """Selling looks ahead to the next midday, no further.
+
+        What is not sold by then is not held for a better evening: the house
+        draws it overnight and the sun or the cheap hours refill after, so a
+        dearer peak tomorrow night is not something tonight's charge can reach.
+        """
+        local = dt_util.as_local(now)
+        noon = local.replace(hour=SOLAR_REFILL_NOON, minute=0, second=0, microsecond=0)
+        if local >= noon:
+            noon += timedelta(days=1)
+        return noon
+
+    def _hours_to_sell(self) -> float | None:
+        """How long a sale at full power runs before it stops.
+
+        At full power every pack gives its own maximum, whatever its charge,
+        and the sale stops as soon as the first one reaches its line - so it
+        is the pack with the least time left that decides, not the total
+        above the line. Two packs at 92 % and 72 % over a 70 % line sell for
+        as long as the 72 % one lasts. In shadow the packs are taken as shadow
+        would have left them.
+        """
+        if self._full_charge_minutes <= 0:
+            return None
+        capacity = self.usable_capacity_kwh()
+        drawn = (
+            self._shadow_sold_kwh / capacity * 100.0
+            if self.trade_mode == TRADE_SHADOW and capacity
+            else 0.0
+        )
+        hours = None
+        for cfg in self._units:
+            unit = self._unit_snapshot(cfg)
+            if not unit.online or unit.soc is None or unit.unit_max <= 0:
+                continue
+            pack_kwh = unit.unit_max * self._full_charge_minutes / 60.0 / 1000.0
+            room = max(unit.soc - drawn - self._sell_line(unit), 0.0) / 100.0 * pack_kwh
+            left = room / (unit.unit_max / 1000.0)
+            hours = left if hours is None else min(hours, left)
+        return hours
+
+    def planned_sell_slots(self, slots, exclude=frozenset()) -> dict[str, float]:
+        """The slots it will actually sell in, with their margin.
+
+        Asked for by the owner on 28 September, after the plan listed the
+        whole evening and the packs were empty after three quarters: "zorg
+        ervoor dat hij alleen de tijden aangeeft wanneer hij gaat verkopen, net
+        als het opladen". So it is chosen the way buying chooses its hours:
+        of the slots that pay (`sell_forecast`) up to the next midday, the
+        best ones first, as many as it takes until the first pack reaches its
+        sell line at full power (see `_hours_to_sell`). The tick sells only in these - so the evening's
+        best quarters get the energy rather than the first that clears the
+        threshold - and the plan shows only these.
+
+        Re-chosen every tick from the packs as they are: a pack that falls
+        behind, or a sale that stops early, simply moves what is left.
+        """
+        margins = {
+            key: margin
+            for key, margin in self.sell_forecast(slots).items()
+            if key not in exclude
+        }
+        if not margins:
+            return {}
+        now = dt_util.utcnow()
+        until = self._sell_window_end(now)
+        candidates = [
+            s for s in slots
+            if _slot_key(s) in margins and s.end > now and s.start < until
+        ]
+        needed = self._hours_to_sell()
+        if needed is None:
+            return {_slot_key(s): margins[_slot_key(s)] for s in candidates}
+        chosen: dict[str, float] = {}
+        covered = 0.0
+        for slot in sorted(candidates, key=lambda s: (-margins[_slot_key(s)], s.start)):
+            if covered >= needed - 1e-9:
+                break
+            key = _slot_key(slot)
+            chosen[key] = margins[key]
+            covered += (slot.end - max(slot.start, now)).total_seconds() / 3600.0
+        return chosen
+
     def energy_above_sell_line(self) -> float | None:
         """kWh the packs hold above where selling stops, right now."""
         if self._full_charge_minutes <= 0:
@@ -2521,7 +2605,12 @@ class BatteryCoordinator:
         key = _slot_key(current)
         if self._sold_out_slot == key:
             return False
-        started = self._selling_slot == key
+        # a sale running on from the slot before carries on to the line: the
+        # band is for starting, and a quarter boundary is not a start
+        previous = slot_at(slots, current.start - timedelta(seconds=1))
+        started = self._selling_slot in (
+            key, _slot_key(previous) if previous is not None else None
+        )
         # shadow judges the packs as they would be had it really sold
         drawn = 0.0
         capacity = self.usable_capacity_kwh()
@@ -2531,6 +2620,14 @@ class BatteryCoordinator:
         if room <= (0.0 if started else BUY_CEILING_BAND):
             if started:
                 self._sold_out_slot = key
+            verdict["why"] = "at_sell_floor"
+            return False
+        # only in the slots chosen for it - the best of the evening, as many
+        # as the packs can fill - and never in one earmarked for buying
+        buying = {_slot_key(s) for s in self._buy_slots(slots, dt_util.utcnow())}
+        if key not in self.planned_sell_slots(slots, buying):
+            # it pays, but a better quarter still to come gets the energy
+            verdict["why"] = "later"
             return False
         self._selling_slot = key
         return True
