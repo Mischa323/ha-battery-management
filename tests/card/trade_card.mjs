@@ -152,20 +152,25 @@ function render(overrides, config = {}) {
 // --- the sum -------------------------------------------------------------
 {
   render();
-  check("says what it would do", text("trhead") === "Zou nu verkopen (schaduw)", text("trhead"));
-  check("writes the sum out, not only its answer",
-    text("trsum") ===
-      "Opbrengst €0,437 − terugkopen €0,190 ÷ 0,88 − slijtage €0,030 = €0,191 per kWh (drempel €0,050)",
-    text("trsum"));
+  check("says what it would do, and that shadow commands nothing",
+    text("trhead") === "Zou nu verkopen (schaduw: stuurt niets aan)", text("trhead"));
+  // a receipt, one line per part, rather than one formula read by nobody
+  const receipt = html("trsum").replace(/<[^>]+>/g, "|").replace(/\|+/g, "|");
+  check("writes the sum out as a receipt",
+    receipt ===
+      "|Opbrengst per kWh|€0,437|Terugkopen (incl. 12 % verlies)|−€0,216|" +
+      "Slijtage accu&#39;s|−€0,030|Winst per kWh (minimaal €0,05)|€0,191|",
+    receipt);
+  check("the profit is the total line", /class="row total"/.test(html("trsum")), html("trsum"));
   check("names saldering and its end", /Saldering tot 1 januari 2027/.test(text("trsal")), text("trsal"));
 
+  const sunny = tradeSum({ ...TRADE, refill_eur_kwh: 0.17, refill_solar_share: 0.6 });
   check("a refill partly from the sun says so, and is not called a purchase",
-    tradeSum({ ...TRADE, refill_eur_kwh: 0.17, refill_solar_share: 0.6 })
-      .includes("terugvullen €0,170 (60 % zon)"),
-    tradeSum({ ...TRADE, refill_eur_kwh: 0.17, refill_solar_share: 0.6 }));
+    sunny[1][0] === "Terugvullen (60 % zon, incl. 12 % verlies)" && sunny[1][1] === "−€0,193",
+    sunny);
   check("without the sun it is a purchase",
-    tradeSum({ ...TRADE, refill_solar_share: 0 }).includes("terugkopen €0,190") &&
-    tradeSum({ ...TRADE, refill_solar_share: null }).includes("terugkopen €0,190"),
+    tradeSum({ ...TRADE, refill_solar_share: 0 })[1][0] === "Terugkopen (incl. 12 % verlies)" &&
+    tradeSum({ ...TRADE, refill_solar_share: null })[1][0] === "Terugkopen (incl. 12 % verlies)",
     tradeSum({ ...TRADE, refill_solar_share: 0 }));
 
   const sum = tradeSum({ ...TRADE, export_value_eur_kwh: null });
@@ -189,8 +194,9 @@ function render(overrides, config = {}) {
       state: "waiting", attributes: { ...TRADE, margin_eur_kwh: 0.02, why: "margin_too_small" },
     },
   });
-  check("too little margin is ordinary, not a fault",
-    text("trwhy") === TRADE_WHY.margin_too_small && !/Vul|meet/.test(text("trwhy")),
+  check("too little margin is ordinary, not a fault, and says how far off",
+    text("trwhy") === "Te weinig winst: €0,020 per kWh, minimaal €0,05 nodig." &&
+      !/Vul|meet/.test(text("trwhy")),
     text("trwhy"));
   check("every reason the coordinator gives has words",
     ["no_battery_price", "no_capacity", "no_export_value", "no_refill_price", "margin_too_small", "later", "at_sell_floor"]
@@ -201,8 +207,8 @@ function render(overrides, config = {}) {
     "sensor.bm_slim_handelen_status": { state: "off", attributes: { ...TRADE, why: "margin_too_small" } },
   });
   check("off shows no sum and no reason",
-    text("trhead") === "Uit" && text("trsum") === "" && text("trwhy") === "",
-    [text("trhead"), text("trsum"), text("trwhy")]);
+    text("trhead") === "Slim handelen staat uit" && html("trsum") === "" && text("trwhy") === "",
+    [text("trhead"), html("trsum"), text("trwhy")]);
 
   render({
     "sensor.bm_slim_handelen_status": {
@@ -251,6 +257,24 @@ function render(overrides, config = {}) {
     [text("trhead"), text("trsum")]);
   check("and it no longer shows the savings - those have their own card",
     !/Besparing|Terugverdientijd/.test(card.innerHTML), card.innerHTML.length);
+}
+
+// --- reasons with their numbers ---------------------------------------------
+{
+  const { whySays } = new Function(src + ";return {whySays};")();
+  check("at the sell floor it names the floor",
+    whySays({ why: "at_sell_floor", sell_floor: 70 }) ===
+      'Niets (meer) te verkopen: een accu staat op 70 % ("Verkopen tot").',
+    whySays({ why: "at_sell_floor", sell_floor: 70 }));
+  check("waiting for a better quarter points at the plan",
+    /later vandaag levert het meer op/.test(whySays({ why: "later" })) &&
+      /plan van vandaag/.test(whySays({ why: "later" })),
+    whySays({ why: "later" }));
+  check("a reason without numbers falls back to its words",
+    whySays({ why: "margin_too_small", margin_eur_kwh: null }) === "Te weinig winst om te verkopen.",
+    whySays({ why: "margin_too_small", margin_eur_kwh: null }));
+  check("an unknown reason is shown as it is rather than hidden",
+    whySays({ why: "something_new" }) === "something_new", whySays({ why: "something_new" }));
 }
 
 console.log(fails ? `\n${fails} FAILED` : "\ntrade card checks pass");

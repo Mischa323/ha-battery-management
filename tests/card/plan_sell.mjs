@@ -95,7 +95,7 @@ check("nothing from an older integration without the field",
   check("says it will sell, to the grid", html.rows.includes("gaat verkopen") && html.rows.includes("aan het net"), html.rows);
   check("the top line names the next sale", html.next.startsWith("Hierna: ") && html.next.includes("verkopen aan het net"), html.next);
   check("and on what condition, with how much there is",
-    html.includes("boven 70 % zitten") && html.includes("8.4 kWh daarboven"), html);
+    html.includes("hooguit tot de accu&#39;s op 70 % staan") && html.includes("daarboven zit nu 8.4 kWh"), html);
 }
 
 // --- shadow says "zou" ------------------------------------------------------
@@ -133,13 +133,14 @@ check("runs merge only on the same words",
 
 // --- empty ----------------------------------------------------------------
 check("an empty day names the threshold",
-  render(plan([future(0)])).includes("minstens €0,20 per kWh"), render(plan([future(0)])));
+  render(plan([future(0)])).includes("Vandaag wordt niet verkocht: geen kwartier levert minstens €0,20 winst per kWh op."),
+  render(plan([future(0)])));
 check("outside Dynamic it says it only sells there",
   render(plan([future(0)], TRADE, "grid_zero")).includes("alleen in de modus Dynamisch"),
   render(plan([future(0)], TRADE, "grid_zero")));
 check("without a capacity it still names the floor",
   render(plan([future(0, { sell: true })], { ...TRADE, above_floor_kwh: null }))
-    .includes("boven 70 % zitten."),
+    .includes("op 70 % staan."),
   "no capacity");
 
 console.log(fails ? `\n${fails} FAILED` : "\nplan sell checks pass");

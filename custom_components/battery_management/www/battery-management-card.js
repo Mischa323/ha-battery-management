@@ -2067,12 +2067,12 @@ function sellNotes(plan, sellRows) {
       ? "Verkoopt alleen in de modus Dynamisch."
       : sellRows.length
         ? ""
-        : "Verkopen: vandaag geen kwartier dat minstens " + euro(trade.min_margin_eur_kwh, 2) +
-          " per kWh oplevert na terugkopen en slijtage.";
+        : "Vandaag wordt niet verkocht: geen kwartier levert minstens " +
+          euro(trade.min_margin_eur_kwh, 2) + " winst per kWh op.";
   const floor =
-    "Verkoopt alleen zolang de accu's boven " + Math.round(trade.sell_floor) + " % zitten" +
+    "Verkoopt hooguit tot de accu's op " + Math.round(trade.sell_floor) + " % staan" +
     (trade.above_floor_kwh != null
-      ? " — nu " + kwh(trade.above_floor_kwh) + " daarboven."
+      ? "; daarboven zit nu " + kwh(trade.above_floor_kwh) + "."
       : ".") +
     (shadow ? " Schaduw stuurt niets aan, het houdt alleen bij." : "");
   return (
@@ -2353,10 +2353,12 @@ const years = (value) =>
 /** What each trade status means, as one headline. */
 const TRADE_HEADLINE = {
   selling: "Verkoopt nu aan het net",
-  would_sell: "Zou nu verkopen (schaduw)",
-  waiting: "Wacht op een piek die loont",
-  off: "Uit",
-  not_dynamic: "Alleen in de modus Dynamisch",
+  would_sell: "Zou nu verkopen (schaduw: stuurt niets aan)",
+  // not "wacht op een piek die loont": the reason line says what it is
+  // waiting for, and at the sell floor there is no peak that would help
+  waiting: "Verkoopt nu niet",
+  off: "Slim handelen staat uit",
+  not_dynamic: "Verkoopt alleen in de modus Dynamisch",
 };
 
 /**
@@ -2375,17 +2377,44 @@ const TRADE_WHY = {
     "anders is de slijtage per kWh niet uit te rekenen.",
   no_export_value:
     "Geen marktprijs beschikbaar. Met een prijssensor van buiten werkt alleen een vaste vergoeding.",
-  no_refill_price: "Geen prijzen vooruit om het terugkopen mee te rekenen.",
-  margin_too_small: "Levert nu te weinig op na terugkopen en slijtage.",
-  at_sell_floor:
-    "Een accu zit op of vlak boven \"Verkopen tot\": er is niets (meer) te verkopen.",
+  no_refill_price: "Nog geen prijzen voor de komende uren, dus terugkopen is niet uit te rekenen.",
+  margin_too_small: "Te weinig winst om te verkopen.",
+  at_sell_floor: "Niets (meer) te verkopen: een accu staat op \"Verkopen tot\".",
   later:
-    "Levert nu genoeg op, maar een later kwartier levert meer op: daar gaat de lading heen. " +
-    "Zie het plan van vandaag.",
+    "Verkopen loont nu, maar later vandaag levert het meer op. " +
+    "Daar bewaart hij de lading voor — zie het plan van vandaag.",
 };
 
 /**
- * The sum behind "sell or not", written out as the sum it is.
+ * The reason, with its numbers where it has them.
+ *
+ * "Te weinig winst" alone left the owner working out how far off it was;
+ * the margin and the threshold are on the sensor, so they go in the sentence.
+ */
+function whySays(attrs) {
+  const why = attrs.why;
+  if (why === "margin_too_small" && attrs.margin_eur_kwh != null) {
+    return (
+      "Te weinig winst: " + euro(attrs.margin_eur_kwh, 3) + " per kWh, minimaal " +
+      euro(attrs.min_margin_eur_kwh, 2) + " nodig."
+    );
+  }
+  if (why === "at_sell_floor" && attrs.sell_floor != null) {
+    return (
+      "Niets (meer) te verkopen: een accu staat op " + Math.round(attrs.sell_floor) +
+      " % (\"Verkopen tot\")."
+    );
+  }
+  return TRADE_WHY[why] || why || "";
+}
+
+/**
+ * The sum behind "sell or not", one line per part, as a receipt.
+ *
+ * It used to be one formula - "Opbrengst €0,437 − terugkopen €0,190 ÷ 0,88 −
+ * slijtage €0,030 = €0,191" - correct, and read by nobody. Each line now says
+ * what it is in words, the refill already includes its loss, and the profit
+ * stands at the bottom beside what it has to reach.
  *
  * Returns null when there is nothing to show - trading off, or an input
  * missing - so the card can say *why* instead of printing a row of dashes.
@@ -2398,19 +2427,19 @@ function tradeSum(attrs) {
       w === null || w === undefined) {
     return null;
   }
-  const margin = attrs.margin_eur_kwh;
   // Where the refill comes from, when the sun has a share in it: "terugkopen"
   // alone would read as a grid purchase at a price no grid hour has.
   const share = attrs.refill_solar_share;
   const refill =
     share > 0
-      ? "terugvullen " + euro(r, 3) + " (" + Math.round(share * 100) + " % zon)"
-      : "terugkopen " + euro(r, 3);
-  return (
-    "Opbrengst " + euro(v, 3) + " − " + refill +
-    " ÷ 0,88 − slijtage " + euro(w, 3) + " = " + euro(margin, 3) +
-    " per kWh (drempel " + euro(attrs.min_margin_eur_kwh, 3) + ")"
-  );
+      ? "Terugvullen (" + Math.round(share * 100) + " % zon, incl. 12 % verlies)"
+      : "Terugkopen (incl. 12 % verlies)";
+  return [
+    ["Opbrengst per kWh", euro(v, 3)],
+    [refill, euro(-r / 0.88, 3)],
+    ["Slijtage accu's", euro(-w, 3)],
+    ["Winst per kWh (minimaal " + euro(attrs.min_margin_eur_kwh, 2) + ")", euro(attrs.margin_eur_kwh, 3)],
+  ];
 }
 
 /** Saldering, in one line: whether the tax still comes back, and until when. */
@@ -2546,6 +2575,8 @@ class BatteryManagementTradeCard extends HTMLElement {
           .trc .row { display:flex; justify-content:space-between; gap:12px;
                       padding:3px 0; font-variant-numeric: tabular-nums; }
           .trc .big { font-size:1.4em; font-weight:600; }
+          .trc .row.total { border-top:1px solid var(--divider-color); margin-top:2px;
+                    padding-top:4px; }
         </style>
         <div class="trc">
           <div class="head" id="trhead">—</div>
@@ -2604,10 +2635,16 @@ class BatteryManagementTradeCard extends HTMLElement {
     const sum = trade && trade.state !== "off" && trade.state !== "not_dynamic"
       ? tradeSum(attrs)
       : null;
-    el("trsum").textContent = sum || "";
+    el("trsum").innerHTML = sum
+      ? sum
+          .map(([label, value], i) =>
+            '<div class="row' + (i === sum.length - 1 ? " total" : "") + '"><span>' +
+            esc(label) + "</span><b>" + esc(value) + "</b></div>")
+          .join("")
+      : "";
     el("trwhy").textContent =
       trade && trade.state !== "off" && trade.state !== "not_dynamic" && attrs.why
-        ? TRADE_WHY[attrs.why] || attrs.why
+        ? whySays(attrs)
         : "";
     el("trsal").textContent = trade ? salderingSays(attrs) : "";
 
