@@ -1966,50 +1966,116 @@ function sellRuns(hours, mode) {
       last.end = h.end;
       if (h.sell_margin != null) last.margin = Math.max(last.margin ?? -Infinity, h.sell_margin);
     } else {
-      runs.push({ start: h.start, end: h.end, says, margin: h.sell_margin ?? null });
+      runs.push({ kind: "sell", start: h.start, end: h.end, says, margin: h.sell_margin ?? null });
     }
   }
   return runs;
 }
 
 /**
- * The whole "wanneer verkopen" section, or nothing when trading is off.
+ * Consecutive quarters with the same verdict on buying, as one row.
  *
- * Built as one piece of markup rather than toggling a hidden block, so a
- * card with trading off carries no empty heading.
+ * The plan listed every quarter on its own line - thirteen for one
+ * afternoon's charge on 30 September - and the owner found it "zeer
+ * onduidelijk". A run keeps the cheapest and dearest price in it, which is
+ * what a reader wants to know about the stretch.
  */
-function sellSection(plan, today) {
+function buyRuns(hours) {
+  const runs = [];
+  for (const h of hours) {
+    const says = buyRowSays(h);
+    const last = runs[runs.length - 1];
+    if (last && last.end === h.start && last.says.text === says.text) {
+      last.end = h.end;
+      last.lo = Math.min(last.lo, h.price);
+      last.hi = Math.max(last.hi, h.price);
+    } else {
+      runs.push({ kind: "buy", start: h.start, end: h.end, says, lo: h.price, hi: h.price });
+    }
+  }
+  return runs;
+}
+
+/** A price range in euros per kWh: one figure when it is one price. */
+function priceRange(lo, hi) {
+  return Math.abs(hi - lo) < 0.0005
+    ? euro(lo, 3)
+    : euro(lo, 3) + "–" + euro(hi, 3).replace("€", "");
+}
+
+/**
+ * Buying and selling on one line of time, the way the day will be lived.
+ *
+ * Two separate lists - "wanneer van het net" and "wanneer verkopen" - made the
+ * reader do the merging, and the evening sale ended up below a morning that
+ * had long gone. One list in time order, the past greyed, answers "what
+ * happens when" without any assembling.
+ */
+function timeline(buyRows, sellRows, tradeMode, now = Date.now()) {
+  const runs = [...buyRuns(buyRows), ...sellRuns(sellRows, tradeMode)];
+  runs.sort((a, b) => at(a.start) - at(b.start));
+  for (const r of runs) r.past = at(r.end) <= now;
+  return runs;
+}
+
+function timelineRow(run) {
+  const what = run.kind === "sell" ? "aan het net" : "van het net";
+  const detail =
+    run.kind === "sell"
+      ? run.margin != null ? "+" + euro(run.margin, 3) + "/kWh" : ""
+      : priceRange(run.lo, run.hi);
+  return (
+    '<div class="hr' + (run.past ? " past" : "") + '">' +
+    '<span class="when">' + hhmm(run.start) + "–" + hhmm(run.end) + "</span>" +
+    '<span class="what">' + what + "</span>" +
+    '<span class="muted">' + detail + "</span>" +
+    '<span class="tag ' + run.says.tone + '">' + esc(run.says.text) + "</span></div>"
+  );
+}
+
+/**
+ * One line on what comes next, at the top of the card.
+ *
+ * The thing the card is opened for: not the whole day, but "what will it do
+ * next, and when". Current first, then the next one still to come.
+ */
+function nextSays(runs, tradeMode, now = Date.now()) {
+  const label = (r) =>
+    r.kind === "sell"
+      ? tradeMode === "shadow" ? "zou verkopen (schaduw)" : "verkopen aan het net"
+      : r.says.tone === "later" ? "verwacht te laden van het net" : "laden van het net";
+  const live = runs.filter((r) => !r.past && r.says.tone !== "miss");
+  const current = live.find((r) => at(r.start) <= now);
+  if (current) return "Nu: " + label(current) + " tot " + hhmm(current.end) + ".";
+  const next = live[0];
+  if (next) {
+    return "Hierna: " + hhmm(next.start) + "–" + hhmm(next.end) + " " + label(next) + ".";
+  }
+  return "Vandaag verder niets van of naar het net gepland.";
+}
+
+/**
+ * What goes with selling beneath the timeline: why there is none, and the
+ * one condition no price list can know. Nothing at all with trading off.
+ */
+function sellNotes(plan, sellRows) {
   const trade = plan.trade;
   if (!trade || !trade.mode || trade.mode === "off") return "";
   const shadow = trade.mode === "shadow";
-  const title = "Wanneer verkopen" + (shadow ? " (schaduw)" : "");
-  const rows = today.filter((h) => h.sold || (!h.past && h.sell));
-  const list = sellRuns(rows, trade.mode)
-    .map(
-      (r) =>
-        '<div class="hr"><span class="when">' + hhmm(r.start) + "–" + hhmm(r.end) +
-        "</span>" +
-        '<span class="muted">' +
-        (r.margin != null ? "+" + euro(r.margin, 3) + "/kWh" : "") +
-        "</span>" +
-        '<span class="tag ' + r.says.tone + '">' + esc(r.says.text) + "</span></div>"
-    )
-    .join("");
   const empty =
     plan.mode !== "dynamic"
       ? "Verkoopt alleen in de modus Dynamisch."
-      : rows.length
+      : sellRows.length
         ? ""
-        : "Vandaag geen kwartier dat minstens " + euro(trade.min_margin_eur_kwh, 2) +
+        : "Verkopen: vandaag geen kwartier dat minstens " + euro(trade.min_margin_eur_kwh, 2) +
           " per kWh oplevert na terugkopen en slijtage.";
   const floor =
-    "Alleen zolang de accu's boven " + Math.round(trade.sell_floor) + " % zitten" +
+    "Verkoopt alleen zolang de accu's boven " + Math.round(trade.sell_floor) + " % zitten" +
     (trade.above_floor_kwh != null
       ? " — nu " + kwh(trade.above_floor_kwh) + " daarboven."
       : ".") +
     (shadow ? " Schaduw stuurt niets aan, het houdt alleen bij." : "");
   return (
-    "<h4>" + esc(title) + "</h4>" + list +
     (empty ? '<div class="muted note">' + esc(empty) + "</div>" : "") +
     '<div class="muted note">' + esc(floor) + "</div>"
   );
@@ -2124,6 +2190,9 @@ class BatteryManagementPlanCard extends HTMLElement {
           .hr { display:flex; justify-content:space-between; gap:10px;
                 padding:3px 0; font-variant-numeric: tabular-nums; }
           .hr .when { min-width:6.5em; }
+          .hr .what { flex:1 1 auto; }
+          .hr.past { opacity:.55; }
+          .plc .next { margin:6px 0 2px; font-weight:600; }
           .hr .tag { font-size:.82em; padding:1px 8px; border-radius:9px;
                      white-space:nowrap; }
           .tag.done { background:var(--success-color,#4caf50); color:#fff; }
@@ -2135,7 +2204,12 @@ class BatteryManagementPlanCard extends HTMLElement {
         </style>
         <div class="plc">
           <div class="row"><b id="plnow">—</b><span class="muted" id="plmode"></span></div>
-          <h4>Wil hij vandaag nog inladen</h4>
+          <div class="next" id="plnext"></div>
+          <h4>Vandaag</h4>
+          <div id="plhours"></div>
+          <div class="muted note" id="plnone"></div>
+          <div id="plsell"></div>
+          <h4>Hoeveel wil hij nog laden</h4>
           <div class="split">
             <div class="half sun"><div class="n" id="plsun">—</div>
               <div class="l muted">via de zon</div></div>
@@ -2144,10 +2218,6 @@ class BatteryManagementPlanCard extends HTMLElement {
           </div>
           <div class="muted note" id="plwhy"></div>
           <div class="muted note" id="plsunshare"></div>
-          <h4>Wanneer van het net</h4>
-          <div id="plhours"></div>
-          <div class="muted note" id="plnone"></div>
-          <div id="plsell"></div>
         </div>
       </ha-card>`;
     this._built = true;
@@ -2211,17 +2281,12 @@ class BatteryManagementPlanCard extends HTMLElement {
     // ---- when, and what became of it ----
     const today = slotsOnDay(plan.hours || [], dayKey(0));
     const rows = today.filter((h) => h.buy || h.bought || h.expected);
-    el("plhours").innerHTML = rows
-      .map((h) => {
-        const says = buyRowSays(h);
-        return (
-          '<div class="hr"><span class="when">' +
-          hhmm(h.start) + "–" + hhmm(h.end) + "</span>" +
-          '<span class="muted">' + Number(h.price).toFixed(3) + " €/kWh</span>" +
-          '<span class="tag ' + says.tone + '">' + says.text + "</span></div>"
-        );
-      })
-      .join("");
+    const trading = plan.trade && plan.trade.mode && plan.trade.mode !== "off";
+    const sellRows = trading ? today.filter((h) => h.sold || (!h.past && h.sell)) : [];
+    const tradeMode = trading ? plan.trade.mode : "off";
+    const runs = timeline(rows, sellRows, tradeMode);
+    el("plhours").innerHTML = runs.map(timelineRow).join("");
+    el("plnext").textContent = planState ? nextSays(runs, tradeMode) : "";
 
     // An empty list has four quite different meanings, and telling them apart
     // is most of what this card is for: "nothing planned" must never be able
@@ -2232,7 +2297,7 @@ class BatteryManagementPlanCard extends HTMLElement {
     // also shows beside this morning's history, since an expected hour can be
     // tomorrow's and so not in today's list at all.
     // ---- when it sells, if slim handelen is on ----
-    el("plsell").innerHTML = planState ? sellSection(plan, today) : "";
+    el("plsell").innerHTML = planState ? sellNotes(plan, sellRows) : "";
 
     const ahead = rows.filter((h) => !h.past);
     el("plnone").textContent = !planState

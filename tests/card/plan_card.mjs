@@ -219,8 +219,12 @@ check("an unknown split clears the sun line with it",
 
 // --- the hours ------------------------------------------------------------
 out = render(FULL);
+const rowCount = (html) => (html.match(/class="hr[ "]/g) || []).length;
 check("only buying hours are listed",
-  (out.plhours.innerHTML.match(/class="hr"/g) || []).length === 3,
+  rowCount(out.plhours.innerHTML) === 3,
+  out.plhours.innerHTML);
+check("the past is greyed, what is ahead is not",
+  (out.plhours.innerHTML.match(/class="hr past"/g) || []).length === 2,
   out.plhours.innerHTML);
 check("a bought hour reads as done",
   out.plhours.innerHTML.includes(">geladen<"), out.plhours.innerHTML);
@@ -229,9 +233,42 @@ check("a planned hour still ahead reads as intent",
 check("a planned hour that came to nothing says so",
   out.plhours.innerHTML.includes(">niet geladen<"), out.plhours.innerHTML);
 check("the morning is still listed at teatime",
-  out.plhours.innerHTML.split('class="hr"').length - 1 === 3 &&
-    out.plnone.textContent === "",
+  rowCount(out.plhours.innerHTML) === 3 && out.plnone.textContent === "",
   out.plnone.textContent);
+check("the top line says what comes next",
+  out.plnext.textContent === "Hierna: " + hhmmOf(slot(1, 0).start) + "–" +
+    hhmmOf(slot(2, 0).start) + " laden van het net.",
+  out.plnext.textContent);
+
+// --- a stretch of quarters reads as one row ---------------------------------
+//
+// 30 September: an afternoon's charge was thirteen rows of quarters, and the
+// owner called the plan "zeer onduidelijk". Consecutive quarters with the same
+// verdict are one row now, with the cheapest and dearest price of the stretch.
+{
+  const q = (i, price, extra = {}) => {
+    const start = new Date(now + 3 * hour + i * 15 * 60000);
+    return {
+      start: start.toISOString(), end: new Date(start.getTime() + 15 * 60000).toISOString(),
+      price, past: false, role: "cheap", buy: true, ...extra,
+    };
+  };
+  const o = render({ ...FULL, hours: [q(0, 0.21), q(1, 0.17), q(2, 0.19), q(3, 0.25), q(6, 0.2)] });
+  check("four quarters in a row are one row, a gap starts another",
+    rowCount(o.plhours.innerHTML) === 2, o.plhours.innerHTML);
+  check("the row carries the price range of the stretch",
+    o.plhours.innerHTML.includes("€0,170–0,250"), o.plhours.innerHTML);
+  check("and a lone quarter its one price",
+    o.plhours.innerHTML.includes(">€0,200<"), o.plhours.innerHTML);
+  const busy = render({ ...FULL, hours: [q(-12, 0.2, { past: false }), q(-11, 0.2)] });
+  check("while it is buying, the top line says so and until when",
+    busy.plnext.textContent.startsWith("Nu: laden van het net tot "),
+    busy.plnext.textContent);
+  const quiet = render({ ...FULL, hours: [{ ...slot(-3, 0.05, { buy: true, bought: true }) }] });
+  check("with nothing left today it says so rather than leaving a blank",
+    quiet.plnext.textContent === "Vandaag verder niets van of naar het net gepland.",
+    quiet.plnext.textContent);
+}
 
 check("bought outranks merely planned",
   buyRowSays({ bought: true, buy: true, past: true }).text === "geladen",
