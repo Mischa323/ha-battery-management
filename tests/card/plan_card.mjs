@@ -125,6 +125,16 @@ check("the ceiling is explained, not just printed",
   out.plwhy.textContent.includes("54 %") &&
     out.plwhy.textContent.includes("zon"),
   out.plwhy.textContent);
+check("the ceiling says how much is left for the sun",
+  out.plwhy.textContent.startsWith("Laadt tot 54 % en houdt de laatste 46 % vrij voor de zon."),
+  out.plwhy.textContent);
+{
+  const full = render({ ...FULL, expected: { ...FULL.expected, ceiling: 100 } });
+  check("and at 100 % simply says full, with no sun to leave room for",
+    full.plwhy.textContent.startsWith("Laadt de accu's vol (tot 100 %).") &&
+      !full.plwhy.textContent.includes("vrij voor de zon"),
+    full.plwhy.textContent);
+}
 check("no shortfall clause when the sun fills the room it was given",
   !out.plwhy.textContent.includes("ruimte vrij"), out.plwhy.textContent);
 
@@ -399,7 +409,7 @@ check("five empty states, all different",
 // same day usually buys nothing at all - and must not say "tot 0 %".
 out = render({ ...WAITING, waiting: { ...WAITING.waiting, held_to: 0 } });
 check("a hold at nothing says it buys nothing, not 'hooguit tot 0 %'",
-  out.plwhy.textContent.includes("koopt hij niets") &&
+  out.plwhy.textContent.includes("laadt hij niets") &&
     !out.plwhy.textContent.includes("hooguit"),
   out.plwhy.textContent);
 

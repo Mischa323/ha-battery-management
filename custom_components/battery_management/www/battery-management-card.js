@@ -2082,6 +2082,20 @@ function sellNotes(plan, sellRows) {
 }
 
 /**
+ * The buy ceiling as a sentence someone can act on.
+ *
+ * It used to read "koopt bij tot 100 % en laat de rest aan de zon" - which at
+ * 100 % leaves nothing to the sun and at 54 % did not say how much it left.
+ * Now it names both halves: how full from the grid, and how much is kept free
+ * for the sun, or plainly "vol" when nothing is.
+ */
+function ceilingSays(ceiling) {
+  const to = Math.round(ceiling);
+  if (to >= 100) return "Laadt de accu's vol (tot 100 %).";
+  return "Laadt tot " + to + " % en houdt de laatste " + (100 - to) + " % vrij voor de zon.";
+}
+
+/**
  * What a hold on the purchase means, in the two places the card says it.
  *
  * Reported on the morning of 23 September: the card said there was nothing to
@@ -2102,9 +2116,9 @@ function waitingSays(waiting, now = Date.now()) {
   // buy, and "hooguit tot 0 %" would be a strange way to say so.
   const why =
     waiting.held_to > 0
-      ? " Vóór de piek van " + peak + " hooguit tot " +
-        Math.round(waiting.held_to) + " % — daarna is het goedkoper."
-      : " Vóór de piek van " + peak + " koopt hij niets — later vandaag is het goedkoper.";
+      ? " Tot de piek van " + peak + " laadt hij hooguit tot " +
+        Math.round(waiting.held_to) + " %, want daarna is stroom goedkoper."
+      : " Tot de piek van " + peak + " laadt hij niets, want later vandaag is stroom goedkoper.";
   const first = (waiting.hours || [])[0];
   const when = first
     ? hhmm(first.start) + (dayOf(first.start) === dayKey(0, now) ? "" : " (morgen)")
@@ -2264,9 +2278,7 @@ class BatteryManagementPlanCard extends HTMLElement {
             " ruimte vrij, maar er komt maar " +
             kwh(arriving(expected)) + " zon in de accu's."
           : "";
-      el("plwhy").textContent =
-        "Koopt bij tot " + Math.round(expected.ceiling) +
-        " % en laat de rest aan de zon." + short +
+      el("plwhy").textContent = ceilingSays(expected.ceiling) + short +
         (plan.waiting ? waitingSays(plan.waiting).why : "");
       el("plsunshare").textContent = sunShareSays(expected);
     } else {
