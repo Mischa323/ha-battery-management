@@ -44,7 +44,11 @@ function render(planAttrs) {
   };
   card.setConfig({ plan: "sensor.bm_plan" });
   card.hass = { states: { "sensor.bm_plan": { state: "ok", attributes: planAttrs } } };
-  return (nodes.get("plsell") || {}).innerHTML || "";
+  // the rows live in the day's one timeline now, the notes beneath it
+  const rows = (nodes.get("plhours") || {}).innerHTML || "";
+  const notes = (nodes.get("plsell") || {}).innerHTML || "";
+  const next = (nodes.get("plnext") || {}).textContent || "";
+  return Object.assign(new String(rows + notes), { rows, notes, next });
 }
 
 // today at a fixed local evening, so the slots are always "today"
@@ -70,10 +74,10 @@ const plan = (hours, trade = TRADE, mode = "dynamic") => ({
 
 // --- shown only when trading is on ---------------------------------------
 check("nothing at all with trading off",
-  render(plan([future(0, { sell: true, sell_margin: 0.3 })], { ...TRADE, mode: "off" })) === "",
+  String(render(plan([future(0, { sell: true, sell_margin: 0.3 })], { ...TRADE, mode: "off" }))) === "",
   "off");
 check("nothing from an older integration without the field",
-  render(plan([future(0)], null)) === "", "no trade");
+  String(render(plan([future(0)], null))) === "", "no trade");
 
 // --- the rows -------------------------------------------------------------
 {
@@ -86,19 +90,20 @@ check("nothing from an older integration without the field",
     future(6, { sell: true, sell_margin: 0.2 }),
   ]));
   check("a run of quarters reads as one row, and a gap starts another",
-    (html.match(/class="hr"/g) || []).length === 2, html);
+    (html.rows.match(/class="hr[ "]/g) || []).length === 2, html.rows);
   check("the run shows its best margin", html.includes("+€0,320/kWh"), html);
-  check("says it will sell", html.includes("gaat verkopen") && html.includes("Wanneer verkopen<"), html);
+  check("says it will sell, to the grid", html.rows.includes("gaat verkopen") && html.rows.includes("aan het net"), html.rows);
+  check("the top line names the next sale", html.next.startsWith("Hierna: ") && html.next.includes("verkopen aan het net"), html.next);
   check("and on what condition, with how much there is",
-    html.includes("boven 70 % zitten") && html.includes("8.4 kWh daarboven"), html);
+    html.includes("hooguit tot de accu&#39;s op 70 % staan") && html.includes("daarboven zit nu 8.4 kWh"), html);
 }
 
 // --- shadow says "zou" ------------------------------------------------------
 {
   const html = render(plan([future(0, { sell: true, sell_margin: 0.3 })], { ...TRADE, mode: "shadow" }));
-  check("shadow says it would, in the title and the row",
-    html.includes("Wanneer verkopen (schaduw)") && html.includes("zou verkopen") &&
-    !html.includes("gaat verkopen"), html);
+  check("shadow says it would, in the row and the top line",
+    html.rows.includes("zou verkopen") && !html.rows.includes("gaat verkopen") &&
+    html.next.includes("zou verkopen (schaduw)"), [html.rows, html.next]);
   check("and that it commands nothing", html.includes("stuurt niets aan"), html);
 }
 
@@ -120,7 +125,7 @@ check("the current slot, selling",
     future(3, { sell: true, sell_margin: 0.3 }),  // a gap, so nothing merges it away
   ]));
   check("a past slot is listed only if it sold",
-    (html.match(/class="hr"/g) || []).length === 2 && html.includes("verkocht"), html);
+    (html.rows.match(/class="hr[ "]/g) || []).length === 2 && html.rows.includes("verkocht"), html.rows);
 }
 check("runs merge only on the same words",
   sellRuns([{ ...future(0), sold: true }, future(1, { sell: true })], "on").length === 2,
@@ -128,13 +133,14 @@ check("runs merge only on the same words",
 
 // --- empty ----------------------------------------------------------------
 check("an empty day names the threshold",
-  render(plan([future(0)])).includes("minstens €0,20 per kWh"), render(plan([future(0)])));
+  render(plan([future(0)])).includes("Vandaag wordt niet verkocht: geen kwartier levert minstens €0,20 winst per kWh op."),
+  render(plan([future(0)])));
 check("outside Dynamic it says it only sells there",
   render(plan([future(0)], TRADE, "grid_zero")).includes("alleen in de modus Dynamisch"),
   render(plan([future(0)], TRADE, "grid_zero")));
 check("without a capacity it still names the floor",
   render(plan([future(0, { sell: true })], { ...TRADE, above_floor_kwh: null }))
-    .includes("boven 70 % zitten."),
+    .includes("op 70 % staan."),
   "no capacity");
 
 console.log(fails ? `\n${fails} FAILED` : "\nplan sell checks pass");

@@ -42,9 +42,12 @@ def prices(peaks: dict, ordinary: float = 0.30, refill_at=NOW + timedelta(hours=
 
 @pytest.fixture
 def evening(trading):
-    def _build(peaks, *, soc=(80.0, 80.0), floor=30, **options):
+    def _build(peaks, *, soc=(80.0, 80.0), floor=30, ordinary=0.30,
+               refill_at=NOW + timedelta(hours=9), **options):
         system = trading(soc=soc, **options)
-        system.hass.states.set(PRICE_SENSOR, 0.5, prices(peaks))
+        system.hass.states.set(
+            PRICE_SENSOR, 0.5, prices(peaks, ordinary=ordinary, refill_at=refill_at)
+        )
         system.coordinator.sell_floor = floor
         return system
 
@@ -158,3 +161,34 @@ async def test_a_sale_carries_on_across_a_quarter_boundary(evening, monkeypatch)
     await system.coordinator._async_tick(None)
 
     assert system.coordinator.trade_selling is True
+
+
+# -- a dear tomorrow ------------------------------------------------------------
+
+
+def test_a_dear_tomorrow_is_no_time_to_sell_tonight(evening):
+    """Asked by the owner: "houdt hij er rekening mee dat als het morgen een
+    stuk duurder is, hij dan niet verkoopt". He does, because a sale is
+    weighed against buying it back in the cheapest hours *after* it - and when
+    those are tomorrow's, at 0.42, a 0.45 evening earns 0.42 against a refill
+    of 0.48: nothing to sell."""
+    system = evening({NOW: 0.45}, ordinary=0.42, refill_at=None)
+
+    assert key(NOW) not in system.coordinator.sell_forecast()
+    assert planned(system) == set()
+
+
+async def test_and_the_tick_does_not_sell_either(evening):
+    system = evening({NOW: 0.45}, ordinary=0.42, refill_at=None)
+
+    await system.coordinator._async_tick(None)
+
+    assert system.coordinator.trade_selling is False
+    assert system.coordinator.last_trade_verdict["why"] == "margin_too_small"
+
+
+def test_the_same_evening_sells_when_tomorrow_is_cheap(evening):
+    """The same 0.45 evening, with a 0.15 hour tonight to buy it back in."""
+    system = evening({NOW: 0.45}, ordinary=0.42)
+
+    assert key(NOW) in planned(system)

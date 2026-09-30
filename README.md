@@ -902,6 +902,19 @@ separate, that is a bug worth reporting.
 
 ## Seeing today's plan
 
+The **Battery Management Plan** card reads it for you, top to bottom:
+
+1. **What rule is in force** and the mode, then one line on **what comes
+   next** — *"Nu: laden van het net tot 14:15"* or *"Hierna: 18:45–19:30
+   verkopen aan het net"*.
+2. **Vandaag** — one timeline of buying from and selling to the grid, in time
+   order. Consecutive quarters with the same verdict are one row, with the
+   price range of the stretch (or, for a sale, its best margin). What has
+   gone is greyed and says what became of it: *geladen*, *niet geladen*,
+   *verkocht*.
+3. **Hoeveel wil hij nog laden** — how much the sun and the grid are still
+   meant to put in, and why.
+
 `sensor.battery_management_plan` carries the day's intentions as attributes:
 which hours it picked as cheap and dear, how much sun is still expected, the
 usable capacity, and the resulting charge ceiling. A markdown card renders it:
@@ -1191,8 +1204,10 @@ counted until that share has a few days behind it — the forecast alone is
 what the panels make, and most of it the house takes first. Tomorrow's
 forecast comes from *Configure → Solar → Solar forecast tomorrow*, or, left
 empty, from the `…_tomorrow` twins of the today sensors, which is how
-Forecast.Solar names them. The card writes the refill as *terugvullen €0,170
-(60 % zon)*; the trace has `refill_solar_share`.
+Forecast.Solar names them. The trading card shows the sum as a receipt — *Opbrengst per kWh*,
+*Terugvullen (60 % zon, incl. 12 % verlies)*, *Slijtage accu's*, and the
+*Winst per kWh* beside the minimum it has to reach; the trace has
+`refill_solar_share`.
 
 **Saldering.** Until the date in the settings (1 January 2027 by law) the
 energy tax comes back on everything fed in, which roughly doubles what a peak

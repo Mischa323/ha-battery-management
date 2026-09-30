@@ -1890,7 +1890,7 @@ class BatteryCoordinator:
             self._cheap_hours, PRICE_WINDOW_HOURS,
         )
 
-    def after_peak_step(self) -> float | None:
+    def after_peak_step(self, hours: float | None = None) -> float | None:
         """How much cheaper the far side of the coming peak is, per kWh.
 
         The question `next_day_step` cannot answer. That one asks whether
@@ -1921,7 +1921,7 @@ class BatteryCoordinator:
             return None
         return cheaper_beyond(
             self._price_forecast() or [], dt_util.utcnow(), peak,
-            self._cheap_hours, PRICE_WINDOW_HOURS,
+            hours or self._cheap_hours, PRICE_WINDOW_HOURS,
             # The hours left before the peak are not a sample of anything -
             # they are the whole remaining opportunity, and there are fewest of
             # them exactly when this question is sharpest. Requiring
@@ -2020,7 +2020,8 @@ class BatteryCoordinator:
         # is what keeps this from meaning "buy nothing" - it is the owner's own
         # "buy at least to", which is exactly the charge they want in hand
         # before a peak, and `_bound_ceiling` raises anything under it back up.
-        later = self.after_peak_step() if hold_for_later else None
+        compare = self._hours_to_compare(self._bound_ceiling(ceiling)) if hold_for_later else None
+        later = self.after_peak_step(compare) if hold_for_later else None
         if later is not None and later >= self._price_margin:
             # The floor is for the *end of the day*, in the owner's words - "die
             # ondergrens moet voor het eind van de dag zijn, niet in de ochtend"
@@ -2030,7 +2031,7 @@ class BatteryCoordinator:
             # time to reach it, and at a better price. Returned unbounded on
             # purpose - `_bound_ceiling` would raise it straight back to the
             # floor, which is the very purchase this exists to defer.
-            same_day = self.later_same_day_step()
+            same_day = self.later_same_day_step(compare)
             if same_day is not None and same_day >= self._price_margin:
                 if self._bound_ceiling(ceiling) > 0:
                     reason = POLICY_CHEAPER_LATER
@@ -2048,7 +2049,7 @@ class BatteryCoordinator:
                 ceiling = held
         return self._bound_ceiling(ceiling), reason
 
-    def later_same_day_step(self) -> float | None:
+    def later_same_day_step(self, hours: float | None = None) -> float | None:
         """How much cheaper the rest of the peak's own day is than before it.
 
         `after_peak_step` looks at everything past the peak inside the window,
@@ -2067,8 +2068,25 @@ class BatteryCoordinator:
         that_day = [slot for slot in (self._price_forecast() or []) if slot.start < end]
         return cheaper_beyond(
             that_day, dt_util.utcnow(), peak,
-            self._cheap_hours, PRICE_WINDOW_HOURS, near_hours=0,
+            hours or self._cheap_hours, PRICE_WINDOW_HOURS, near_hours=0,
         )
+
+    def _hours_to_compare(self, ceiling: float) -> float:
+        """How much buying the hold compares either side of the peak on.
+
+        What is actually to be bought, not `cheap_hours`. The night of 29 to 30
+        September needed three quarters before the morning peak; the cheapest
+        three before it cost EUR 0.241 and after it EUR 0.173 - seven cents -
+        but the cheapest five *hours* either side averaged 0.249 against
+        0.229, two cents, under the margin. So it bought three lone quarters
+        at 7 kW in the night, each one earmarked because a five-hour mean had
+        diluted a one-hour dip into nothing. Capped at `cheap_hours`, which is
+        what a full day's buying is ranked on anyway.
+        """
+        needed = self.hours_of_charge_needed(ceiling=ceiling)
+        if not needed:
+            return self._cheap_hours
+        return min(self._cheap_hours, needed)
 
     def _room_to_buy(
         self, soc: float, limit: float, ceiling: float, started: bool = False
