@@ -819,6 +819,7 @@ capped — that would be throwing sun away.
 | **Gas price without energy tax** | The same less the energy tax, to agree with Frank's app. | as above |
 | **Savings today / this month / since start** | What the packs saved, in EUR, against the same house without them: the import they replaced at the all-in price, less the export they gave up at what your contract pays. Shown on the footing that applies today (with saldering until it ends); the attributes carry both, plus what selling earned (`traded_kwh`, `traded_eur`) and what shadow would have (`shadow_kwh`, `shadow_eur`). | never (nought until the first counted tick) |
 | **Payback time** | In how many years the packs pay for themselves on a dynamic contract **without** saldering: purchase price ÷ the yearly saving on that footing. The attributes add the same with saldering, `years_to_go` from today (saldering at its rate until it ends, then without, less what is already saved), the yearly savings and `counted_days`. `reliable` turns true after 30 counted days. Shows no value (unknown) until there is a purchase price and a day counted; the attributes stay, so the card can say which of the two it is waiting for. | never |
+| **Standby load** | What the house draws while everyone sleeps, in W: last night's lowest five minutes between 01:00 and 05:00, meter plus packs. The attributes add when that was (`lowest_at`), the `night_average_w`, the `average_7_nights_w`, what it comes to in a year (`per_year_kwh`), `tonight_lowest_w` while the night is being measured, and the last 30 nights in `history`. See [Standby load](#standby-load-sluipverbruik). | never (unknown until the first night) |
 | **Smart trading status** | `selling`, `would_sell` (shadow), `waiting`, `off` or `not_dynamic`. The attributes carry the three prices it weighed — `export_value_eur_kwh`, `refill_eur_kwh`, `wear_eur_kwh` — the `margin_eur_kwh` they come to, and `why` it is not selling. | never |
 | **Plan** | Today's cheap and dear hours with their prices, plus the numbers the ceiling was computed from, all in attributes. Its `hours` attribute is the whole series, each slot carrying the `role` it belongs to — `cheap`, `dear` or `normal` — which is what the card's chart is drawn from. | never |
 | **Fuse headroom** | Amps still available on **the busiest single leg** — not a total, and not per leg. It is the one that would trip first; `tightest_phase` in the attributes says which. Measured against the usable limit (the fuse less your margin), so the margin is still there underneath. Per-leg detail — `amps` through the fuse, `amps_without_us`, headroom, and which packs sit on it — is in the attributes. | no per-phase sensors configured |
@@ -1291,10 +1292,45 @@ so they are two cards:
 - **Battery Management Savings** gets a dashboard of its own. Make a new
   dashboard and paste [`dashboards/besparing.yaml`](dashboards/besparing.yaml)
   into its raw configuration editor: the card, savings per day and per month
-  as bars, and the running total. The card colours each figure green when the
+  as bars, the running total, and the standby load per night. The card colours each figure green when the
   packs saved money and red when they lost it; half a cent either way counts as
   nought and stays uncoloured. The graphs name entity ids; on a Dutch install
   check them under *Settings → Entities* first, as the file explains.
+
+## Standby load (sluipverbruik)
+
+**Standby load** is what the house draws while everyone is asleep: the
+fridge, the router, the ventilation, the circulation pump, everything left on
+standby. It stands all day as well, so every 100 W of it is about 875 kWh a
+year.
+
+It is measured every night between 01:00 and 05:00, as the meter plus what the
+packs give. That is the house's own draw whether the packs or the grid are
+covering it, and it does not depend on which. The figure is the **lowest
+five-minute average** of the night. Five minutes is long enough that the
+fridge's compressor switching off is not taken for the floor, and short
+enough that the compressor switching on does not lift it.
+
+- **A purchase is left out.** The packs' power sensor trails the meter by
+  10–30 s, so for that long a purchase starting or stopping looks like a
+  house drawing 7 kW more or less than it does. Any five minutes in which the
+  packs' power moved by more than 1 kW does not count.
+- **A night needs an hour of steady readings,** or it is not reported. The
+  previous night's figure stays.
+- **It is reported once the night is over,** at 05:00. Until then,
+  `tonight_lowest_w` shows how low it has been so far.
+- **A restart in the night keeps the night.**
+
+What the packs themselves use is not in it: the conversion losses of covering a
+few hundred watts are paid from the battery, not drawn from the meter. Comparing
+what the packs delivered overnight with how far their charge fell puts that at
+roughly 100 W for two Max AC packs.
+
+**Tracking it down.** Late in the evening, switch the groups in the meter
+cupboard off one at a time, watching the per-phase power of the P1 meter, and
+see where the most disappears. The next morning's figure shows whether what
+was switched off for good made a difference; the dashboard below has a bar per
+night.
 
 ## External plan (EMHASS)
 

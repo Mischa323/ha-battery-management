@@ -606,6 +606,24 @@ TRADE_STATES = [
 SOLAR_REFILL_HOURS = (10, 16)
 SOLAR_REFILL_NOON = 12
 
+# The standby load: what the house draws while everyone sleeps. Meter plus
+# packs, so it is the same figure whether the packs or the grid are covering
+# it. Measured in a window of the night with no sun and nobody cooking, as the
+# lowest five-minute average in it: long enough that a fridge's compressor
+# cycling off is not taken for the floor, short enough that the floor is not
+# lifted by the compressor cycling on.
+#: local hours, [start, end)
+BASE_LOAD_HOURS = (1, 5)
+BASE_LOAD_BUCKET = 300          # seconds averaged
+#: a five minutes in which the packs' power moved by more than this is left
+#: out. The pack sensor trails the meter by 10-30 s, so a purchase starting
+#: or stopping reads for that long as a house drawing 7 kW more or less than
+#: it does - enough to put the floor of a whole night in the wrong place.
+BASE_LOAD_STEADY_W = 1000
+#: an hour of steady readings, or the night is not reported at all
+BASE_LOAD_MIN_BUCKETS = 12
+BASE_LOAD_HISTORY = 30          # nights kept
+
 PERIOD_HISTORY = {
     PERIOD_DAY: 62,
     PERIOD_WEEK: 53,
