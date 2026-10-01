@@ -21,6 +21,7 @@ async def async_setup_entry(
             CoordinatorEnableSwitch(coordinator, entry),
             FastChargeSwitch(coordinator, entry),
             DryRunSwitch(coordinator, entry),
+            SinglePackSwitch(coordinator, entry),
         ]
     )
 
@@ -115,3 +116,37 @@ class FastChargeSwitch(_BaseSwitch):
 
     async def async_turn_off(self, **kwargs) -> None:
         await self.coordinator.async_set_fast_charge(False)
+
+
+class SinglePackSwitch(_BaseSwitch):
+    """Let the fullest pack carry a low discharge alone.
+
+    Two packs each covering 225 W of a sleeping house both run in the least
+    efficient part of their range. With this on, up to 800 W goes through one
+    pack and the other rests. Whether that actually saves anything depends on
+    what a resting pack still uses, which is why it is a switch and not a
+    default: the attributes compare, night by night, what the packs delivered
+    against how far their charge fell, with it on and with it off.
+    """
+
+    _attr_translation_key = "single_pack"
+    _attr_icon = "mdi:battery-arrow-down-outline"
+    _attr_entity_category = EntityCategory.CONFIG
+
+    def __init__(self, coordinator, entry) -> None:
+        super().__init__(coordinator, entry)
+        self._attr_unique_id = f"{entry.entry_id}_single_pack"
+
+    @property
+    def is_on(self) -> bool:
+        return self.coordinator.single_pack
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        return self.coordinator.single_pack_attributes()
+
+    async def async_turn_on(self, **kwargs) -> None:
+        await self.coordinator.async_set_single_pack(True)
+
+    async def async_turn_off(self, **kwargs) -> None:
+        await self.coordinator.async_set_single_pack(False)

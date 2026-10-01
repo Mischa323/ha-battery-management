@@ -434,6 +434,9 @@
       "dry_run": {
         "name": "Dry run"
       },
+      "single_pack": {
+        "name": "One pack at low load"
+      },
       "fast_charge": {
         "name": "Fast charge (emergency)"
       }

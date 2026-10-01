@@ -767,6 +767,7 @@ listed here.
 | **Coordinator enabled** | The kill switch. Off hands the packs back and stops all coordination. This is not a mode: it is "let go entirely", which is why it is a separate switch. |
 | **Fast charge (emergency)** | Charges every pack at full power to its limit, from the grid if needed. Once full it *holds* them there until you switch it off, topping up if they drift down — you pressed it to be ready for something. Never resumed after a restart. |
 | **Dry run** | Decide everything, command nothing. On by default. Blocks every write including the safe revert, so it cannot fight another controller. The suppressed-command counter on this switch is its proof of life: a shadow run that suppressed nothing is a broken one. Switching it back **on** hands the packs back first — otherwise they would hold the last live command indefinitely. |
+| **One pack at low load** | Off by default. A discharge up to 800 W is carried by the fullest pack alone, the other rests; above that both share again, and it goes back to one below 600 W. The attributes compare, night by night, what the packs delivered against how far their charge fell, with it on and off — see [One pack at low load](#one-pack-at-low-load). |
 
 ### Mode
 
@@ -1331,6 +1332,40 @@ cupboard off one at a time, watching the per-phase power of the P1 meter, and
 see where the most disappears. The next morning's figure shows whether what
 was switched off for good made a difference; the dashboard below has a bar per
 night.
+
+## One pack at low load
+
+At night the house draws a few hundred watts, and by default both packs cover
+it, about 225 W each. That is the least efficient part of a pack's range: what
+it loses converting is large compared with what it delivers. Over the nights
+in the September traces the packs' charge fell by about 560 W worth while they
+delivered about 450 W.
+
+The **One pack at low load** switch lets the fullest pack carry any discharge
+up to 800 W alone while the other rests:
+
+- **Above 800 W both share again,** and it only goes back to one pack below
+  600 W, so a demand resting near the line does not swap every tick.
+- **The pack carrying it keeps doing so** until the other is five SoC points
+  fuller. Then they swap, so both are used about equally.
+- **Two packs are used whenever one cannot do it alone:** when only one may
+  discharge, or when the fullest one's own ceiling (the fuse protection, most
+  often) is below the demand.
+- **Charging and selling are not affected.**
+
+Whether it saves anything depends on what a resting pack still uses, which is
+why it is a switch and not a default. Every night between 01:00 and 05:00 the
+integration sets what the packs delivered (their AC output sensors) against how
+far their charge fell. The switch's attributes average that per setting:
+`efficiency_one_pack_pct` and `efficiency_both_pct`, with the number of
+nights behind each (`nights_one_pack`, `nights_both`) and the nights themselves
+in `history`.
+
+- **What a night needs:** a power sensor on each pack, no charging in the
+  window, and at least 1 kWh drained. SoC comes in whole points, so a single
+  night can be a few percent off either way; compare a few nights of each.
+- **What does not count:** a night in which the switch was flipped is kept
+  as `mixed` and counted towards neither.
 
 ## External plan (EMHASS)
 

@@ -434,6 +434,9 @@
       "dry_run": {
         "name": "Proefdraaien"
       },
+      "single_pack": {
+        "name": "Bij laag verbruik één accu"
+      },
       "fast_charge": {
         "name": "Snelladen (noodgeval)"
       }
