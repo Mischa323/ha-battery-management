@@ -2022,7 +2022,11 @@ class BatteryCoordinator:
         # before a peak, and `_bound_ceiling` raises anything under it back up.
         compare = self._hours_to_compare(self._bound_ceiling(ceiling)) if hold_for_later else None
         later = self.after_peak_step(compare) if hold_for_later else None
-        if later is not None and later >= self._price_margin:
+        # any cheaper window will do when the packs can see the peak through
+        # on their own; the margin is only for when they cannot
+        bridging = hold_for_later and self._can_bridge()
+        threshold = 0.0 if bridging else self._price_margin
+        if later is not None and (later > threshold if bridging else later >= threshold):
             # The floor is for the *end of the day*, in the owner's words - "die
             # ondergrens moet voor het eind van de dag zijn, niet in de ochtend"
             # - after it had been topping the packs up before the morning peak.
@@ -2032,7 +2036,9 @@ class BatteryCoordinator:
             # purpose - `_bound_ceiling` would raise it straight back to the
             # floor, which is the very purchase this exists to defer.
             same_day = self.later_same_day_step(compare)
-            if same_day is not None and same_day >= self._price_margin:
+            if same_day is not None and (
+                same_day > threshold if bridging else same_day >= threshold
+            ):
                 if self._bound_ceiling(ceiling) > 0:
                     reason = POLICY_CHEAPER_LATER
                 return 0.0, reason
@@ -2083,10 +2089,52 @@ class BatteryCoordinator:
         diluted a one-hour dip into nothing. Capped at `cheap_hours`, which is
         what a full day's buying is ranked on anyway.
         """
-        needed = self.hours_of_charge_needed(ceiling=ceiling)
-        if not needed:
+        if self._full_charge_minutes <= 0:
             return self._cheap_hours
-        return min(self._cheap_hours, needed)
+        # The raw room, not `_room_to_buy`: that one is gated by the band, so
+        # a pack one point inside it read as "nothing needed" and threw the
+        # comparison back to five hours, while one point lower it compared a
+        # single quarter. On 1 October that flipped the verdict between "buy"
+        # and "wait" every time the house drew a percent - two bursts at 7 kW
+        # at EUR 0.34 with the packs at 85 %. The raw room moves smoothly.
+        needed = 0.0
+        for cfg in self._units:
+            unit = self._unit_snapshot(cfg)
+            if not unit.online or unit.soc is None:
+                continue
+            room = max(min(ceiling, unit.charge_limit) - unit.soc, 0.0)
+            needed = max(needed, room / 100.0 * self._full_charge_minutes / 60.0)
+        # at least one slot's worth: nothing to buy still compares something,
+        # and the same thing as a sliver to buy does
+        return min(self._cheap_hours, max(needed, 0.25))
+
+    def _can_bridge(self) -> bool:
+        """Can the packs carry the house through the coming peak unaided?
+
+        The margin on the hold is there so the packs do not meet a peak
+        emptier for a penny's saving. With charge enough to see the house
+        through it, meeting it "emptier" costs nothing at all, and any cheaper
+        window after it is worth waiting for. On 1 October the packs at 85 %
+        topped up at EUR 0.34 before a morning peak they would have crossed
+        with three quarters to spare.
+
+        Judged on the measured house draw over the time to the peak plus the
+        peak itself, with half again on top; unknown draw, no bridge assumed.
+        """
+        peak = self._buy_before()
+        if peak is None or self._house_draw_w is None or self._full_charge_minutes <= 0:
+            return False
+        hours = max((peak - dt_util.utcnow()).total_seconds() / 3600.0, 0.0)
+        hours += max(self._expensive_hours, 0.0)
+        wanted = self._house_draw_w / 1000.0 * hours * 1.5
+        available = 0.0
+        for cfg in self._units:
+            unit = self._unit_snapshot(cfg)
+            if not unit.online or unit.soc is None:
+                continue
+            pack_kwh = unit.unit_max * self._full_charge_minutes / 60.0 / 1000.0
+            available += max(unit.soc - self._discharge_floor(unit), 0.0) / 100.0 * pack_kwh
+        return available >= wanted
 
     def _room_to_buy(
         self, soc: float, limit: float, ceiling: float, started: bool = False
@@ -2213,7 +2261,13 @@ class BatteryCoordinator:
         if reason is None and self._sun_is_enough():
             return False, None
         if ceiling <= 0:
-            # more sun coming than the packs could hold: buying nothing is right
+            # more sun coming than the packs could hold, or a cheaper window
+            # later: buying nothing is right - and a purchase begun earlier in
+            # this slot no longer owns it. Kept, the latch held the packs at
+            # nought for the rest of the slot while the house imported at
+            # EUR 0.35 (1 October, 14 minutes at 86 %).
+            if current is not None and self._buying_slot == _slot_key(current):
+                self._buying_slot = None
             return False, reason
         # Start with more room than the band, then run to the line, then stop
         # for the rest of the slot. The two ends differ on purpose: one line

@@ -93,7 +93,17 @@ def test_the_comparison_never_exceeds_cheap_hours(planned, monkeypatch):
     assert system.coordinator._hours_to_compare(100.0) == 1.0
 
 
-def test_with_nothing_to_buy_it_compares_the_usual_hours(planned, monkeypatch):
+def test_with_nothing_to_buy_it_compares_one_slot(planned, monkeypatch):
+    """Not five hours: a pack one point inside the band read as "nothing
+    needed" and compared five hours, one point lower it compared a quarter -
+    and the verdict flipped with every percent the house drew (1 October)."""
     system = at_one_am(planned, monkeypatch, soc=(100.0, 100.0))
 
-    assert system.coordinator._hours_to_compare(100.0) == 5
+    assert system.coordinator._hours_to_compare(100.0) == 0.25
+
+
+def test_a_percent_either_side_of_the_band_compares_the_same(planned, monkeypatch):
+    low = at_one_am(planned, monkeypatch, soc=(85.0, 85.0)).coordinator._hours_to_compare(88.0)
+    high = at_one_am(planned, monkeypatch, soc=(87.0, 87.0)).coordinator._hours_to_compare(88.0)
+
+    assert low == high == 0.25

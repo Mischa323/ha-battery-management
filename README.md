@@ -1069,6 +1069,23 @@ arriving from the other direction.
 If you want charge in hand for the *morning* peak regardless, that is what
 **SoC reserve** is for: it stops the packs discharging below it at any hour.
 
+**When the packs can carry the peak alone, any cheaper window will do.** The
+margin on the hold exists so the packs do not meet a peak emptier for a
+penny. When the charge above their floor sees the house through to the end of
+the peak — the measured house draw over the time to the peak plus the peak
+itself, with half again on top — meeting it emptier costs nothing, and the
+hold applies to *any* cheaper window after it. Reported on 1 October: two
+top-ups at €0.34 with the packs at 85 %, before a peak they would have crossed
+with charge to spare. Until the house draw has been measured, the margin
+applies as before.
+
+The comparison either side of the peak is made over what is actually to be
+bought (at least one slot, at most `cheap_hours`), so it does not jump from a
+quarter to five hours as a pack crosses the band — that flipped the verdict
+between "buy" and "wait" with every percent the house drew. And a hold that
+cuts a purchase short frees its slot: the packs go back to covering the house
+rather than sitting at nought while the meter imports.
+
 ### What the card says while it holds
 
 The hold changes *when* the packs are filled, not *how full*, and the card has
