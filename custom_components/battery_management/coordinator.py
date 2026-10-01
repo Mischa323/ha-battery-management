@@ -190,6 +190,11 @@ from .const import (
     TRADE_STATE_WOULD_SELL,
     PERIOD_DAY,
     PERIOD_HISTORY,
+    BASE_LOAD_BUCKET,
+    BASE_LOAD_HISTORY,
+    BASE_LOAD_HOURS,
+    BASE_LOAD_MIN_BUCKETS,
+    BASE_LOAD_STEADY_W,
     BUY_CEILING_BAND,
     SOLAR_CAPTURE_DAYS,
     SOLAR_CAPTURE_FLOOR,
@@ -648,6 +653,14 @@ class BatteryCoordinator:
         #: room the sun has to fill before it can refill anything sold
         self._house_draw_w: float | None = None
         self._house_draw_at: float | None = None
+        #: the standby load of the last night measured: {night, w, at,
+        #: average_w}, or None before the first. Per night in the history.
+        self.base_load: dict | None = None
+        self.base_load_history: dict[str, int] = {}
+        #: the night being measured, persisted so a restart at 03:00 does not
+        #: cost the night
+        self._night: dict | None = None
+        self._base_load_at: float | None = None
         #: whether the packs are currently above the min-output floor. Starts
         #: idle, so a restart never opens with a command too small to hold.
         self._above_min_output: bool = False
@@ -781,6 +794,9 @@ class BatteryCoordinator:
             # a record of hours that have gone, so a restart at noon does not
             # grey out the morning the chart is being consulted about
             "price_history": dict(self.price_history),
+            "base_load": self.base_load,
+            "base_load_history": dict(self.base_load_history),
+            "night": self._night,
             "saved_at": time.time(),
         }
 
@@ -843,6 +859,7 @@ class BatteryCoordinator:
             if stored and stored.get(key) is not None:
                 setattr(self, key, float(stored[key]))
         self._restore_periods(stored)
+        self._restore_base_load(stored)
         for field, value in ((stored or {}).get("money") or {}).items():
             if field in self.money and value is not None:
                 self.money[field] = float(value)
@@ -3104,6 +3121,7 @@ class BatteryCoordinator:
                 "solar_remaining_kwh": self.solar_remaining(),
                 "solar_breakdown": self.solar_breakdown(),
                 "usable_capacity_kwh": self.usable_capacity_kwh(),
+                "base_load_w": (self.base_load or {}).get("w"),
                 "solar_headroom_ceiling_soc": self._solar_headroom_ceiling(),
                 # what share of the sun history says reaches the packs, and how
                 # many measured days that rests on. None means the ceiling is
@@ -3742,6 +3760,7 @@ class BatteryCoordinator:
         now = time.time()
         previous, self._money_at = self._money_at, now
         self._track_house_draw(grid, now)
+        self._track_base_load(grid, now)
         if previous is None or grid is None:
             return
         elapsed = now - previous
@@ -3809,6 +3828,112 @@ class BatteryCoordinator:
             return
         weight = min(max(now - previous, 0.0) / 3600.0, 1.0)
         self._house_draw_w += weight * (house - self._house_draw_w)
+
+    def _track_base_load(self, grid: float | None, now: float) -> None:
+        """Measure tonight's standby load, and report it once the night is over.
+
+        Meter plus packs, like the house draw, in five-minute averages; the
+        lowest steady one is the night's figure. Closed on the first tick past
+        the window, whatever happened in between - a restart across 05:00
+        still reports the night it had measured.
+        """
+        previous, self._base_load_at = self._base_load_at, now
+        local = dt_util.as_local(dt_util.utcnow())
+        start, end = BASE_LOAD_HOURS
+        if not start <= local.hour < end:
+            self._close_night()
+            return
+        night = local.date().isoformat()
+        if self._night is not None and self._night.get("night") != night:
+            self._close_night()
+        if self._night is None:
+            self._night = {
+                "night": night, "seconds": 0.0, "wh": 0.0, "buckets": 0,
+                "lowest_w": None, "lowest_at": None,
+                "bucket_s": 0.0, "bucket_wh": 0.0, "bucket_from": None,
+                "packs_low": None, "packs_high": None,
+            }
+        packs = self._other_controller_power() if grid is not None else None
+        if packs is None or previous is None:
+            return
+        elapsed = now - previous
+        if elapsed <= 0 or elapsed > self._interval * MAX_ENERGY_GAP_INTERVALS:
+            return
+        house = grid + packs
+        tonight = self._night
+        tonight["seconds"] += elapsed
+        tonight["wh"] += house * elapsed / 3600.0
+        if tonight["bucket_from"] is None:
+            # the reading covers the interval just gone, so it starts there
+            began = local - timedelta(seconds=elapsed)
+            tonight["bucket_from"] = began.strftime("%H:%M")
+            tonight["packs_low"] = tonight["packs_high"] = packs
+        tonight["bucket_s"] += elapsed
+        tonight["bucket_wh"] += house * elapsed / 3600.0
+        tonight["packs_low"] = min(tonight["packs_low"], packs)
+        tonight["packs_high"] = max(tonight["packs_high"], packs)
+        if tonight["bucket_s"] < BASE_LOAD_BUCKET:
+            return
+        average = tonight["bucket_wh"] * 3600.0 / tonight["bucket_s"]
+        steady = tonight["packs_high"] - tonight["packs_low"] <= BASE_LOAD_STEADY_W
+        # a negative house is a meter and a pack sensor disagreeing, not a
+        # house giving power back at 03:00
+        if steady and average >= 0:
+            tonight["buckets"] += 1
+            if tonight["lowest_w"] is None or average < tonight["lowest_w"]:
+                tonight["lowest_w"] = average
+                tonight["lowest_at"] = tonight["bucket_from"]
+        tonight.update(bucket_s=0.0, bucket_wh=0.0, bucket_from=None)
+
+    def _close_night(self) -> None:
+        tonight, self._night = self._night, None
+        if (
+            tonight is None
+            or tonight["lowest_w"] is None
+            or tonight["buckets"] < BASE_LOAD_MIN_BUCKETS
+        ):
+            return
+        self.base_load = {
+            "night": tonight["night"],
+            "w": round(tonight["lowest_w"]),
+            "at": tonight["lowest_at"],
+            "average_w": round(tonight["wh"] * 3600.0 / tonight["seconds"]),
+        }
+        self.base_load_history[tonight["night"]] = self.base_load["w"]
+        for night in sorted(self.base_load_history)[:-BASE_LOAD_HISTORY]:
+            del self.base_load_history[night]
+
+    def _restore_base_load(self, stored) -> None:
+        """Measurements, so restored whatever their age, like the totals."""
+        stored = stored or {}
+        if isinstance(stored.get("base_load"), dict):
+            self.base_load = dict(stored["base_load"])
+        for night, watts in (stored.get("base_load_history") or {}).items():
+            if watts is not None:
+                self.base_load_history[str(night)] = int(watts)
+        if isinstance(stored.get("night"), dict) and "night" in stored["night"]:
+            self._night = dict(stored["night"])
+
+    def base_load_attributes(self) -> dict:
+        """Last night's standby load, the nights before it, and tonight so far."""
+        last = self.base_load or {}
+        history = dict(sorted(self.base_load_history.items()))
+        week = list(history.values())[-7:]
+        tonight = self._night or {}
+        start, end = BASE_LOAD_HOURS
+        return {
+            "night": last.get("night"),
+            "lowest_at": last.get("at"),
+            "night_average_w": last.get("average_w"),
+            "average_7_nights_w": round(sum(week) / len(week)) if week else None,
+            # what that much standing load comes to over a year
+            "per_year_kwh": round(last["w"] * 8.76) if last.get("w") is not None else None,
+            "window": f"{start:02d}:00-{end:02d}:00",
+            "tonight_lowest_w": (
+                None if tonight.get("lowest_w") is None else round(tonight["lowest_w"])
+            ),
+            "history": history,
+        }
 
     def money_attributes(self, name: str) -> dict:
         """One period's money, beside the total since counting began.

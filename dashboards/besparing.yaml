@@ -54,3 +54,22 @@ views:
         period: day
         days_to_show: 365
         chart_type: line
+
+      # what the house draws while everyone sleeps - last night's lowest five
+      # minutes between 01:00 and 05:00. On a Dutch install the id may be
+      # sensor.battery_management_sluipverbruik.
+      - type: tile
+        entity: sensor.battery_management_standby_load
+        name: Sluipverbruik vannacht
+
+      - type: statistics-graph
+        title: Sluipverbruik per nacht
+        entities:
+          - sensor.battery_management_standby_load
+        # the figure is set at 05:00 and holds for a day, so a day's mean is
+        # that night's, with a fifth of the night before in it
+        stat_types:
+          - mean
+        period: day
+        days_to_show: 30
+        chart_type: bar

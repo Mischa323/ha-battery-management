@@ -392,6 +392,9 @@
       "payback": {
         "name": "Payback time"
       },
+      "base_load": {
+        "name": "Standby load"
+      },
       "trade_status": {
         "name": "Smart trading status",
         "state": {

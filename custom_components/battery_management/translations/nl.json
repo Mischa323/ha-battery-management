@@ -392,6 +392,9 @@
       "payback": {
         "name": "Terugverdientijd"
       },
+      "base_load": {
+        "name": "Sluipverbruik"
+      },
       "trade_status": {
         "name": "Slim handelen status",
         "state": {

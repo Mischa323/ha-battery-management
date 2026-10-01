@@ -62,6 +62,7 @@ async def async_setup_entry(
             SavingsThisMonthSensor(coordinator, entry),
             SavingsTotalSensor(coordinator, entry),
             PaybackSensor(coordinator, entry),
+            BaseLoadSensor(coordinator, entry),
             TradeStatusSensor(coordinator, entry),
         ]
         + [
@@ -792,6 +793,34 @@ class PaybackSensor(_BaseSensor):
     @property
     def extra_state_attributes(self) -> dict:
         return self.coordinator.payback()
+
+
+class BaseLoadSensor(_BaseSensor):
+    """What the house draws while everyone sleeps: last night's lowest five
+    minutes between 01:00 and 05:00, meter plus packs.
+
+    Always available, unknown until the first night is measured - like the
+    payback time, so the attributes (tonight so far, the nights before) are
+    there from the first evening.
+    """
+
+    _attr_translation_key = "base_load"
+    _attr_native_unit_of_measurement = UnitOfPower.WATT
+    _attr_device_class = SensorDeviceClass.POWER
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_icon = "mdi:power-sleep"
+
+    def __init__(self, coordinator, entry) -> None:
+        super().__init__(coordinator, entry)
+        self._attr_unique_id = f"{entry.entry_id}_base_load"
+
+    @property
+    def native_value(self) -> int | None:
+        return (self.coordinator.base_load or {}).get("w")
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        return self.coordinator.base_load_attributes()
 
 
 class TradeStatusSensor(_BaseSensor):
