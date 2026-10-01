@@ -624,6 +624,20 @@ BASE_LOAD_STEADY_W = 1000
 BASE_LOAD_MIN_BUCKETS = 12
 BASE_LOAD_HISTORY = 30          # nights kept
 
+# One pack at low load. A pack converts a few hundred watts less efficiently
+# than it converts a kilowatt, and two packs each idling along at 225 W pay
+# that twice. With the switch on, a demand up to this is carried by the
+# fullest pack alone; above it both share again. Back to one below
+# `MIN_OUTPUT_RELEASE` of it, so a demand resting on the line does not swap
+# between one and two every tick.
+SINGLE_PACK_BELOW_W = 800
+#: the pack carrying it keeps doing so until the other is this many SoC points
+#: fuller - the swap is a ramp down and a ramp up, not worth a single point
+SINGLE_PACK_SWAP_POINTS = 5
+#: what each night's pack efficiency rests on. SoC comes in whole points, so a
+#: night that drained less than this is mostly rounding.
+PACK_DRAIN_MIN_KWH = 1.0
+
 PERIOD_HISTORY = {
     PERIOD_DAY: 62,
     PERIOD_WEEK: 53,

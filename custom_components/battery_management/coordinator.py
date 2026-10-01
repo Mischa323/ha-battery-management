@@ -196,6 +196,9 @@ from .const import (
     BASE_LOAD_MIN_BUCKETS,
     BASE_LOAD_STEADY_W,
     BUY_CEILING_BAND,
+    PACK_DRAIN_MIN_KWH,
+    SINGLE_PACK_BELOW_W,
+    SINGLE_PACK_SWAP_POINTS,
     SOLAR_CAPTURE_DAYS,
     SOLAR_CAPTURE_FLOOR,
     SOLAR_CAPTURE_MIN_DAYS,
@@ -661,6 +664,13 @@ class BatteryCoordinator:
         #: cost the night
         self._night: dict | None = None
         self._base_load_at: float | None = None
+        #: one pack at low load: the owner's switch, whether it is carrying
+        #: alone right now, and which pack is
+        self.single_pack: bool = False
+        self._single_engaged: bool = True
+        self._single_leader: str | None = None
+        #: per night, what the packs delivered against what their charge fell
+        self.pack_drain_history: dict[str, dict] = {}
         #: whether the packs are currently above the min-output floor. Starts
         #: idle, so a restart never opens with a command too small to hold.
         self._above_min_output: bool = False
@@ -797,6 +807,8 @@ class BatteryCoordinator:
             "base_load": self.base_load,
             "base_load_history": dict(self.base_load_history),
             "night": self._night,
+            "single_pack": self.single_pack,
+            "pack_drain_history": dict(self.pack_drain_history),
             "saved_at": time.time(),
         }
 
@@ -3122,6 +3134,8 @@ class BatteryCoordinator:
                 "solar_breakdown": self.solar_breakdown(),
                 "usable_capacity_kwh": self.usable_capacity_kwh(),
                 "base_load_w": (self.base_load or {}).get("w"),
+                "single_pack": self.single_pack,
+                "single_pack_carrying": self._single_leader,
                 "solar_headroom_ceiling_soc": self._solar_headroom_ceiling(),
                 # what share of the sun history says reaches the packs, and how
                 # many measured days that rests on. None means the ceiling is
@@ -3853,11 +3867,14 @@ class BatteryCoordinator:
                 "bucket_s": 0.0, "bucket_wh": 0.0, "bucket_from": None,
                 "packs_low": None, "packs_high": None,
             }
-        packs = self._other_controller_power() if grid is not None else None
-        if packs is None or previous is None:
+        if previous is None:
             return
         elapsed = now - previous
         if elapsed <= 0 or elapsed > self._interval * MAX_ENERGY_GAP_INTERVALS:
+            return
+        self._track_pack_drain(self._night, elapsed)
+        packs = self._other_controller_power() if grid is not None else None
+        if packs is None:
             return
         house = grid + packs
         tonight = self._night
@@ -3885,8 +3902,67 @@ class BatteryCoordinator:
                 tonight["lowest_at"] = tonight["bucket_from"]
         tonight.update(bucket_s=0.0, bucket_wh=0.0, bucket_from=None)
 
+    def _track_pack_drain(self, tonight: dict, elapsed: float) -> None:
+        """What the packs delivered tonight, and how far their charge fell.
+
+        The two differ by what the packs lose on the way - conversion and
+        their own upkeep - and that is the number "one pack at low load" is
+        meant to improve, so each night is kept with whether it was on. A
+        night with any charging in it measures nothing: the SoC is then
+        moving both ways.
+        """
+        drain = tonight.setdefault(
+            "drain",
+            {"valid": True, "delivered_wh": 0.0, "start": {}, "end": {}, "kwh": {}, "modes": []},
+        )
+        if not drain["valid"] or self._full_charge_minutes <= 0:
+            return
+        readings = {}
+        for cfg in self._units:
+            unit = self._unit_snapshot(cfg)
+            power = self._unit_power(cfg.name)
+            if not unit.online or unit.soc is None or power is None:
+                # a reading missing for a tick is skipped, not held against
+                # the night: the cloud drops a value now and then
+                return
+            if self.unit_status[cfg.name].target < 0:
+                drain["valid"] = False
+                return
+            readings[cfg.name] = (unit, power)
+        for name, (unit, power) in readings.items():
+            drain["start"].setdefault(name, unit.soc)
+            drain["end"][name] = unit.soc
+            drain["kwh"][name] = unit.unit_max * self._full_charge_minutes / 60000.0
+            drain["delivered_wh"] += max(power, 0.0) * elapsed / 3600.0
+        mode = "one_pack" if self.single_pack else "both"
+        if mode not in drain["modes"]:
+            drain["modes"].append(mode)
+
+    def _close_pack_drain(self, tonight: dict) -> None:
+        drain = tonight.get("drain")
+        if not drain or not drain["valid"] or not drain["start"]:
+            return
+        drained = sum(
+            max(drain["start"][name] - drain["end"][name], 0.0) / 100.0 * drain["kwh"][name]
+            for name in drain["start"]
+        )
+        if drained < PACK_DRAIN_MIN_KWH:
+            return
+        delivered = drain["delivered_wh"] / 1000.0
+        modes = drain["modes"]
+        self.pack_drain_history[tonight["night"]] = {
+            "delivered_kwh": round(delivered, 2),
+            "drained_kwh": round(drained, 2),
+            "efficiency": round(delivered / drained, 3),
+            "mode": modes[0] if len(modes) == 1 else "mixed",
+        }
+        for night in sorted(self.pack_drain_history)[:-BASE_LOAD_HISTORY]:
+            del self.pack_drain_history[night]
+
     def _close_night(self) -> None:
         tonight, self._night = self._night, None
+        if tonight is not None:
+            self._close_pack_drain(tonight)
         if (
             tonight is None
             or tonight["lowest_w"] is None
@@ -3913,6 +3989,65 @@ class BatteryCoordinator:
                 self.base_load_history[str(night)] = int(watts)
         if isinstance(stored.get("night"), dict) and "night" in stored["night"]:
             self._night = dict(stored["night"])
+        # a choice, like the trade mode: restored whether or not it is on
+        if stored.get("single_pack") is not None:
+            self.single_pack = bool(stored["single_pack"])
+        for night, record in (stored.get("pack_drain_history") or {}).items():
+            if isinstance(record, dict) and record.get("efficiency") is not None:
+                self.pack_drain_history[str(night)] = dict(record)
+
+    def single_pack_attributes(self) -> dict:
+        """The switch's case for itself: pack efficiency with and without it."""
+        nights = [self.pack_drain_history[n] for n in sorted(self.pack_drain_history)]
+
+        def average(mode: str) -> float | None:
+            values = [n["efficiency"] for n in nights if n["mode"] == mode]
+            return round(sum(values) / len(values) * 100.0, 1) if values else None
+
+        return {
+            "below_w": SINGLE_PACK_BELOW_W,
+            "carrying": self._single_leader if self.single_pack and self._single_engaged else None,
+            "efficiency_one_pack_pct": average("one_pack"),
+            "nights_one_pack": sum(1 for n in nights if n["mode"] == "one_pack"),
+            "efficiency_both_pct": average("both"),
+            "nights_both": sum(1 for n in nights if n["mode"] == "both"),
+            "history": dict(sorted(self.pack_drain_history.items())),
+        }
+
+    async def async_set_single_pack(self, value: bool) -> None:
+        self.single_pack = bool(value)
+        self._single_leader = None
+        self._single_engaged = True
+        self._save_state()
+        self._notify()
+
+    def _one_pack_at_low_load(self, demand: float, weights: dict, umax: dict) -> dict:
+        """Hand a low discharge to the fullest pack alone, when the owner asks.
+
+        Returns the weights `_distribute` is to split on: unchanged, or with
+        every pack but one at nought. Unchanged whenever one pack cannot do
+        it - a single pack eligible, a demand over the line, or the chosen
+        pack's own ceiling (the fuse, most often) below the demand.
+        """
+        if not self.single_pack:
+            return weights
+        eligible = [n for n, w in weights.items() if w > 0]
+        if len(eligible) < 2:
+            return weights
+        if demand > SINGLE_PACK_BELOW_W:
+            self._single_engaged = False
+        elif demand < SINGLE_PACK_BELOW_W * MIN_OUTPUT_RELEASE:
+            self._single_engaged = True
+        if not self._single_engaged:
+            return weights
+        fullest = max(eligible, key=lambda n: (weights[n], str(n)))
+        leader = self._single_leader
+        if leader not in eligible or weights[fullest] - weights[leader] >= SINGLE_PACK_SWAP_POINTS:
+            leader = fullest
+        if umax.get(leader, 0) < demand:
+            return weights
+        self._single_leader = leader
+        return {n: (w if n == leader else 0.0) for n, w in weights.items()}
 
     def base_load_attributes(self) -> dict:
         """Last night's standby load, the nights before it, and tonight so far."""
@@ -5206,6 +5341,7 @@ class BatteryCoordinator:
                     for n, s in online.items()
                     if self._may_discharge(n, s)
                 }
+                weights = self._one_pack_at_low_load(demand, weights, umax)
                 alloc = self._distribute(demand, weights, umax, self._min_output)
                 self.status = "discharging"
             elif sp < 0:  # charge
