@@ -767,7 +767,7 @@ listed here.
 | **Coordinator enabled** | The kill switch. Off hands the packs back and stops all coordination. This is not a mode: it is "let go entirely", which is why it is a separate switch. |
 | **Fast charge (emergency)** | Charges every pack at full power to its limit, from the grid if needed. Once full it *holds* them there until you switch it off, topping up if they drift down — you pressed it to be ready for something. Never resumed after a restart. |
 | **Dry run** | Decide everything, command nothing. On by default. Blocks every write including the safe revert, so it cannot fight another controller. The suppressed-command counter on this switch is its proof of life: a shadow run that suppressed nothing is a broken one. Switching it back **on** hands the packs back first — otherwise they would hold the last live command indefinitely. |
-| **One pack at low load** | Off by default. A discharge up to 800 W is carried by the fullest pack alone, the other rests; above that both share again, and it goes back to one below 600 W. The attributes compare, night by night, what the packs delivered against how far their charge fell, with it on and off — see [One pack at low load](#one-pack-at-low-load). |
+| **One pack at low load** | Off by default. A discharge up to 1500 W is carried by the fullest pack alone, the other rests; above that both share again, and it goes back to one below 1125 W. The attributes compare, night by night, what the packs delivered against how far their charge fell, with it on and off — see [One pack at low load](#one-pack-at-low-load). |
 
 ### Mode
 
@@ -1342,10 +1342,10 @@ in the September traces the packs' charge fell by about 560 W worth while they
 delivered about 450 W.
 
 The **One pack at low load** switch lets the fullest pack carry any discharge
-up to 800 W alone while the other rests:
+up to 1500 W alone while the other rests:
 
-- **Above 800 W both share again,** and it only goes back to one pack below
-  600 W, so a demand resting near the line does not swap every tick.
+- **Above 1500 W both share again,** and it only goes back to one pack below
+  1125 W, so a demand resting near the line does not swap every tick.
 - **The pack carrying it keeps doing so** until the other is five SoC points
   fuller. Then they swap, so both are used about equally.
 - **Two packs are used whenever one cannot do it alone:** when only one may
@@ -1366,6 +1366,23 @@ in `history`.
   night can be a few percent off either way; compare a few nights of each.
 - **What does not count:** a night in which the switch was flipped is kept
   as `mixed` and counted towards neither.
+
+**What it measured.** The line started at 800 W. Measured per 1 % of charge
+across the September and October traces, a pack returned about:
+
+| per pack | returned |
+| --- | --- |
+| 150–300 W | ~79 % |
+| 300–500 W | ~87 % |
+| 500–800 W | ~93 % |
+| 800–1500 W | ~98 % |
+
+These figures assume 1 % is 140 Wh, so read them against each other rather
+than as absolutes. Nights with both packs sharing ~450 W came out at 78–80 %,
+and nights with the switch on at 86–90 %. That is some 45–50 W less lost
+through a sleeping house. One pack at 1200 W also loses less than two at
+600 W, so the line is now 1500 W; above that there were too few measurements
+to say.
 
 ## External plan (EMHASS)
 

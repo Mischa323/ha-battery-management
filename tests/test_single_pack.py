@@ -46,6 +46,15 @@ def test_a_low_demand_goes_to_the_fullest_pack(pick):
     assert weights == {"Batterij 1": 0.0, "Batterij 2": 75.0}
 
 
+def test_a_kilowatt_goes_through_one_pack_too(pick):
+    """Measured on the owner's packs: one at 1200 W loses less than two at
+    600 W each (~98 % against ~93 % per 1 % of charge), so 1200 W is still a
+    one-pack demand - the airco dehumidifying at night is exactly that."""
+    weights = pick._one_pack_at_low_load(1200, {"Batterij 1": 60.0, "Batterij 2": 75.0}, UMAX)
+
+    assert weights == {"Batterij 1": 0.0, "Batterij 2": 75.0}
+
+
 def test_off_it_changes_nothing(pick):
     pick.single_pack = False
     weights = {"Batterij 1": 60.0, "Batterij 2": 75.0}

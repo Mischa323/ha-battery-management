@@ -122,7 +122,7 @@ class SinglePackSwitch(_BaseSwitch):
     """Let the fullest pack carry a low discharge alone.
 
     Two packs each covering 225 W of a sleeping house both run in the least
-    efficient part of their range. With this on, up to 800 W goes through one
+    efficient part of their range. With this on, up to 1500 W goes through one
     pack and the other rests. Whether that actually saves anything depends on
     what a resting pack still uses, which is why it is a switch and not a
     default: the attributes compare, night by night, what the packs delivered
