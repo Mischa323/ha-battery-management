@@ -118,9 +118,16 @@ def test_the_emptier_pack_decides(evening):
 
 
 def test_the_fuller_pack_does_not_stretch_the_sale(evening):
-    """92 % and 72 % over a 70 % line: the 72 % pack lasts 0.08 h, so one
+    """92 % and 73 % over a 70 % line: the 73 % pack lasts 0.12 h, so one
     hour - the peak - however much the other still holds."""
-    assert planned(evening({NOW: 0.55}, soc=(92.0, 72.0), floor=70)) == {key(NOW)}
+    assert planned(evening({NOW: 0.55}, soc=(92.0, 73.0), floor=70)) == {key(NOW)}
+
+
+def test_a_sale_the_tick_would_not_start_is_not_planned(evening):
+    """8 October: both packs at 72 % over a 70 % line. The tick starts a sale
+    only with more than the band above the line, so the plan must not show
+    one either - it did, and the evening's sale never came."""
+    assert planned(evening({NOW: 0.55}, soc=(72.0, 72.0), floor=70)) == set()
 
 
 def test_not_held_for_tomorrow_evening(evening):

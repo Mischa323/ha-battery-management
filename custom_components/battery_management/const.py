@@ -316,6 +316,7 @@ POLICY_SOLAR_HEADROOM = "solar_headroom"      # not buying, the sun still fits
 POLICY_CHEAPER_TOMORROW = "cheaper_tomorrow"  # holding back, a cheaper day is coming
 POLICY_CHEAPER_LATER = "cheaper_later"        # holding back, a cheaper window today
 POLICY_TRADE_SELL = "trade_sell"              # selling to the grid, it pays
+POLICY_TRADE_FILL = "trade_fill"              # filling up to sell tonight, it pays
 POLICY_EXTERNAL = "external_plan"             # following someone else's plan
 POLICY_EXTERNAL_STALE = "external_stale"      # plan went quiet, regulating ourselves
 POLICY_DYNAMIC_NO_PRICES = "dynamic_no_prices"  # dynamic, but the sensor is mute
@@ -340,6 +341,7 @@ POLICIES = [
     POLICY_CHEAPER_TOMORROW,
     POLICY_CHEAPER_LATER,
     POLICY_TRADE_SELL,
+    POLICY_TRADE_FILL,
     POLICY_EXTERNAL,
     POLICY_EXTERNAL_STALE,
     POLICY_DYNAMIC_NO_PRICES,

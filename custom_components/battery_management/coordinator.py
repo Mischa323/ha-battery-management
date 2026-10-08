@@ -13,6 +13,7 @@ against a household grid-power sensor so they behave as a single system:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import statistics
 import time
@@ -37,6 +38,7 @@ from .phases import (
 from .suppliers import FETCHERS, SOURCE_ENTITY, SOURCE_NONE
 from .trace import Trace
 from .trading import (
+    ROUND_TRIP,
     FeedIn,
     blended_refill,
     solar_refill_share,
@@ -222,6 +224,7 @@ from .const import (
     POLICY_DISABLED,
     POLICY_BUY_WINDOW,
     POLICY_CHEAPER_LATER,
+    POLICY_TRADE_FILL,
     POLICY_TRADE_SELL,
     POLICY_CHEAPER_TOMORROW,
     POLICY_DYNAMIC_CHARGE,
@@ -671,6 +674,11 @@ class BatteryCoordinator:
         self._single_leader: str | None = None
         #: per night, what the packs delivered against what their charge fell
         self.pack_drain_history: dict[str, dict] = {}
+        #: `trade_fill_ceiling`, kept for the length of one tick or one plan.
+        #: It is asked five times a tick and costs as much as the rest of the
+        #: tick together; nothing it reads moves inside one.
+        self._fill_memo_on: bool = False
+        self._fill_memo: tuple | None = None
         #: whether the packs are currently above the min-output floor. Starts
         #: idle, so a restart never opens with a command too small to hold.
         self._above_min_output: bool = False
@@ -1622,6 +1630,10 @@ class BatteryCoordinator:
         }
 
     def plan(self) -> dict:
+        with self._fill_memo_scope():
+            return self._plan()
+
+    def _plan(self) -> dict:
         """What it expects and intends today, for the dashboard.
 
         Deliberately a plain summary of the inputs and the resulting hours -
@@ -1756,6 +1768,8 @@ class BatteryCoordinator:
                 "sell_floor": self.sell_floor,
                 "min_margin_eur_kwh": self._trade_margin,
                 "above_floor_kwh": self.energy_above_sell_line(),
+                # how full it buys for tonight's sale, when that pays
+                "fill_to": self.trade_fill_ceiling(),
                 "sell_hours": describe(
                     s for s in sorted(slots or [], key=lambda s: s.start)
                     if _slot_key(s) in sell_at
@@ -2070,7 +2084,7 @@ class BatteryCoordinator:
             ):
                 if self._bound_ceiling(ceiling) > 0:
                     reason = POLICY_CHEAPER_LATER
-                return 0.0, reason
+                return self._with_trade_fill(0.0, reason)
             # The cheaper window is only past midnight. Then the end of the
             # day comes first, and the floor is what the packs meet it with -
             # the bridge, and no more. Only against a floor the owner stated:
@@ -2082,7 +2096,147 @@ class BatteryCoordinator:
                 if held < ceiling:
                     reason = POLICY_CHEAPER_LATER
                 ceiling = held
-        return self._bound_ceiling(ceiling), reason
+        return self._with_trade_fill(self._bound_ceiling(ceiling), reason)
+
+    def _with_trade_fill(self, ceiling: float, reason: str | None) -> tuple[float, str | None]:
+        """Raise the ceiling to what tonight's sale makes worth buying, if more.
+
+        Last, and over every hold above it: those weigh energy for the house
+        against a cheaper day or a cheaper window, and a kilowatt hour bought
+        to be sold tonight is answered by tonight's price, not tomorrow's.
+        """
+        fill = self.trade_fill_ceiling()
+        if fill is not None and fill > ceiling:
+            return fill, POLICY_TRADE_FILL
+        return ceiling, reason
+
+    @contextlib.contextmanager
+    def _fill_memo_scope(self):
+        """Remember the fill for the duration of a tick or a plan, no longer."""
+        if self._fill_memo_on:
+            yield
+            return
+        self._fill_memo_on, self._fill_memo = True, None
+        try:
+            yield
+        finally:
+            self._fill_memo_on, self._fill_memo = False, None
+
+    def trade_fill_ceiling(self) -> float | None:
+        if self._fill_memo_on and self._fill_memo is not None:
+            return self._fill_memo[0]
+        value = self._trade_fill_ceiling()
+        if self._fill_memo_on:
+            self._fill_memo = (value,)
+        return value
+
+    def _trade_fill_ceiling(self) -> float | None:
+        """How full to buy so tonight's sale pays for the purchase, or None.
+
+        Asked for on 8 October: the packs had bought to 70 % - "cheaper
+        tomorrow" stops at the floor - with the sell line at 70 % too, so the
+        evening's sale had nothing to sell. Filling further pays when a
+        kilowatt hour bought in a cheap quarter before the peak earns more in
+        the evening than it cost, after the round trip and the wear, by the
+        owner's own minimum margin - the same test a sale is held to, with
+        today's purchase in place of tomorrow's refill.
+
+        Paired a kilowatt hour at a time: the cheap quarters still to come
+        before the peak (the chart's green ones), cheapest first, against the
+        best-paying quarters of the evening (to the next midday, like
+        selling), each side at the packs' full power, after the evening's best
+        quarters have gone to what is above the sell line already. It stops at the first pair that does not clear the
+        margin, at the owner's "buy at most", and at the room the sun is
+        expected to fill - sun is free, and buying into its room exports it.
+
+        Only with trading on: shadow sells nothing, so a purchase for its
+        pretend sale would be real money for nothing.
+        """
+        if (
+            self.trade_mode != TRADE_ON
+            or self.mode != MODE_DYNAMIC
+            or self._battery_price <= 0
+            or self._full_charge_minutes <= 0
+        ):
+            return None
+        wear = self.battery_wear()
+        slots = self._price_forecast()
+        peak = self._buy_before()
+        if wear is None or not slots or peak is None:
+            return None
+        units = [self._unit_snapshot(cfg) for cfg in self._units]
+        units = [u for u in units if u.online and u.soc is not None and u.unit_max > 0]
+        if not units:
+            return None
+        hours = self._full_charge_minutes / 60.0
+        capacity = sum(u.unit_max * hours / 1000.0 for u in units)
+        power_kw = sum(u.unit_max for u in units) / 1000.0
+        target = self.buy_ceiling_max
+        solar = self._solar_headroom_ceiling()
+        if solar is not None:
+            target = min(target, solar)
+        room = sum(
+            max(min(target, u.charge_limit) - u.soc, 0.0) / 100.0 * u.unit_max * hours / 1000.0
+            for u in units
+        )
+        if room <= 0:
+            return None
+
+        now = dt_util.utcnow()
+        until = self._sell_window_end(now)
+        ctx = {
+            "market": self._component_by_slot("market_prices"),
+            "untaxed": self._component_by_slot("untaxed_prices"),
+        }
+        # each side as kWh at the packs' full power over the slot's length,
+        # so an hourly feed is weighed the same as a quarter-hourly one
+        sales = []
+        for slot in slots:
+            if slot.start < peak or slot.start >= until:
+                continue
+            value = self._export_value_at(slot, ctx)
+            if value is not None:
+                sales.append((value, power_kw * (slot.end - slot.start).total_seconds() / 3600.0))
+        # Only in the hours the chart calls cheap. The margin alone would buy
+        # at 18:00 for 0.40 to sell at 21:00 for 0.60 - arithmetic that holds,
+        # and not what anyone means by charging for the evening.
+        cheap, _dear = self._day_bands(slots)
+        buys = sorted(
+            (slot.price, power_kw * (slot.end - max(slot.start, now)).total_seconds() / 3600.0)
+            for slot in slots
+            if slot.end > now and slot.start < peak and _slot_key(slot) in cheap
+        )
+        if not sales or not buys:
+            return None
+        sales.sort(key=lambda sale: -sale[0])
+        # the best of the evening goes to what is above the line already
+        above = self.energy_above_sell_line() or 0.0
+        sale_kwh = []
+        for value, kwh in sales:
+            take = min(kwh, max(above, 0.0))
+            above -= take
+            if kwh - take > 0:
+                sale_kwh.append([value, kwh - take])
+        buy_kwh = [[price, kwh] for price, kwh in buys if kwh > 0]
+
+        filled = 0.0
+        while sale_kwh and buy_kwh and filled < room - 1e-9:
+            value, sell_left = sale_kwh[0]
+            price, buy_left = buy_kwh[0]
+            if sell_margin(value, price, wear) < self._trade_margin:
+                break
+            step = min(sell_left, buy_left, room - filled)
+            filled += step
+            sale_kwh[0][1] -= step
+            buy_kwh[0][1] -= step
+            if sale_kwh[0][1] <= 1e-9:
+                sale_kwh.pop(0)
+            if buy_kwh[0][1] <= 1e-9:
+                buy_kwh.pop(0)
+        if filled <= 0:
+            return None
+        mean_soc = sum(u.soc * u.unit_max for u in units) / sum(u.unit_max for u in units)
+        return round(min(target, mean_soc + filled / capacity * 100.0), 1)
 
     def later_same_day_step(self, hours: float | None = None) -> float | None:
         """How much cheaper the rest of the peak's own day is than before it.
@@ -2592,7 +2746,21 @@ class BatteryCoordinator:
             noon += timedelta(days=1)
         return noon
 
-    def _hours_to_sell(self) -> float | None:
+    def _sale_underway(self, slots) -> bool:
+        """Is a sale running, in this slot or on from the one before it?
+
+        A quarter boundary is not a start, so a sale carried over keeps going
+        to the line instead of being held to the starting band again.
+        """
+        current = slot_at(slots, dt_util.utcnow()) if slots else None
+        if current is None:
+            return False
+        previous = slot_at(slots, current.start - timedelta(seconds=1))
+        return self._selling_slot in (
+            _slot_key(current), _slot_key(previous) if previous is not None else None
+        )
+
+    def _hours_to_sell(self, slots=None) -> float | None:
         """How long a sale at full power runs before it stops.
 
         At full power every pack gives its own maximum, whatever its charge,
@@ -2616,7 +2784,13 @@ class BatteryCoordinator:
             if not unit.online or unit.soc is None or unit.unit_max <= 0:
                 continue
             pack_kwh = unit.unit_max * self._full_charge_minutes / 60.0 / 1000.0
-            room = max(unit.soc - drawn - self._sell_line(unit), 0.0) / 100.0 * pack_kwh
+            points = unit.soc - drawn - self._sell_line(unit)
+            # The tick only starts a sale with more than the band above the
+            # line; listing one it will not start is how the plan came to show
+            # a sale on 8 October with the packs at 72 % over a 70 % line.
+            if points <= BUY_CEILING_BAND and not (slots and self._sale_underway(slots)):
+                return 0.0
+            room = max(points, 0.0) / 100.0 * pack_kwh
             left = room / (unit.unit_max / 1000.0)
             hours = left if hours is None else min(hours, left)
         return hours
@@ -2650,7 +2824,7 @@ class BatteryCoordinator:
             s for s in slots
             if _slot_key(s) in margins and s.end > now and s.start < until
         ]
-        needed = self._hours_to_sell()
+        needed = self._hours_to_sell(slots)
         if needed is None:
             return {_slot_key(s): margins[_slot_key(s)] for s in candidates}
         chosen: dict[str, float] = {}
@@ -2708,10 +2882,7 @@ class BatteryCoordinator:
             return False
         # a sale running on from the slot before carries on to the line: the
         # band is for starting, and a quarter boundary is not a start
-        previous = slot_at(slots, current.start - timedelta(seconds=1))
-        started = self._selling_slot in (
-            key, _slot_key(previous) if previous is not None else None
-        )
+        started = self._sale_underway(slots)
         # shadow judges the packs as they would be had it really sold
         drawn = 0.0
         capacity = self.usable_capacity_kwh()
@@ -5011,6 +5182,10 @@ class BatteryCoordinator:
 
     # -- the control tick ----------------------------------------------------
     async def _async_tick(self, _now) -> None:
+        with self._fill_memo_scope():
+            await self._tick(_now)
+
+    async def _tick(self, _now) -> None:
         if self._detecting:
             # a probe owns the packs for its minute; regulating underneath it
             # would be measuring our own interference
