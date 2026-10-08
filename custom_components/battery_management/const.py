@@ -316,6 +316,7 @@ POLICY_SOLAR_HEADROOM = "solar_headroom"      # not buying, the sun still fits
 POLICY_CHEAPER_TOMORROW = "cheaper_tomorrow"  # holding back, a cheaper day is coming
 POLICY_CHEAPER_LATER = "cheaper_later"        # holding back, a cheaper window today
 POLICY_TRADE_SELL = "trade_sell"              # selling to the grid, it pays
+POLICY_TRADE_FILL = "trade_fill"              # filling up to sell tonight, it pays
 POLICY_EXTERNAL = "external_plan"             # following someone else's plan
 POLICY_EXTERNAL_STALE = "external_stale"      # plan went quiet, regulating ourselves
 POLICY_DYNAMIC_NO_PRICES = "dynamic_no_prices"  # dynamic, but the sensor is mute
@@ -340,6 +341,7 @@ POLICIES = [
     POLICY_CHEAPER_TOMORROW,
     POLICY_CHEAPER_LATER,
     POLICY_TRADE_SELL,
+    POLICY_TRADE_FILL,
     POLICY_EXTERNAL,
     POLICY_EXTERNAL_STALE,
     POLICY_DYNAMIC_NO_PRICES,
@@ -630,7 +632,12 @@ BASE_LOAD_HISTORY = 30          # nights kept
 # fullest pack alone; above it both share again. Back to one below
 # `MIN_OUTPUT_RELEASE` of it, so a demand resting on the line does not swap
 # between one and two every tick.
-SINGLE_PACK_BELOW_W = 800
+#
+# 1500 rather than the 800 it started at: measured per 1 % of charge across
+# the September and October traces, a pack returned ~93 % between 500 and
+# 800 W and ~98 % between 800 and 1500 W, so one pack at 1200 W loses less
+# than two at 600 W each. Above 1500 W there were too few measurements to say.
+SINGLE_PACK_BELOW_W = 1500
 #: the pack carrying it keeps doing so until the other is this many SoC points
 #: fuller - the swap is a ramp down and a ramp up, not worth a single point
 SINGLE_PACK_SWAP_POINTS = 5

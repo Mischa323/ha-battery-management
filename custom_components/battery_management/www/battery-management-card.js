@@ -2096,6 +2096,21 @@ function ceilingSays(ceiling) {
 }
 
 /**
+ * Why it is buying past what the house needs: tonight's sale pays for it.
+ *
+ * Asked for on 8 October, after the packs stopped at 70 % - the sell line -
+ * and the evening's sale had nothing to sell. With trading on, a cheap
+ * afternoon is worth filling when the evening pays more than the purchase
+ * costs after the round trip and the wear; the ceiling sentence then says
+ * how full, and this says why. Empty when nothing is bought for selling.
+ */
+function fillSays(trade) {
+  if (!trade || trade.fill_to == null) return "";
+  return " Laadt bij tot " + Math.round(trade.fill_to) +
+    " % om vanavond te verkopen: de avond levert meer op dan het inkopen kost.";
+}
+
+/**
  * What a hold on the purchase means, in the two places the card says it.
  *
  * Reported on the morning of 23 September: the card said there was nothing to
@@ -2279,7 +2294,7 @@ class BatteryManagementPlanCard extends HTMLElement {
             kwh(arriving(expected)) + " zon in de accu's."
           : "";
       el("plwhy").textContent = ceilingSays(expected.ceiling) + short +
-        (plan.waiting ? waitingSays(plan.waiting).why : "");
+        (plan.waiting ? waitingSays(plan.waiting).why : "") + fillSays(plan.trade);
       el("plsunshare").textContent = sunShareSays(expected);
     } else {
       el("plsun").textContent = "—";

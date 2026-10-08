@@ -767,7 +767,7 @@ listed here.
 | **Coordinator enabled** | The kill switch. Off hands the packs back and stops all coordination. This is not a mode: it is "let go entirely", which is why it is a separate switch. |
 | **Fast charge (emergency)** | Charges every pack at full power to its limit, from the grid if needed. Once full it *holds* them there until you switch it off, topping up if they drift down — you pressed it to be ready for something. Never resumed after a restart. |
 | **Dry run** | Decide everything, command nothing. On by default. Blocks every write including the safe revert, so it cannot fight another controller. The suppressed-command counter on this switch is its proof of life: a shadow run that suppressed nothing is a broken one. Switching it back **on** hands the packs back first — otherwise they would hold the last live command indefinitely. |
-| **One pack at low load** | Off by default. A discharge up to 800 W is carried by the fullest pack alone, the other rests; above that both share again, and it goes back to one below 600 W. The attributes compare, night by night, what the packs delivered against how far their charge fell, with it on and off — see [One pack at low load](#one-pack-at-low-load). |
+| **One pack at low load** | Off by default. A discharge up to 1500 W is carried by the fullest pack alone, the other rests; above that both share again, and it goes back to one below 1125 W. The attributes compare, night by night, what the packs delivered against how far their charge fell, with it on and off — see [One pack at low load](#one-pack-at-low-load). |
 
 ### Mode
 
@@ -858,6 +858,7 @@ capped — that would be throwing sun away.
 | Not buying, the sun still fits | What is coming free would not fit if it bought now |
 | Dynamic, but no prices available | The mode is on but the price sensor is mute |
 | Selling to the grid, it pays | Smart trading is On and this slot earns more than the refill and the wear |
+| Filling up to sell tonight, it pays | Smart trading is On and tonight's sale earns more than buying now costs; buying goes past the house's own ceiling, up to **Buy up to: at most** |
 | Following an external plan | EMHASS or similar is driving |
 | External plan went quiet | It stopped arriving; back to following the meter |
 | Fast charging / Charged, keeping full | The override is running |
@@ -1210,6 +1211,34 @@ the threshold; while it waits for a better one the card says so. It starts
 only with every pack more than two points above its sell line. It then carries on to the line and does not restart in that
 slot. It never sells in an hour it is buying in, and only in Dynamic tariff.
 
+**Filling up to sell.** Buying for the house alone stops where the house
+needs it to: on a day before a cheaper one only at **Buy up to: at least**.
+If that is also the sell line, the evening has nothing to sell. Reported on
+8 October: both at 70 %, a sale on the plan, and nothing above the line. So
+with trading **On** (not in shadow, which sells nothing), a cheap afternoon is
+filled further when tonight pays for it. It is the same test a sale is held
+to, with today's purchase in place of tomorrow's refill:
+
+- **Paired kWh by kWh:** the green hours still to come before the peak,
+  cheapest first, are set against the best-paying slots of the evening, up to
+  the next midday. Both are weighed at the packs' full power. The evening's
+  best slots go first to what is above the sell line already.
+- **Only while it pays:** a kWh is bought only while *earns − purchase ÷ 0.88 −
+  wear* is at least the minimum profit.
+- **Within your bounds:** no further than **Buy up to: at most**, and never
+  into the room the sun is expected to fill. Sun is free, and buying its room
+  would export it instead.
+- **Never in a dear hour:** only in the hours the chart colours green. The
+  arithmetic alone would buy at 18:00 for 0.40 to sell at 21:00 for 0.60.
+- **Holds do not stop it:** "cheaper tomorrow" and "cheaper later today" are
+  about the house's energy, so they do not hold this back. The policy reads
+  *Filling up to sell tonight, it pays*, and the plan card says how full and
+  why. The Plan sensor carries it as `trade.fill_to`.
+
+The plan also no longer lists a sale the tick would not start. A sale only
+starts with more than two points above the line, so packs resting just above
+it are not shown as about to sell.
+
 **Refilled by the sun.** A kWh sold tonight need not come back from the
 grid: if tomorrow's sun fills the packs anyway, it comes back for what that sun
 would have earned exported — usually less than the cheapest grid hour. Only
@@ -1342,10 +1371,10 @@ in the September traces the packs' charge fell by about 560 W worth while they
 delivered about 450 W.
 
 The **One pack at low load** switch lets the fullest pack carry any discharge
-up to 800 W alone while the other rests:
+up to 1500 W alone while the other rests:
 
-- **Above 800 W both share again,** and it only goes back to one pack below
-  600 W, so a demand resting near the line does not swap every tick.
+- **Above 1500 W both share again,** and it only goes back to one pack below
+  1125 W, so a demand resting near the line does not swap every tick.
 - **The pack carrying it keeps doing so** until the other is five SoC points
   fuller. Then they swap, so both are used about equally.
 - **Two packs are used whenever one cannot do it alone:** when only one may
@@ -1366,6 +1395,23 @@ in `history`.
   night can be a few percent off either way; compare a few nights of each.
 - **What does not count:** a night in which the switch was flipped is kept
   as `mixed` and counted towards neither.
+
+**What it measured.** The line started at 800 W. Measured per 1 % of charge
+across the September and October traces, a pack returned about:
+
+| per pack | returned |
+| --- | --- |
+| 150–300 W | ~79 % |
+| 300–500 W | ~87 % |
+| 500–800 W | ~93 % |
+| 800–1500 W | ~98 % |
+
+These figures assume 1 % is 140 Wh, so read them against each other rather
+than as absolutes. Nights with both packs sharing ~450 W came out at 78–80 %,
+and nights with the switch on at 86–90 %. That is some 45–50 W less lost
+through a sleeping house. One pack at 1200 W also loses less than two at
+600 W, so the line is now 1500 W; above that there were too few measurements
+to say.
 
 ## External plan (EMHASS)
 
