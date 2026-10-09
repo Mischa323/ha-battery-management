@@ -2096,6 +2096,30 @@ function ceilingSays(ceiling) {
 }
 
 /**
+ * When the plan buys less than the ceiling has room for, and why.
+ *
+ * Reported on 9 October: "Laadt tot 89 %" and 19.7 kWh from the grid, with
+ * the packs at 18 % and one quarter planned. On a flat day only the quarters
+ * that beat the dear hours by the price margin are bought on - the rest costs
+ * more in the round trip and the wear than it saves - so the ceiling is what
+ * buying *may* reach, not what it will. Then this replaces the ceiling
+ * sentence, and the tile shows what the plan will really buy. It names the
+ * setting the margin comes from - asked the same day whether those five cents
+ * were fixed: they are not.
+ */
+function paysSays(expected, margin) {
+  const to = Math.round(expected.ceiling);
+  const by = margin != null ? "€" + Number(margin).toFixed(2).replace(".", ",") : "genoeg";
+  const why = " is stroom minstens " + by + " per kWh goedkoper dan de dure uren " +
+    "waarvoor hij laadt. Meer laden kost meer (12 % verlies plus slijtage) dan het bespaart." +
+    " Dat bedrag is de Minimale besparing, in te stellen onder Configureren → Dynamisch tarief.";
+  return expected.grid_planned_kwh > 0.05
+    ? "Mag laden tot " + to + " %, maar vandaag loont maar " + kwh(expected.grid_planned_kwh) +
+      " van het net: alleen in de tijden hierboven" + why
+    : "Mag laden tot " + to + " %, maar vandaag loont laden van het net niet: in geen enkel kwartier" + why;
+}
+
+/**
  * Why it is buying past what the house needs: tonight's sale pays for it.
  *
  * Asked for on 8 October, after the packs stopped at 70 % - the sell line -
@@ -2282,7 +2306,11 @@ class BatteryManagementPlanCard extends HTMLElement {
     const expected = plan.expected || {};
     if (expected.known) {
       el("plsun").textContent = kwh(expected.solar_kwh);
-      el("plnet").textContent = kwh(expected.grid_kwh);
+      // what the plan will buy; an older integration only knows the room
+      const planned =
+        expected.grid_planned_kwh != null ? expected.grid_planned_kwh : expected.grid_kwh;
+      const limited = expected.grid_kwh > planned + 0.05;
+      el("plnet").textContent = kwh(planned);
       // Only where the two differ. Left alone they are the same number by
       // construction - the ceiling *is* "100 % minus the sun still coming" -
       // so saying it every time would be noise that buries the one case worth
@@ -2293,7 +2321,8 @@ class BatteryManagementPlanCard extends HTMLElement {
             " ruimte vrij, maar er komt maar " +
             kwh(arriving(expected)) + " zon in de accu's."
           : "";
-      el("plwhy").textContent = ceilingSays(expected.ceiling) + short +
+      el("plwhy").textContent =
+        (limited ? paysSays(expected, plan.price_margin) : ceilingSays(expected.ceiling)) + short +
         (plan.waiting ? waitingSays(plan.waiting).why : "") + fillSays(plan.trade);
       el("plsunshare").textContent = sunShareSays(expected);
     } else {

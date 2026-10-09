@@ -918,6 +918,25 @@ The **Battery Management Plan** card reads it for you, top to bottom:
 3. **Hoeveel wil hij nog laden** — how much the sun and the grid are still
    meant to put in, and why.
 
+**Via het net** is what the planned hours will actually buy, not the room up
+to the ceiling. The ceiling says how full buying *may* make the packs. On a
+flat day, buying stops short of it: a quarter is bought on only if it beats
+the dear hours it saves for by **Minimale besparing** (*Configure → Dynamisch
+tarief*, 5 cents by default). Below that, the 12 % round trip and the wear
+cost more than the stored kWh saves. Reported on 9 October: the card said
+"Laadt tot 89 %" and 19.7 kWh from the grid, with the packs at 18 % and a
+single quarter planned. Now the tile reads what the plan will buy, and the
+sentence under it says why it stops there and which setting decides it:
+*"Mag laden tot 89 %, maar vandaag loont maar 1.8 kWh van het net: alleen in
+de tijden hierboven is stroom minstens €0,05 per kWh goedkoper dan de dure
+uren waarvoor hij laadt…"*.
+
+The margin is measured against the dear hours of the next 24 hours. Once
+tomorrow's prices are published, a dear morning tomorrow lets today's cheap
+afternoon qualify, and it fills further. On the Plan sensor the figure is
+`expected.grid_planned_kwh`, beside `expected.grid_kwh` (the room) and
+`price_margin`.
+
 `sensor.battery_management_plan` carries the day's intentions as attributes:
 which hours it picked as cheap and dear, how much sun is still expected, the
 usable capacity, and the resulting charge ceiling. A markdown card renders it:

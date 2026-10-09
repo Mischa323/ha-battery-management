@@ -1778,12 +1778,40 @@ class BatteryCoordinator:
             "solar_remaining_kwh": self.solar_remaining(),
             "usable_capacity_kwh": self.usable_capacity_kwh(),
             "charge_ceiling": self.charge_ceiling(),
-            "expected": self.expected_charge(),
+            "expected": self._expected_with_plan(buying + later, now),
+            # what a quarter has to beat the dear hours by to be bought on
+            "price_margin": self._price_margin,
             "buy_ceiling_min": self.buy_ceiling_min,
             "buy_ceiling_max": self.buy_ceiling_max,
             "soc_reserve": self.soc_reserve,
             "mode": self.mode,
         }
+
+    def _expected_with_plan(self, planned_slots, now) -> dict:
+        """The split, plus how much of the grid half the plan will really buy.
+
+        `grid_kwh` is the room below the ceiling - what buying *may* put in.
+        On a flat day only the hours that beat the dear ones by the margin are
+        bought on, and the rest is not worth the round trip. Reported on 9
+        October: the card said 19.7 kWh from the grid, with one quarter
+        planned. `grid_planned_kwh` is what the planned hours can deliver at
+        the packs' full power, never more than the room.
+        """
+        expected = self.expected_charge()
+        if not expected.get("known"):
+            return expected
+        power_kw = sum(
+            snap.unit_max
+            for cfg in self._units
+            if (snap := self._unit_snapshot(cfg)).online
+        ) / 1000.0
+        hours = sum(
+            (slot.end - max(slot.start, now)).total_seconds() / 3600.0
+            for slot in planned_slots
+            if slot.end > now
+        )
+        expected["grid_planned_kwh"] = round(min(expected["grid_kwh"], power_kw * hours), 2)
+        return expected
 
     def solar_breakdown(self) -> dict:
         """Every number behind the remaining-sun figure, for checking it.
