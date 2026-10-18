@@ -81,4 +81,12 @@ const plan = (expected, margin = 0.05) => ({
     out.net === "19.7 kWh" && out.why.startsWith("Laadt tot 89 %"), out);
 }
 
+{
+  const out = render({ ...plan({ ...EXPECTED, grid_planned_kwh: 1.75 }),
+    buy_cost: { round_trip: 0.88, wear_eur_kwh: 0.0304 } });
+  check("with the cost counted it names the sum: loss, wear, and what is left",
+    out.why.includes("blijft er na 12 % verlies en €0,03 slijtage minstens €0,05 per kWh over") &&
+    out.why.includes("Minimale besparing"), out.why);
+}
+
 if (fails) { console.log(fails + " failed"); process.exit(1); }

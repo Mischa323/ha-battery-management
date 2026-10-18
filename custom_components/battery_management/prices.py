@@ -212,6 +212,7 @@ def pick_cheapest(
     min_margin: float = 0.0,
     include_ties: bool = False,
     reference: float | None = None,
+    cost=None,
 ) -> list[Slot]:
     """The cheapest `cheap_hours` worth of an already-chosen candidate set.
 
@@ -258,7 +259,14 @@ def pick_cheapest(
         # compare the cheap hours with each other and rule them all out - the
         # expensive stretch is exactly what was removed, and it is exactly what
         # the margin is about.
-        picked = [slot for slot in picked if slot.price + min_margin <= reference]
+        # `cost` turns a purchase price into what that kWh costs by the time
+        # it comes back out - the round trip and the wear. Without it the
+        # margin is a bare price gap, which a fixed five cents covered at
+        # 0.20 and did not at 0.34: on 18 October it bought at 0.338 for an
+        # evening at 0.39, and after 12 % and three cents of wear that kWh
+        # cost 0.414.
+        price_of = cost if cost is not None else (lambda price: price)
+        picked = [slot for slot in picked if price_of(slot.price) + min_margin <= reference]
     return sorted(picked, key=lambda slot: slot.start)
 
 
@@ -338,6 +346,7 @@ def cheapest_slots(
     min_margin: float = 0.0,
     until: datetime | None = None,
     since: datetime | None = None,
+    cost=None,
 ) -> list[Slot]:
     """Slots worth *buying* on in the window ahead.
 
@@ -380,7 +389,7 @@ def cheapest_slots(
             wanted = max(1, round(cheap_hours * 60 / span))
             dearest = sorted(whole, key=lambda slot: -slot.price)[:wanted]
             reference = min(slot.price for slot in dearest)
-    return pick_cheapest(candidates, cheap_hours, min_margin, reference=reference)
+    return pick_cheapest(candidates, cheap_hours, min_margin, reference=reference, cost=cost)
 
 
 def dearest_slots(
@@ -507,6 +516,7 @@ def slots_to_buy(
     needed_hours: float | None = None,
     until: datetime | None = None,
     since: datetime | None = None,
+    cost=None,
 ) -> list[Slot]:
     """Of the hours cheap enough to buy on, the cheapest few actually needed.
 
@@ -528,7 +538,7 @@ def slots_to_buy(
     no charging is planned for.
     """
     candidates = cheapest_slots(
-        slots, now, cheap_hours, window_hours, min_margin, until, since
+        slots, now, cheap_hours, window_hours, min_margin, until, since, cost
     )
     if needed_hours is None or not candidates:
         return candidates

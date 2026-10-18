@@ -19,9 +19,12 @@ from custom_components.battery_management.const import TRADE_OFF
 from .test_trade_fill import afternoon, prices  # noqa: F401
 from .test_trade_sell import trading  # noqa: F401
 
-#: 13:00 at 0.18, the rest of the afternoon 0.21, 0.25 otherwise
+#: 13:00 at 0.18, the rest of the afternoon 0.21, 0.30 otherwise. With the
+#: round trip and the wear counted (a EUR 5000 bank: 3 cents), 0.18 costs
+#: 0.234 by the time it is used and clears 0.30 by the five-cent margin;
+#: 0.21 costs 0.268 and does not.
 FLAT = dict(cheap=(13,), cheap_at=0.18, overrides={14: 0.21, 15: 0.21, 16: 0.21},
-            peak=(), ordinary=0.25)
+            peak=(), ordinary=0.30)
 #: the same, with tomorrow 06:00-12:00 at 0.35
 DEAR_MORNING = dict(FLAT, overrides={**FLAT["overrides"], **{h: 0.35 for h in range(30, 36)}})
 
@@ -43,7 +46,7 @@ def bought_hours(plan):
 
 
 def test_a_flat_day_buys_only_what_pays(day):
-    """Room for 19.6 kWh; one hour beats the 0.25 evening by five cents."""
+    """Room for 19.6 kWh; one hour beats the 0.30 evening by five cents."""
     plan = day(**FLAT).coordinator.plan()
 
     assert plan["expected"]["grid_kwh"] == pytest.approx(19.6)
@@ -53,8 +56,8 @@ def test_a_flat_day_buys_only_what_pays(day):
 
 
 def test_a_dearer_tomorrow_makes_more_of_today_pay(day):
-    """Tomorrow 06:00-12:00 at 0.35: the afternoon's 0.21 now beats the hours
-    it is saving for by more than the margin, so it fills."""
+    """Tomorrow 06:00-12:00 at 0.35: the afternoon's 0.21 (0.268 once used)
+    now beats the hours it is saving for by more than the margin, so it fills."""
     plan = day(**DEAR_MORNING).coordinator.plan()
 
     assert len(bought_hours(plan)) >= 3
@@ -62,7 +65,7 @@ def test_a_dearer_tomorrow_makes_more_of_today_pay(day):
 
 
 def test_a_wider_margin_buys_less(day):
-    """The five cents are a setting: at 0.10 not even 13:00 qualifies."""
+    """The five cents are a setting: at ten not even 13:00 qualifies."""
     system = day(**FLAT)
     system.coordinator._price_margin = 0.10
 

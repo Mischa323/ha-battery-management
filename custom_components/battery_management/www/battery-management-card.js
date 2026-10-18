@@ -2105,13 +2105,22 @@ function ceilingSays(ceiling) {
  * buying *may* reach, not what it will. Then this replaces the ceiling
  * sentence, and the tile shows what the plan will really buy. It names the
  * setting the margin comes from - asked the same day whether those five cents
- * were fixed: they are not.
+ * were fixed: they are not. With the packs' price known the margin is what is
+ * left after the round trip and the wear (18 October), and the sentence says
+ * that sum rather than a bare price gap.
  */
-function paysSays(expected, margin) {
+function paysSays(expected, margin, cost) {
   const to = Math.round(expected.ceiling);
-  const by = margin != null ? "€" + Number(margin).toFixed(2).replace(".", ",") : "genoeg";
-  const why = " is stroom minstens " + by + " per kWh goedkoper dan de dure uren " +
-    "waarvoor hij laadt. Meer laden kost meer (12 % verlies plus slijtage) dan het bespaart." +
+  const euro = (v) => "€" + Number(v).toFixed(2).replace(".", ",");
+  const by = margin != null ? euro(margin) : "genoeg";
+  // Since 18 October the margin is what is left after the round trip and the
+  // wear, when the packs' price is known - say so, with the wear in cents
+  const why = (cost
+    ? " blijft er na " + Math.round((1 - cost.round_trip) * 100) + " % verlies en " +
+      euro(cost.wear_eur_kwh) + " slijtage minstens " + by +
+      " per kWh over ten opzichte van de dure uren waarvoor hij laadt."
+    : " is stroom minstens " + by + " per kWh goedkoper dan de dure uren " +
+      "waarvoor hij laadt. Meer laden kost meer (12 % verlies plus slijtage) dan het bespaart.") +
     " Dat bedrag is de Minimale besparing, in te stellen onder Configureren → Dynamisch tarief.";
   return expected.grid_planned_kwh > 0.05
     ? "Mag laden tot " + to + " %, maar vandaag loont maar " + kwh(expected.grid_planned_kwh) +
@@ -2322,7 +2331,7 @@ class BatteryManagementPlanCard extends HTMLElement {
             kwh(arriving(expected)) + " zon in de accu's."
           : "";
       el("plwhy").textContent =
-        (limited ? paysSays(expected, plan.price_margin) : ceilingSays(expected.ceiling)) + short +
+        (limited ? paysSays(expected, plan.price_margin, plan.buy_cost) : ceilingSays(expected.ceiling)) + short +
         (plan.waiting ? waitingSays(plan.waiting).why : "") + fillSays(plan.trade);
       el("plsunshare").textContent = sunShareSays(expected);
     } else {
