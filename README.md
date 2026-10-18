@@ -931,6 +931,22 @@ sentence under it says why it stops there and which setting decides it:
 de tijden hierboven is stroom minstens €0,05 per kWh goedkoper dan de dure
 uren waarvoor hij laadt…"*.
 
+**The margin is what is left over, not a bare price gap.** With the packs'
+purchase price filled in (*Configure → Smart trading*), a quarter qualifies
+only when *price ÷ 0.88 + wear + Minimale besparing* stays under the dear
+hours it saves for. That is the same sum a sale is held to. A fixed five-cent
+gap covered the round trip at 0.20, but not at 0.34: on 18 October the old
+rule topped up at 0.338 for an evening at about 0.39. Such a kWh costs 0.384
+after the round trip, and 0.414 with three cents of wear, so the grid would
+have been cheaper. The chart's green hours use the same test. Without a
+purchase price there is no wear to count, and the margin keeps its old
+meaning: the bare gap, which has to cover those costs itself. Since the
+margin is now net, a lower setting (two or three cents) buys about as
+often as five did before on cheap days, and stops the losing top-ups on
+dear ones. Buying for tonight's sale (*Filling up to sell*) picks its own
+quarters against what the evening pays, so this rule does not ask about
+them a second time. The plan sensor carries the sum as `buy_cost`.
+
 The margin is measured against the dear hours of the next 24 hours. Once
 tomorrow's prices are published, a dear morning tomorrow lets today's cheap
 afternoon qualify, and it fills further. On the Plan sensor the figure is

@@ -1464,7 +1464,9 @@ class BatteryCoordinator:
         for day in by_day.values():
             cheap |= {
                 _slot_key(s)
-                for s in pick_cheapest(day, self._cheap_hours, self._price_margin)
+                for s in pick_cheapest(
+                    day, self._cheap_hours, self._price_margin, cost=self._buy_cost()
+                )
             }
             dear |= {_slot_key(s) for s in pick_dearest(day, self._expensive_hours)}
         return cheap, dear
@@ -1498,10 +1500,12 @@ class BatteryCoordinator:
         and does not claim it.
         """
         forecast = self._price_forecast() or []
+        if _slot_key(slot) in self.trade_fill_slots():
+            return True
         return slot in slots_to_buy(
             forecast, now, self._cheap_hours, PRICE_WINDOW_HOURS,
             self._price_margin, self.hours_of_charge_needed(),
-            until=self._buy_before(),
+            until=self._buy_before(), cost=self._buy_cost(),
         )
 
     def remember_price_verdict(self, bought: bool = False) -> None:
@@ -1669,7 +1673,7 @@ class BatteryCoordinator:
         later = slots_to_buy(
             slots, now, self._cheap_hours, PRICE_WINDOW_HOURS, self._price_margin,
             self.hours_of_charge_needed(ceiling=held["then_to"]),
-            since=held["until"],
+            since=held["until"], cost=self._buy_cost(),
         ) if held else []
 
         # The band is ranked per calendar day instead, so it holds still. See
@@ -1779,8 +1783,13 @@ class BatteryCoordinator:
             "usable_capacity_kwh": self.usable_capacity_kwh(),
             "charge_ceiling": self.charge_ceiling(),
             "expected": self._expected_with_plan(buying + later, now),
-            # what a quarter has to beat the dear hours by to be bought on
+            # what a quarter has to beat the dear hours by to be bought on,
+            # after the round trip and the wear when those are counted
             "price_margin": self._price_margin,
+            "buy_cost": (
+                {"round_trip": ROUND_TRIP, "wear_eur_kwh": round(self.battery_wear(), 4)}
+                if self._buy_cost() is not None else None
+            ),
             "buy_ceiling_min": self.buy_ceiling_min,
             "buy_ceiling_max": self.buy_ceiling_max,
             "soc_reserve": self.soc_reserve,
@@ -2151,14 +2160,28 @@ class BatteryCoordinator:
             self._fill_memo_on, self._fill_memo = False, None
 
     def trade_fill_ceiling(self) -> float | None:
+        return self._trade_fill()[0]
+
+    def trade_fill_slots(self) -> frozenset:
+        """The cheap slots the fill pairs with the evening's sale.
+
+        Its own: they are weighed against what the evening pays, not against
+        the dear hours the house would use the energy in, so the house's
+        buying rule must not be asked about them a second time - it measures
+        a different thing, and on 18 October's prices it would refuse them.
+        """
+        return self._trade_fill()[1]
+
+    def _trade_fill(self) -> tuple:
         if self._fill_memo_on and self._fill_memo is not None:
-            return self._fill_memo[0]
-        value = self._trade_fill_ceiling()
+            return self._fill_memo
+        ceiling, keys = self._trade_fill_ceiling()
+        value = (ceiling, frozenset(keys))
         if self._fill_memo_on:
-            self._fill_memo = (value,)
+            self._fill_memo = value
         return value
 
-    def _trade_fill_ceiling(self) -> float | None:
+    def _trade_fill_ceiling(self) -> tuple[float | None, set]:
         """How full to buy so tonight's sale pays for the purchase, or None.
 
         Asked for on 8 October: the packs had bought to 70 % - "cheaper
@@ -2186,16 +2209,16 @@ class BatteryCoordinator:
             or self._battery_price <= 0
             or self._full_charge_minutes <= 0
         ):
-            return None
+            return None, set()
         wear = self.battery_wear()
         slots = self._price_forecast()
         peak = self._buy_before()
         if wear is None or not slots or peak is None:
-            return None
+            return None, set()
         units = [self._unit_snapshot(cfg) for cfg in self._units]
         units = [u for u in units if u.online and u.soc is not None and u.unit_max > 0]
         if not units:
-            return None
+            return None, set()
         hours = self._full_charge_minutes / 60.0
         capacity = sum(u.unit_max * hours / 1000.0 for u in units)
         power_kw = sum(u.unit_max for u in units) / 1000.0
@@ -2208,7 +2231,7 @@ class BatteryCoordinator:
             for u in units
         )
         if room <= 0:
-            return None
+            return None, set()
 
         now = dt_util.utcnow()
         until = self._sell_window_end(now)
@@ -2225,17 +2248,30 @@ class BatteryCoordinator:
             value = self._export_value_at(slot, ctx)
             if value is not None:
                 sales.append((value, power_kw * (slot.end - slot.start).total_seconds() / 3600.0))
-        # Only in the hours the chart calls cheap. The margin alone would buy
+        # Only in the cheapest hours of their day. The margin alone would buy
         # at 18:00 for 0.40 to sell at 21:00 for 0.60 - arithmetic that holds,
-        # and not what anyone means by charging for the evening.
-        cheap, _dear = self._day_bands(slots)
+        # and not what anyone means by charging for the evening. The plain
+        # ranking, not the chart's green: the pairing below already weighs
+        # each kWh against the evening, the round trip and the wear, and the
+        # green band's own margin measured against the same day's dear hours
+        # would rule out a fill the evening pays for.
+        by_day: dict = {}
+        for slot in slots:
+            by_day.setdefault(dt_util.as_local(slot.start).date(), []).append(slot)
+        cheap = {
+            _slot_key(s) for day in by_day.values() for s in pick_cheapest(day, self._cheap_hours)
+        }
         buys = sorted(
-            (slot.price, power_kw * (slot.end - max(slot.start, now)).total_seconds() / 3600.0)
+            (
+                slot.price,
+                power_kw * (slot.end - max(slot.start, now)).total_seconds() / 3600.0,
+                _slot_key(slot),
+            )
             for slot in slots
             if slot.end > now and slot.start < peak and _slot_key(slot) in cheap
         )
         if not sales or not buys:
-            return None
+            return None, set()
         sales.sort(key=lambda sale: -sale[0])
         # the best of the evening goes to what is above the line already
         above = self.energy_above_sell_line() or 0.0
@@ -2245,16 +2281,18 @@ class BatteryCoordinator:
             above -= take
             if kwh - take > 0:
                 sale_kwh.append([value, kwh - take])
-        buy_kwh = [[price, kwh] for price, kwh in buys if kwh > 0]
+        buy_kwh = [[price, kwh, key] for price, kwh, key in buys if kwh > 0]
+        used: set = set()
 
         filled = 0.0
         while sale_kwh and buy_kwh and filled < room - 1e-9:
             value, sell_left = sale_kwh[0]
-            price, buy_left = buy_kwh[0]
+            price, buy_left, key = buy_kwh[0]
             if sell_margin(value, price, wear) < self._trade_margin:
                 break
             step = min(sell_left, buy_left, room - filled)
             filled += step
+            used.add(key)
             sale_kwh[0][1] -= step
             buy_kwh[0][1] -= step
             if sale_kwh[0][1] <= 1e-9:
@@ -2262,9 +2300,9 @@ class BatteryCoordinator:
             if buy_kwh[0][1] <= 1e-9:
                 buy_kwh.pop(0)
         if filled <= 0:
-            return None
+            return None, set()
         mean_soc = sum(u.soc * u.unit_max for u in units) / sum(u.unit_max for u in units)
-        return round(min(target, mean_soc + filled / capacity * 100.0), 1)
+        return round(min(target, mean_soc + filled / capacity * 100.0), 1), used
 
     def later_same_day_step(self, hours: float | None = None) -> float | None:
         """How much cheaper the rest of the peak's own day is than before it.
@@ -2440,9 +2478,12 @@ class BatteryCoordinator:
         # shrinking need now says about that hour
         if self._buying_slot == _slot_key(current):
             return True
+        if _slot_key(current) in self.trade_fill_slots():
+            return True
         return current in slots_to_buy(
             slots, now, self._cheap_hours, PRICE_WINDOW_HOURS, self._price_margin,
             self.hours_of_charge_needed(online), until=self._buy_before(),
+            cost=self._buy_cost(),
         )
 
     def _dynamic_should_charge(self, online: dict) -> tuple[bool, str | None]:
@@ -2524,6 +2565,21 @@ class BatteryCoordinator:
         return export_value(
             self._feed_in, self._current_component("market_prices"), tax, saldering
         )
+
+    def _buy_cost(self):
+        """What a kWh bought at a price costs once it is back out of the packs.
+
+        The round trip and the wear on top of the purchase - the same sum a
+        sale is held to - so the price margin is what is left over rather
+        than a bare price gap. None without a purchase price for the packs:
+        then there is no wear to count, and the margin keeps its old meaning.
+        """
+        if self._battery_price <= 0:
+            return None
+        wear = self.battery_wear()
+        if wear is None:
+            return None
+        return lambda price: price / ROUND_TRIP + wear
 
     def battery_wear(self) -> float | None:
         """EUR per kWh through the packs, from what the owner paid for them."""
@@ -2756,10 +2812,20 @@ class BatteryCoordinator:
 
     def _buy_slots(self, slots, now) -> list:
         """The cheap hours the packs still have room for - the plan's buying."""
-        return slots_to_buy(
+        chosen = slots_to_buy(
             slots, now, self._cheap_hours, PRICE_WINDOW_HOURS, self._price_margin,
             self.hours_of_charge_needed(), until=self._buy_before(),
+            cost=self._buy_cost(),
         )
+        fill = self.trade_fill_slots()
+        if fill:
+            keys = {_slot_key(slot) for slot in chosen}
+            chosen = sorted(
+                chosen + [s for s in slots if _slot_key(s) in fill and _slot_key(s) not in keys
+                          and s.end > now],
+                key=lambda slot: slot.start,
+            )
+        return chosen
 
     def _sell_window_end(self, now):
         """Selling looks ahead to the next midday, no further.

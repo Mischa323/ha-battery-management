@@ -196,3 +196,17 @@ async def test_worked_out_once_a_tick_and_afresh_the_next(afternoon, monkeypatch
     system.hass.states.set(system.soc(0), 100.0)
     system.hass.states.set(system.soc(1), 100.0)
     assert co.trade_fill_ceiling() is None
+
+
+def test_the_plan_and_the_chart_show_the_fill_s_own_hours(afternoon):
+    """Its quarters are weighed against the evening, so they are buy hours on
+    the plan and the chart even where the house's rule would not pick them."""
+    system = afternoon()
+    co = system.coordinator
+    fill = co.trade_fill_slots()
+    slots = co._price_forecast()
+
+    assert fill
+    assert fill <= {h["start"] for h in co.plan()["hours"] if h["buy"]}
+    first = next(s for s in slots if coordinator_module._slot_key(s) in fill)
+    assert co._price_buys(first, AFTERNOON)
