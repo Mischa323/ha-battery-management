@@ -198,6 +198,7 @@ from .const import (
     BASE_LOAD_MIN_BUCKETS,
     BASE_LOAD_STEADY_W,
     BUY_CEILING_BAND,
+    FLOOR_DONE_KWH,
     PACK_DRAIN_MIN_KWH,
     SINGLE_PACK_BELOW_W,
     SINGLE_PACK_SWAP_POINTS,
@@ -658,6 +659,9 @@ class BatteryCoordinator:
         #: slow average - how much the packs will give up overnight, which is
         #: room the sun has to fill before it can refill anything sold
         self._house_draw_w: float | None = None
+        #: what was commanded into the packs today, for "buy at least" when
+        #: no charging sensor measures it
+        self._floor_day: dict = {}
         #: the slot being bought on for "buy at least" alone, which stops at it
         self._floor_only_slot: str | None = None
         #: the same, learned per local hour of the day {0..23: W} - what the
@@ -823,6 +827,7 @@ class BatteryCoordinator:
             "single_pack": self.single_pack,
             "pack_drain_history": dict(self.pack_drain_history),
             "draw_profile": {str(h): round(w, 1) for h, w in self.draw_profile.items()},
+            "floor_day": dict(self._floor_day),
             "saved_at": time.time(),
         }
 
@@ -1799,6 +1804,10 @@ class BatteryCoordinator:
             # "buy at least" is binding: how full, and in which slots
             "floor": {
                 "to": self.buy_ceiling_min,
+                # an amount for the day, not a level for the evening
+                "kwh": None if self.floor_kwh() is None else round(self.floor_kwh(), 2),
+                "done_kwh": round(self.floor_done_kwh(), 2),
+                "remaining_kwh": round(self.floor_remaining_kwh(), 2),
                 "hours": describe(self._floor_slots(slots, now)) if slots else [],
             } if self.buy_ceiling_min > 0 else None,
             # what a quarter has to beat the dear hours by to be bought on,
@@ -2534,23 +2543,31 @@ class BatteryCoordinator:
         ceiling, reason = self._buy_ceiling()
         # a slot spent on reaching "buy at least" fills to it whatever the
         # holds say - that is what binding means (19 October)
-        # The floor's slots shrink as the packs fill - at the floor there are
-        # none - so a slot bought on for the floor alone is remembered, or the
-        # latch that finishes a purchase would carry it on to the full ceiling.
-        floor_only = current is not None and self._floor_only_slot == _slot_key(current)
-        on_floor = floor_only or (
-            current is not None and current in self._floor_slots(slots, now)
+        # The floor's slots shrink as the day's amount goes in - once it is in
+        # there are none - so a slot bought on for the floor alone is
+        # remembered, or the latch that finishes a purchase would carry it on
+        # to the full ceiling.
+        key = _slot_key(current) if current is not None else None
+        in_floor = key is not None and (
+            self._floor_only_slot == key or current in self._floor_slots(slots, now)
         )
-        if on_floor and (floor_only or not (
-            _slot_key(current) in self.trade_fill_slots()
-            or self._margin_buys(slots, now, current, online)
-        )):
-            # bought on for the floor alone: to the floor, and no further -
-            # above it the margin decides, and it did not pick this slot
-            ceiling = self._bound_ceiling(self.buy_ceiling_min)
-            self._floor_only_slot = _slot_key(current)
-        elif on_floor:
-            ceiling = max(ceiling, self._bound_ceiling(self.buy_ceiling_min))
+        if in_floor:
+            margin = key in self.trade_fill_slots() or self._margin_buys(
+                slots, now, current, online
+            )
+            if self.floor_remaining_kwh() >= FLOOR_DONE_KWH:
+                # the day's amount is not in yet: buy at full power, up to
+                # "buy at most", until it is
+                ceiling = max(ceiling, self._bound_ceiling(100.0))
+                if not margin:
+                    self._floor_only_slot = key
+            elif not margin:
+                # in: the floor has had its slot, and the margin did not want it
+                if self._buying_slot == key:
+                    self._buying_slot = None
+                self._topped_up_slot = key
+                return False, reason
+        on_floor = in_floor
         # the plain-threshold fallback, and only there: with a ceiling of its
         # own there is nothing for a bare "is there a lot of sun" to add
         if reason is None and not on_floor and self._sun_is_enough():
@@ -2890,23 +2907,68 @@ class BatteryCoordinator:
                 margins[key] = round(margin, 4)
         return margins
 
+    def floor_kwh(self) -> float | None:
+        """What "buy at least" asks to go into the packs each day, in kWh."""
+        capacity = self.usable_capacity_kwh()
+        if self.buy_ceiling_min <= 0 or not capacity:
+            return None
+        return self.buy_ceiling_min / 100.0 * capacity
+
+    def floor_done_kwh(self) -> float:
+        """What has gone into the packs today, toward "buy at least".
+
+        Measured by the charging sensors where they are configured - the sun
+        included - and by what was commanded into the packs where they are not.
+        """
+        if any(cfg.charge_power_sensor for cfg in self._units):
+            return self.period_charged_kwh("day")
+        today = dt_util.as_local(dt_util.utcnow()).date().isoformat()
+        return self._floor_day["wh"] / 1000.0 if self._floor_day.get("day") == today else 0.0
+
+    def floor_remaining_kwh(self) -> float:
+        """How much of today's "buy at least" is still to go in, in kWh.
+
+        An amount for the day, not a level for the evening - in the owner's
+        words on 19 October: "hij moet gewoon 50 % opgeladen zijn over de hele
+        dag ... als hij in de avond geen 50 % haalt is dat geen probleem". At
+        50 % of 28 kWh that is 14 kWh into the packs today, sun included,
+        bought in the cheapest slots. 13.1 kWh had gone in by 21:00 and it
+        planned another 6 to bring the level back up to 50 %.
+
+        Never more than there is room for below "buy at most".
+        """
+        target = self.floor_kwh()
+        if target is None or self._full_charge_minutes <= 0:
+            return 0.0
+        done = self.floor_done_kwh()
+        room = 0.0
+        for cfg in self._units:
+            unit = self._unit_snapshot(cfg)
+            if not unit.online or unit.soc is None:
+                continue
+            top = min(unit.charge_limit, self.buy_ceiling_max)
+            room += max(top - unit.soc, 0.0) / 100.0 * unit.unit_max * self._full_charge_minutes / 60000.0
+        return max(min(target - done, room), 0.0)
+
     def _floor_slots(self, slots, now) -> list:
-        """The cheapest slots before the end of today that reach "buy at least".
+        """The cheapest slots left today that put the day's floor in.
 
         Binding, asked for on 19 October: the owner would rather have the
-        packs at their floor every evening, a few cents a kWh notwithstanding,
-        than have the margin decide that topping up does not pay. So up to the
-        floor no margin is asked - only the cheapest slots, as many as it
-        takes - and above it the margin decides as before. Before the end of
-        the day, not before the coming peak: the floor is for the end of the
-        day, in the owner's words, and the cheapest hours to reach it may well
-        lie after the morning's peak.
+        day's amount in the packs, a few cents a kWh notwithstanding, than
+        have the margin decide that topping up does not pay. So for that
+        amount no margin is asked - only the cheapest slots before the end of
+        the day, at the packs' full power, as many as it takes - and beyond it
+        the margin decides as before.
         """
-        if self.buy_ceiling_min <= 0 or not slots or self._full_charge_minutes <= 0:
+        remaining = self.floor_remaining_kwh()
+        if remaining < FLOOR_DONE_KWH or not slots:
             return []
-        needed = self.hours_of_charge_needed(ceiling=self.buy_ceiling_min)
-        if not needed:
+        power = sum(
+            snap.unit_max for cfg in self._units if (snap := self._unit_snapshot(cfg)).online
+        ) / 1000.0
+        if power <= 0:
             return []
+        needed = remaining / power
         end = dt_util.start_of_local_day(dt_util.as_local(now) + timedelta(days=1))
         return slots_to_buy(
             slots, now, max(self._cheap_hours, needed), PRICE_WINDOW_HOURS, 0.0,
@@ -4091,6 +4153,20 @@ class BatteryCoordinator:
         if elapsed <= 0 or elapsed > self._interval * MAX_ENERGY_GAP_INTERVALS:
             return
 
+        # What was commanded into the packs, for "buy at least" when no
+        # charging sensor is configured - the counters above count nothing
+        # rather than guess, but the floor needs *some* figure, or with none
+        # it would buy to the top every day.
+        commanded = sum(
+            max(-self.unit_status[cfg.name].target, 0)
+            for cfg in self._units
+            if self.unit_status[cfg.name].online
+        )
+        day = dt_util.as_local(dt_util.utcnow()).date().isoformat()
+        if self._floor_day.get("day") != day:
+            self._floor_day = {"day": day, "wh": 0.0}
+        self._floor_day["wh"] += commanded * elapsed / 3600.0
+
         charging = 0.0
         seen = False
         for cfg in self._units:
@@ -4374,6 +4450,11 @@ class BatteryCoordinator:
         # a choice, like the trade mode: restored whether or not it is on
         if stored.get("single_pack") is not None:
             self.single_pack = bool(stored["single_pack"])
+        if isinstance(stored.get("floor_day"), dict) and "day" in stored["floor_day"]:
+            self._floor_day = {
+                "day": str(stored["floor_day"]["day"]),
+                "wh": float(stored["floor_day"].get("wh") or 0.0),
+            }
         for hour, watts in (stored.get("draw_profile") or {}).items():
             # a measurement, like the nights: restored whatever its age
             if watts is not None and str(hour).isdigit() and 0 <= int(hour) < 24:

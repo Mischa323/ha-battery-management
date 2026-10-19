@@ -51,9 +51,13 @@ function render(planAttrs) {
   return Object.assign(new String(rows + notes), { rows, notes, next });
 }
 
-// today at a fixed local evening, so the slots are always "today"
+// today at a fixed local evening, so the slots are always "today" - and the
+// clock pinned before it, as in plan_card.mjs: taken from the real clock the
+// 18:00 slots were already past whenever the suite ran after six
 const base = new Date();
 base.setHours(18, 0, 0, 0);
+const _pinned = base.getTime() - 60 * 60000;
+Date.now = () => _pinned;
 const q = 15 * 60000;
 const now = Date.now();
 const slot = (i, extra = {}) => {

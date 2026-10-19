@@ -970,12 +970,18 @@ weighs each dear slot by the draw of its own hour, and never by less than
 last night's standby load. The profile is in the diagnostics as
 `house_draw_profile_w`.
 
-**"Buy up to: at least" is binding.** Up to it, the cheapest hours before the
-end of the day are bought on whether or not the margin says it pays. Above it,
-the margin decides. A slot bought on for the floor alone stops at the floor.
-Asked for on 19 October: a filled bank every evening is worth a few cents a
-kWh on a flat day. The plan card says so, and the Plan sensor carries the
-slots as `floor`. Set it to 0 to leave everything to the margin.
+**"Buy up to: at least" is binding, and it is an amount for the day.** At
+50 % of a 28 kWh bank, 14 kWh go into the packs each day, sun included. Whatever
+is missing is bought in the cheapest slots before midnight, at full power,
+whether or not the margin says it pays. Beyond that amount the margin decides.
+It is not a level the packs must still hold in the evening. In the owner's
+words on 19 October: *"hij moet gewoon 50 % opgeladen zijn over de hele dag …
+als hij in de avond geen 50 % haalt is dat geen probleem"*. The first version
+did treat it as a level, and planned another 6 kWh at night after 13.1 kWh had
+already gone in. It is never more than the room below "Buy up to: at most".
+The plan card says how much and how much is still to go, and the Plan sensor
+carries `floor` (`kwh`, `done_kwh`, `remaining_kwh`, `hours`). Set it to 0 to
+leave everything to the margin.
 
 The margin is measured against the dear hours of the next 24 hours. Once
 tomorrow's prices are published, a dear morning tomorrow lets today's cheap
