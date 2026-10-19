@@ -1008,6 +1008,9 @@ def before_the_peak(planned, *, soc, floor=30.0, after_peak=0.20, day=None, **op
         PRICES, 0.33, day() if day else morning_of_the_22nd(after_peak)
     )
     system.coordinator.buy_ceiling_min = floor
+    # these are about the hold and the level it bridges with; the day's
+    # binding amount (19 October) is taken as already in, so it stays out
+    system.coordinator.floor_done_kwh = lambda: 1e6
     return system
 
 

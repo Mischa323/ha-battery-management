@@ -638,6 +638,9 @@ BASE_LOAD_HISTORY = 30          # nights kept
 # 800 W and ~98 % between 800 and 1500 W, so one pack at 1200 W loses less
 # than two at 600 W each. Above 1500 W there were too few measurements to say.
 SINGLE_PACK_BELOW_W = 1500
+#: "buy at least" counts as in once this little of the day's amount is left -
+#: the meter's last few watt-hours are not worth a purchase of their own
+FLOOR_DONE_KWH = 0.05
 #: the pack carrying it keeps doing so until the other is this many SoC points
 #: fuller - the swap is a ramp down and a ramp up, not worth a single point
 SINGLE_PACK_SWAP_POINTS = 5

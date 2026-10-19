@@ -2129,14 +2129,35 @@ function paysSays(expected, margin, cost) {
 }
 
 /**
- * "Buy at least" is binding (19 October): up to it the cheapest hours of the
- * day are bought on whether or not the margin says it pays. Say so, so a
- * purchase on a dear day does not read like the margin being ignored.
+ * "Buy at least" is binding (19 October), and an amount for the day: so
+ * many kWh into the packs, in the day's cheapest hours, whether or not the
+ * margin says it pays - not a level the packs must still hold in the
+ * evening. Say how much and how much is in, so a purchase on a dear day does
+ * not read like the margin being ignored.
  */
 function floorSays(floor) {
-  if (!floor || !floor.to || !(floor.hours || []).length) return "";
-  return " Laadt in elk geval tot " + Math.round(floor.to) +
-    " % (Koop minstens tot) in de goedkoopste uren van vandaag, ook als dat niet loont.";
+  if (!floor || !floor.to) return "";
+  const pct = Math.round(floor.to);
+  // an amount for the day since the evening of 19 October; an older
+  // integration only knows the level
+  if (floor.kwh == null) {
+    return (floor.hours || []).length
+      ? " Laadt in elk geval tot " + pct +
+        " % (Koop minstens tot) in de goedkoopste uren van vandaag, ook als dat niet loont."
+      : "";
+  }
+  const amount = kwh(floor.kwh);
+  if ((floor.remaining_kwh || 0) <= 0.05) {
+    // nothing left to buy: either it is in, or there is no room for the rest
+    if (floor.done_kwh != null && floor.done_kwh < floor.kwh - 0.05) {
+      return " Van de " + amount + " van vandaag (Koop minstens tot " + pct + " %) zit " +
+        kwh(floor.done_kwh) + " erin; meer past er niet onder \"Inkopen tot: hoogstens\".";
+    }
+    return " De " + amount + " van vandaag (Koop minstens tot " + pct + " %) zit er al in.";
+  }
+  return " Laadt vandaag in elk geval " + amount + " (Koop minstens tot " + pct +
+    " %) in de goedkoopste uren, ook als dat niet loont; nog " +
+    kwh(floor.remaining_kwh) + " te gaan.";
 }
 
 /**
