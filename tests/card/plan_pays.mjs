@@ -89,4 +89,13 @@ const plan = (expected, margin = 0.05) => ({
     out.why.includes("Minimale besparing"), out.why);
 }
 
+{
+  const floor = { to: 70, hours: [{ start: "x", end: "y", price: 0.338 }] };
+  const out = render({ ...plan({ ...EXPECTED, grid_planned_kwh: 3.5 }), floor });
+  check("a binding floor is named, so a dear-day purchase is not a mystery",
+    out.why.includes("Laadt in elk geval tot 70 % (Koop minstens tot)"), out.why);
+  const none = render({ ...plan({ ...EXPECTED, grid_planned_kwh: 3.5 }), floor: { to: 70, hours: [] } });
+  check("and not when it has nothing to buy for it", !none.why.includes("in elk geval"), none.why);
+}
+
 if (fails) { console.log(fails + " failed"); process.exit(1); }

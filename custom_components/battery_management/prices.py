@@ -213,8 +213,9 @@ def pick_cheapest(
     include_ties: bool = False,
     reference: float | None = None,
     cost=None,
-    dear: list[float] | None = None,
-    spread: float | None = None,
+    dear: list[Slot] | None = None,
+    use=None,
+    charge_kw: float | None = None,
 ) -> list[Slot]:
     """The cheapest `cheap_hours` worth of an already-chosen candidate set.
 
@@ -268,13 +269,15 @@ def pick_cheapest(
         # evening at 0.39, and after 12 % and three cents of wear that kWh
         # cost 0.414.
         price_of = cost if cost is not None else (lambda price: price)
-        if spread is not None and spread > 0:
+        if use is not None and charge_kw:
             # Measured in energy, not in hours (19 October). One cheap slot of
             # charging is what the packs take in at full power; the house uses
-            # it up over `spread` slots, dearest first. So the cheapest slot
-            # is set against the mean of the `spread` dearest slots, the next
-            # against the `spread` after those, and so on - each kWh against
-            # the kWh it actually replaces.
+            # it up slot by slot, dearest first, each slot taking what the
+            # house draws then. So the cheapest slot is set against the mean
+            # price of the first so many kWh the house would otherwise import
+            # at the dearest prices, the next slot against the kWh after
+            # those, and buying stops where the stored energy would only
+            # replace hours it does not beat.
             #
             # A single weakest-dear-hour reference for every slot was right
             # while the margin was a bare price gap. With the round trip and
@@ -282,18 +285,24 @@ def pick_cheapest(
             # shorter than the cheap hours - the fifth "dear" hour of a four-
             # hour peak is an ordinary one - and on 19 October the packs sat
             # at 5 % with the evening at 0.46 and nothing bought at 0.30.
-            prices = sorted(
-                dear if dear is not None else (slot.price for slot in candidates),
-                reverse=True,
+            #
+            # `use` says what the house draws in a slot - learned per hour of
+            # the day, because the evening's cooking is not the morning's
+            # standby, and one figure for both bought a single quarter for a
+            # peak that needed four.
+            items = sorted(
+                ((slot.price, use(slot)) for slot in (dear if dear is not None else candidates)),
+                key=lambda item: -item[0],
             )
             ordered = sorted(picked, key=lambda slot: (slot.price, slot.start))
-            picked = [
-                slot
-                for index, slot in enumerate(ordered)
-                if (value := _block_mean(prices, index * spread, (index + 1) * spread))
-                is not None
-                and price_of(slot.price) + min_margin <= value
-            ]
+            kept, filled = [], 0.0
+            for slot in ordered:
+                charge = charge_kw * (slot.end - slot.start).total_seconds() / 3600.0
+                value = _energy_mean(items, filled, filled + charge)
+                filled += charge
+                if value is not None and price_of(slot.price) + min_margin <= value:
+                    kept.append(slot)
+            picked = kept
         else:
             picked = [
                 slot for slot in picked if price_of(slot.price) + min_margin <= reference
@@ -301,23 +310,26 @@ def pick_cheapest(
     return sorted(picked, key=lambda slot: slot.start)
 
 
-def _block_mean(prices: list[float], start: float, end: float) -> float | None:
-    """The mean of `prices` over the fractional positions [start, end).
+def _energy_mean(items: list[tuple[float, float]], start: float, end: float) -> float | None:
+    """The mean price over the kWh positions [start, end) of `items`.
 
-    None when the block runs past the end of the list: there is nothing left
-    for that much stored energy to replace within the window, so it saves
-    nothing, and saying so is safer than averaging over a shorter block.
+    `items` are (price, kWh) in the order the stored energy would be used.
+    None when the block runs past the energy there is to replace within the
+    window: that much stored energy saves nothing, and saying so is safer
+    than averaging over a shorter block.
     """
-    if end > len(prices) + 1e-9 or end <= start:
+    if end <= start:
         return None
     total = 0.0
-    position = start
-    while position < end - 1e-9:
-        index = int(position)
-        step = min(index + 1, end) - position
-        total += prices[index] * step
-        position += step
-    return total / (end - start)
+    position = 0.0
+    for price, kwh in items:
+        low, high = max(start, position), min(end, position + kwh)
+        if high > low:
+            total += price * (high - low)
+        position += kwh
+        if position >= end - 1e-9:
+            return total / (end - start)
+    return None
 
 
 def pick_dearest(candidates: list[Slot], hours: float) -> list[Slot]:
@@ -397,7 +409,8 @@ def cheapest_slots(
     until: datetime | None = None,
     since: datetime | None = None,
     cost=None,
-    spread: float | None = None,
+    use=None,
+    charge_kw: float | None = None,
 ) -> list[Slot]:
     """Slots worth *buying* on in the window ahead.
 
@@ -441,10 +454,10 @@ def cheapest_slots(
             wanted = max(1, round(cheap_hours * 60 / span))
             dearest = sorted(whole, key=lambda slot: -slot.price)[:wanted]
             reference = min(slot.price for slot in dearest)
-            dear = [slot.price for slot in whole]
+            dear = whole
     return pick_cheapest(
         candidates, cheap_hours, min_margin, reference=reference, cost=cost,
-        dear=dear, spread=spread,
+        dear=dear, use=use, charge_kw=charge_kw,
     )
 
 
@@ -573,7 +586,8 @@ def slots_to_buy(
     until: datetime | None = None,
     since: datetime | None = None,
     cost=None,
-    spread: float | None = None,
+    use=None,
+    charge_kw: float | None = None,
 ) -> list[Slot]:
     """Of the hours cheap enough to buy on, the cheapest few actually needed.
 
@@ -595,7 +609,8 @@ def slots_to_buy(
     no charging is planned for.
     """
     candidates = cheapest_slots(
-        slots, now, cheap_hours, window_hours, min_margin, until, since, cost, spread
+        slots, now, cheap_hours, window_hours, min_margin, until, since, cost,
+        use, charge_kw,
     )
     if needed_hours is None or not candidates:
         return candidates

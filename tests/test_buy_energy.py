@@ -22,7 +22,7 @@ import pytest
 
 from custom_components.battery_management import coordinator as coordinator_module
 from custom_components.battery_management.const import TRADE_OFF
-from custom_components.battery_management.prices import _block_mean
+from custom_components.battery_management.prices import _energy_mean
 
 from .conftest import GRID_SENSOR
 from .test_trade_fill import AFTERNOON, DAY, PRICE_SENSOR, afternoon  # noqa: F401
@@ -106,14 +106,32 @@ def test_18_october_is_still_refused(day):
     assert bought(day(by_hour={h: 0.338 for h in (13, 14, 15, 16)}, ordinary=0.39)) == []
 
 
-def test_unmeasured_draw_keeps_the_old_single_reference(day):
-    system = day(draw=None)
-
-    assert system.coordinator._buy_spread() is None
+def test_nothing_measured_keeps_the_old_single_reference(day):
+    assert day(draw=None).coordinator._buy_energy() == {}
 
 
-def test_the_spread_is_pack_power_over_the_house(day):
-    assert day(draw=700.0).coordinator._buy_spread() == pytest.approx(10.0)
+def test_the_packs_charge_at_their_full_power(day):
+    assert day().coordinator._buy_energy()["charge_kw"] == pytest.approx(7.0)
+
+
+def test_the_evening_is_judged_on_the_evening_s_draw(day):
+    """The last hour's average says 500 W - the middle of the day - but the
+    house draws 2 kW at dinner time. The peak needs what dinner time draws."""
+    system = day(draw=500.0)
+    co = system.coordinator
+    morning = len(bought(system))
+    co.draw_profile = {h: 2000.0 for h in (17, 18, 19, 20)}
+
+    assert len(bought(system)) > morning
+
+
+def test_never_below_last_night_s_standby_load(day):
+    system = day(draw=100.0)
+    co = system.coordinator
+    co.base_load = {"night": "2026-08-04", "w": 450, "at": "03:00", "average_w": 480}
+    slot = co._price_forecast()[0]
+
+    assert co._draw_in(slot) == 450
 
 
 async def test_the_tick_buys_in_the_first_of_them(day, monkeypatch):
@@ -128,17 +146,49 @@ async def test_the_tick_buys_in_the_first_of_them(day, monkeypatch):
     assert system.coordinator.active_policy == "dynamic_charge"
 
 
-# -- the block mean --------------------------------------------------------
+# -- the energy mean -------------------------------------------------------
+
+ITEMS = [(0.5, 1.0), (0.4, 1.0), (0.3, 2.0)]
 
 
 def test_a_whole_block_is_its_mean():
-    assert _block_mean([0.5, 0.4, 0.3, 0.2], 0, 2) == pytest.approx(0.45)
+    assert _energy_mean(ITEMS, 0, 2) == pytest.approx(0.45)
 
 
-def test_a_fractional_block_weighs_by_overlap():
-    """[0.5, 2.0): half of 0.5 and all of 0.4 -> (0.25 + 0.4) / 1.5."""
-    assert _block_mean([0.5, 0.4, 0.3], 0.5, 2.0) == pytest.approx(0.65 / 1.5)
+def test_a_block_weighs_each_price_by_its_kwh():
+    """[0.5, 2.5): half a kWh at 0.5, one at 0.4, half at 0.3."""
+    assert _energy_mean(ITEMS, 0.5, 2.5) == pytest.approx((0.25 + 0.4 + 0.15) / 2.0)
 
 
-def test_a_block_past_the_end_replaces_nothing():
-    assert _block_mean([0.5, 0.4], 1.0, 3.0) is None
+def test_a_block_past_the_energy_replaces_nothing():
+    assert _energy_mean(ITEMS, 3.0, 5.0) is None
+
+
+def test_each_hour_learns_its_own_draw(day, monkeypatch):
+    """Three hours of observation in an hour is its memory: 2 kW for an hour
+    moves a 500 W bucket a third of the way there."""
+    system = day()
+    co = system.coordinator
+    hour = coordinator_module.dt_util.as_local(coordinator_module.dt_util.utcnow()).hour
+    co.draw_profile = {hour: 500.0}
+    co._house_draw_w = 500.0
+    monkeypatch.setattr(co, "_other_controller_power", lambda: 0.0)
+
+    co._track_house_draw(2000.0, 1000.0)
+    co._track_house_draw(2000.0, 1000.0 + 3600.0)
+
+    assert co.draw_profile[hour] == pytest.approx(1000.0)
+    assert set(co.draw_profile) == {hour}
+
+
+async def test_the_profile_survives_a_restart(day):
+    system = day()
+    system.coordinator.draw_profile = {18: 1800.0, 3: 420.0}
+    stored = system.coordinator._state_to_save()
+
+    fresh = day()
+    fresh.coordinator.draw_profile = {}
+    fresh.coordinator._store.data = stored
+    await fresh.coordinator._async_restore()
+
+    assert fresh.coordinator.draw_profile == {18: 1800.0, 3: 420.0}
