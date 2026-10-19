@@ -947,6 +947,18 @@ dear ones. Buying for tonight's sale (*Filling up to sell*) picks its own
 quarters against what the evening pays, so this rule does not ask about
 them a second time. The plan sensor carries the sum as `buy_cost`.
 
+**It weighs energy, not hours.** One quarter of buying at full power is
+1.75 kWh. A house drawing 1 kW uses that up over seven quarters, dearest
+first. So the cheapest quarter is set against the mean of the seven dearest
+quarters ahead, the next against the seven after those, and buying stops
+where the stored energy would only replace hours it does not beat. The
+house's draw is the measured one: the slow average of meter plus packs that
+the sale's refill also uses. Reported on 19 October: with one reference for
+every slot (the weakest of the `cheap_hours` dearest), a four-hour peak left
+the fifth "dear" hour an ordinary one. The packs then sat at 5 % before an
+evening at 0.46 with nothing bought at 0.30. Until the draw has been measured,
+the single reference still applies.
+
 The margin is measured against the dear hours of the next 24 hours. Once
 tomorrow's prices are published, a dear morning tomorrow lets today's cheap
 afternoon qualify, and it fills further. On the Plan sensor the figure is
