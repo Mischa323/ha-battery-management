@@ -658,6 +658,11 @@ class BatteryCoordinator:
         #: slow average - how much the packs will give up overnight, which is
         #: room the sun has to fill before it can refill anything sold
         self._house_draw_w: float | None = None
+        #: the slot being bought on for "buy at least" alone, which stops at it
+        self._floor_only_slot: str | None = None
+        #: the same, learned per local hour of the day {0..23: W} - what the
+        #: house draws at dinner time is not what it draws at noon
+        self.draw_profile: dict[int, float] = {}
         self._house_draw_at: float | None = None
         #: the standby load of the last night measured: {night, w, at,
         #: average_w}, or None before the first. Per night in the history.
@@ -817,6 +822,7 @@ class BatteryCoordinator:
             "night": self._night,
             "single_pack": self.single_pack,
             "pack_drain_history": dict(self.pack_drain_history),
+            "draw_profile": {str(h): round(w, 1) for h, w in self.draw_profile.items()},
             "saved_at": time.time(),
         }
 
@@ -1466,7 +1472,7 @@ class BatteryCoordinator:
                 _slot_key(s)
                 for s in pick_cheapest(
                     day, self._cheap_hours, self._price_margin,
-                    cost=self._buy_cost(), spread=self._buy_spread(),
+                    cost=self._buy_cost(), **self._buy_energy(),
                 )
             }
             dear |= {_slot_key(s) for s in pick_dearest(day, self._expensive_hours)}
@@ -1503,10 +1509,12 @@ class BatteryCoordinator:
         forecast = self._price_forecast() or []
         if _slot_key(slot) in self.trade_fill_slots():
             return True
+        if slot in self._floor_slots(forecast, now):
+            return True
         return slot in slots_to_buy(
             forecast, now, self._cheap_hours, PRICE_WINDOW_HOURS,
             self._price_margin, self.hours_of_charge_needed(),
-            until=self._buy_before(), cost=self._buy_cost(), spread=self._buy_spread(),
+            until=self._buy_before(), cost=self._buy_cost(), **self._buy_energy(),
         )
 
     def remember_price_verdict(self, bought: bool = False) -> None:
@@ -1674,7 +1682,7 @@ class BatteryCoordinator:
         later = slots_to_buy(
             slots, now, self._cheap_hours, PRICE_WINDOW_HOURS, self._price_margin,
             self.hours_of_charge_needed(ceiling=held["then_to"]),
-            since=held["until"], cost=self._buy_cost(), spread=self._buy_spread(),
+            since=held["until"], cost=self._buy_cost(), **self._buy_energy(),
         ) if held else []
 
         # The band is ranked per calendar day instead, so it holds still. See
@@ -1784,6 +1792,11 @@ class BatteryCoordinator:
             "usable_capacity_kwh": self.usable_capacity_kwh(),
             "charge_ceiling": self.charge_ceiling(),
             "expected": self._expected_with_plan(buying + later, now),
+            # "buy at least" is binding: how full, and in which slots
+            "floor": {
+                "to": self.buy_ceiling_min,
+                "hours": describe(self._floor_slots(slots, now)) if slots else [],
+            } if self.buy_ceiling_min > 0 else None,
             # what a quarter has to beat the dear hours by to be bought on,
             # after the round trip and the wear when those are counted
             "price_margin": self._price_margin,
@@ -2481,10 +2494,16 @@ class BatteryCoordinator:
             return True
         if _slot_key(current) in self.trade_fill_slots():
             return True
+        if current in self._floor_slots(slots, now):
+            return True
+        return self._margin_buys(slots, now, current, online)
+
+    def _margin_buys(self, slots, now, current, online=None) -> bool:
+        """Is `current` one the margin picks - the buying that pays?"""
         return current in slots_to_buy(
             slots, now, self._cheap_hours, PRICE_WINDOW_HOURS, self._price_margin,
             self.hours_of_charge_needed(online), until=self._buy_before(),
-            cost=self._buy_cost(), spread=self._buy_spread(),
+            cost=self._buy_cost(), **self._buy_energy(),
         )
 
     def _dynamic_should_charge(self, online: dict) -> tuple[bool, str | None]:
@@ -2509,9 +2528,28 @@ class BatteryCoordinator:
         current = slot_at(slots, now)
 
         ceiling, reason = self._buy_ceiling()
+        # a slot spent on reaching "buy at least" fills to it whatever the
+        # holds say - that is what binding means (19 October)
+        # The floor's slots shrink as the packs fill - at the floor there are
+        # none - so a slot bought on for the floor alone is remembered, or the
+        # latch that finishes a purchase would carry it on to the full ceiling.
+        floor_only = current is not None and self._floor_only_slot == _slot_key(current)
+        on_floor = floor_only or (
+            current is not None and current in self._floor_slots(slots, now)
+        )
+        if on_floor and (floor_only or not (
+            _slot_key(current) in self.trade_fill_slots()
+            or self._margin_buys(slots, now, current, online)
+        )):
+            # bought on for the floor alone: to the floor, and no further -
+            # above it the margin decides, and it did not pick this slot
+            ceiling = self._bound_ceiling(self.buy_ceiling_min)
+            self._floor_only_slot = _slot_key(current)
+        elif on_floor:
+            ceiling = max(ceiling, self._bound_ceiling(self.buy_ceiling_min))
         # the plain-threshold fallback, and only there: with a ceiling of its
         # own there is nothing for a bare "is there a lot of sun" to add
-        if reason is None and self._sun_is_enough():
+        if reason is None and not on_floor and self._sun_is_enough():
             return False, None
         if ceiling <= 0:
             # more sun coming than the packs could hold, or a cheaper window
@@ -2567,25 +2605,42 @@ class BatteryCoordinator:
             self._feed_in, self._current_component("market_prices"), tax, saldering
         )
 
-    def _buy_spread(self) -> float | None:
-        """Over how many slots the house uses up one slot of full-power charge.
+    def _draw_in(self, slot) -> float | None:
+        """What the house draws in `slot`, in W: its hour of the day if learned.
 
-        The packs at full power against the house's measured draw: at 7 kW
-        in and 700 W out, one slot of buying lasts ten slots of house. That
-        is what makes the margin a comparison of energy rather than of hours
-        (see `pick_cheapest`). None while the draw is unmeasured, or without
-        a purchase price - then the margin keeps its old, single reference.
+        The evening is not the morning. One figure for both - the last hour's
+        average - bought a single quarter at noon on 19 October for a peak at
+        dinner time that needed four. Never below last night's standby load:
+        whatever the hour, the house draws at least that.
         """
-        if self._buy_cost() is None or not self._house_draw_w or self._house_draw_w <= 0:
+        hour = dt_util.as_local(slot.start).hour
+        draw = self.draw_profile.get(hour, self._house_draw_w)
+        if draw is None:
             return None
+        floor = (self.base_load or {}).get("w")
+        return max(draw, floor) if floor else draw
+
+    def _buy_energy(self) -> dict:
+        """What the margin needs to weigh energy: the house per slot, the packs.
+
+        Empty - the old single reference - without a purchase price for the
+        packs (no wear to count) or before anything of the house is measured.
+        """
+        if self._buy_cost() is None or (self._house_draw_w is None and not self.draw_profile):
+            return {}
         power = sum(
             snap.unit_max
             for cfg in self._units
             if (snap := self._unit_snapshot(cfg)).online
         )
         if power <= 0:
-            return None
-        return max(power / self._house_draw_w, 1.0)
+            return {}
+
+        def use(slot) -> float:
+            draw = self._draw_in(slot) or 0.0
+            return draw / 1000.0 * (slot.end - slot.start).total_seconds() / 3600.0
+
+        return {"use": use, "charge_kw": power / 1000.0}
 
     def _buy_cost(self):
         """What a kWh bought at a price costs once it is back out of the packs.
@@ -2831,18 +2886,43 @@ class BatteryCoordinator:
                 margins[key] = round(margin, 4)
         return margins
 
+    def _floor_slots(self, slots, now) -> list:
+        """The cheapest slots before the end of today that reach "buy at least".
+
+        Binding, asked for on 19 October: the owner would rather have the
+        packs at their floor every evening, a few cents a kWh notwithstanding,
+        than have the margin decide that topping up does not pay. So up to the
+        floor no margin is asked - only the cheapest slots, as many as it
+        takes - and above it the margin decides as before. Before the end of
+        the day, not before the coming peak: the floor is for the end of the
+        day, in the owner's words, and the cheapest hours to reach it may well
+        lie after the morning's peak.
+        """
+        if self.buy_ceiling_min <= 0 or not slots or self._full_charge_minutes <= 0:
+            return []
+        needed = self.hours_of_charge_needed(ceiling=self.buy_ceiling_min)
+        if not needed:
+            return []
+        end = dt_util.start_of_local_day(dt_util.as_local(now) + timedelta(days=1))
+        return slots_to_buy(
+            slots, now, max(self._cheap_hours, needed), PRICE_WINDOW_HOURS, 0.0,
+            needed, until=end,
+        )
+
     def _buy_slots(self, slots, now) -> list:
         """The cheap hours the packs still have room for - the plan's buying."""
         chosen = slots_to_buy(
             slots, now, self._cheap_hours, PRICE_WINDOW_HOURS, self._price_margin,
             self.hours_of_charge_needed(), until=self._buy_before(),
-            cost=self._buy_cost(), spread=self._buy_spread(),
+            cost=self._buy_cost(), **self._buy_energy(),
         )
-        fill = self.trade_fill_slots()
-        if fill:
+        extra = set(self.trade_fill_slots()) | {
+            _slot_key(slot) for slot in self._floor_slots(slots, now)
+        }
+        if extra:
             keys = {_slot_key(slot) for slot in chosen}
             chosen = sorted(
-                chosen + [s for s in slots if _slot_key(s) in fill and _slot_key(s) not in keys
+                chosen + [s for s in slots if _slot_key(s) in extra and _slot_key(s) not in keys
                           and s.end > now],
                 key=lambda slot: slot.start,
             )
@@ -3486,6 +3566,9 @@ class BatteryCoordinator:
                     "selling": self.trade_selling,
                     "would_sell": self.trade_would_sell,
                     "shadow_sold_kwh": round(self._shadow_sold_kwh, 3),
+                    "house_draw_profile_w": {
+                        str(h): round(w) for h, w in sorted(self.draw_profile.items())
+                    },
                     "house_draw_w": (
                         None if self._house_draw_w is None else round(self._house_draw_w)
                     ),
@@ -4128,6 +4211,15 @@ class BatteryCoordinator:
             return
         weight = min(max(now - previous, 0.0) / 3600.0, 1.0)
         self._house_draw_w += weight * (house - self._house_draw_w)
+        # And per hour of the day, slowly: each hour is seen for an hour a
+        # day, so three hours of observation is three days of memory.
+        hour = dt_util.as_local(dt_util.utcnow()).hour
+        known = self.draw_profile.get(hour)
+        if known is None:
+            self.draw_profile[hour] = house
+        else:
+            slow = min(max(now - previous, 0.0) / (3 * 3600.0), 1.0)
+            self.draw_profile[hour] = known + slow * (house - known)
 
     def _track_base_load(self, grid: float | None, now: float) -> None:
         """Measure tonight's standby load, and report it once the night is over.
@@ -4278,6 +4370,10 @@ class BatteryCoordinator:
         # a choice, like the trade mode: restored whether or not it is on
         if stored.get("single_pack") is not None:
             self.single_pack = bool(stored["single_pack"])
+        for hour, watts in (stored.get("draw_profile") or {}).items():
+            # a measurement, like the nights: restored whatever its age
+            if watts is not None and str(hour).isdigit() and 0 <= int(hour) < 24:
+                self.draw_profile[int(hour)] = float(watts)
         for night, record in (stored.get("pack_drain_history") or {}).items():
             if isinstance(record, dict) and record.get("efficiency") is not None:
                 self.pack_drain_history[str(night)] = dict(record)

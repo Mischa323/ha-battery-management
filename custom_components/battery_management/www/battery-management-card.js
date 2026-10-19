@@ -2129,6 +2129,17 @@ function paysSays(expected, margin, cost) {
 }
 
 /**
+ * "Buy at least" is binding (19 October): up to it the cheapest hours of the
+ * day are bought on whether or not the margin says it pays. Say so, so a
+ * purchase on a dear day does not read like the margin being ignored.
+ */
+function floorSays(floor) {
+  if (!floor || !floor.to || !(floor.hours || []).length) return "";
+  return " Laadt in elk geval tot " + Math.round(floor.to) +
+    " % (Koop minstens tot) in de goedkoopste uren van vandaag, ook als dat niet loont.";
+}
+
+/**
  * Why it is buying past what the house needs: tonight's sale pays for it.
  *
  * Asked for on 8 October, after the packs stopped at 70 % - the sell line -
@@ -2332,7 +2343,7 @@ class BatteryManagementPlanCard extends HTMLElement {
           : "";
       el("plwhy").textContent =
         (limited ? paysSays(expected, plan.price_margin, plan.buy_cost) : ceilingSays(expected.ceiling)) + short +
-        (plan.waiting ? waitingSays(plan.waiting).why : "") + fillSays(plan.trade);
+        (plan.waiting ? waitingSays(plan.waiting).why : "") + floorSays(plan.floor) + fillSays(plan.trade);
       el("plsunshare").textContent = sunShareSays(expected);
     } else {
       el("plsun").textContent = "—";

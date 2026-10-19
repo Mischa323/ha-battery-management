@@ -959,6 +959,22 @@ the fifth "dear" hour an ordinary one. The packs then sat at 5 % before an
 evening at 0.46 with nothing bought at 0.30. Until the draw has been measured,
 the single reference still applies.
 
+**The house's draw is learned per hour of the day.** What the house draws at
+dinner time is not what it draws at noon. A single figure for both (the last
+hour's average) bought one quarter at noon on 19 October for a peak that
+needed four. Each hour of the day keeps its own slow average of meter plus
+packs, with about three days of memory, which survives a restart. The margin
+weighs each dear slot by the draw of its own hour, and never by less than
+last night's standby load. The profile is in the diagnostics as
+`house_draw_profile_w`.
+
+**"Buy up to: at least" is binding.** Up to it, the cheapest hours before the
+end of the day are bought on whether or not the margin says it pays. Above it,
+the margin decides. A slot bought on for the floor alone stops at the floor.
+Asked for on 19 October: a filled bank every evening is worth a few cents a
+kWh on a flat day. The plan card says so, and the Plan sensor carries the
+slots as `floor`. Set it to 0 to leave everything to the margin.
+
 The margin is measured against the dear hours of the next 24 hours. Once
 tomorrow's prices are published, a dear morning tomorrow lets today's cheap
 afternoon qualify, and it fills further. On the Plan sensor the figure is
