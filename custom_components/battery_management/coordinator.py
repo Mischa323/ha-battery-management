@@ -19,7 +19,7 @@ import statistics
 import time
 from collections import deque
 from dataclasses import dataclass
-from datetime import date, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
@@ -294,6 +294,28 @@ def _period_key(name: str, local) -> str:
         return "%04d-W%02d" % (iso[0], iso[1])
     return local.strftime("%Y-%m")
 
+
+
+def _ranges(hours) -> str:
+    """Plan hours as local time ranges: "13:00-14:30 22:15-22:30".
+
+    For the trace, where a list of ISO quarters would be unreadable. A range
+    crossing midnight carries the next day's date on its start.
+    """
+    out: list[list] = []
+    for hour in hours:
+        start = dt_util.as_local(datetime.fromisoformat(hour["start"]))
+        end = dt_util.as_local(datetime.fromisoformat(hour["end"]))
+        if out and out[-1][1] == start:
+            out[-1][1] = end
+        else:
+            out.append([start, end])
+    today = dt_util.as_local(dt_util.utcnow()).date()
+    return " ".join(
+        ("" if start.date() == today else f"{start:%d-%m} ")
+        + f"{start:%H:%M}-{end:%H:%M}"
+        for start, end in out
+    )
 
 def _slot_key(slot) -> str:
     """A stable identity for a price slot: its start, normalised to UTC.
@@ -659,6 +681,14 @@ class BatteryCoordinator:
         #: slow average - how much the packs will give up overnight, which is
         #: room the sun has to fill before it can refill anything sold
         self._house_draw_w: float | None = None
+        #: meter plus packs this tick - the house less the sun - for the trace
+        self._house_now_w: float | None = None
+        #: this tick's buying verdict, for the trace (`_dynamic_verdict`)
+        self._buy_verdict: dict | None = None
+        #: why the purchase under way was started, for its later ticks
+        self._buying_why: str | None = None
+        #: the buy and sell slots of the last plan worked out, for the trace
+        self._plan_slots: dict | None = None
         #: what was commanded into the packs today, for "buy at least" when
         #: no charging sensor measures it
         self._floor_day: dict = {}
@@ -1653,7 +1683,14 @@ class BatteryCoordinator:
 
     def plan(self) -> dict:
         with self._fill_memo_scope():
-            return self._plan()
+            plan = self._plan()
+        ahead = [h for h in plan.get("hours") or () if not h.get("past")]
+        self._plan_slots = {
+            "buy": _ranges(h for h in ahead if h.get("buy")),
+            "later": _ranges(h for h in ahead if h.get("expected")),
+            "sell": _ranges(h for h in ahead if h.get("sell")),
+        }
+        return plan
 
     def _plan(self) -> dict:
         """What it expects and intends today, for the dashboard.
@@ -2494,22 +2531,33 @@ class BatteryCoordinator:
         and normal grid-zero resumes. The latch holds only the hour a purchase
         actually started in.
         """
+        return self._buying_hour_reason(online) is not None
+
+    def _buying_hour_reason(self, online: dict) -> str | None:
+        """Why the hour we are in is one to buy in, or None when it is not.
+
+        `latched` (a purchase under way finishes its slot), `trade_fill`,
+        `floor` or `margin` - the first that applies, in that order. The
+        trace carries it, so "why did it buy then" is in the file.
+        """
         slots = self._price_forecast()
         if slots is None:
-            return False
+            return None
         now = dt_util.utcnow()
         current = slot_at(slots, now)
         if current is None:
-            return False
+            return None
         # a purchase already under way finishes its hour, whatever the
         # shrinking need now says about that hour
         if self._buying_slot == _slot_key(current):
-            return True
+            return "latched"
         if _slot_key(current) in self.trade_fill_slots():
-            return True
+            return "trade_fill"
         if current in self._floor_slots(slots, now):
-            return True
-        return self._margin_buys(slots, now, current, online)
+            return "floor"
+        if self._margin_buys(slots, now, current, online):
+            return "margin"
+        return None
 
     def _margin_buys(self, slots, now, current, online=None) -> bool:
         """Is `current` one the margin picks - the buying that pays?"""
@@ -2532,11 +2580,32 @@ class BatteryCoordinator:
         dearest of them by construction. `slots_to_buy` narrows the set to the
         cheapest few the packs actually need.
         """
+        verdict = self._dynamic_verdict(online)
+        self._buy_verdict = verdict
+        return verdict["buy"], verdict["policy"]
+
+    def _dynamic_verdict(self, online: dict) -> dict:
+        """`_dynamic_should_charge`, with why: what the trace writes down.
+
+        `why` is one of `no_prices`, `not_a_buy_slot`, `floor_amount` (buying
+        for the day's "buy at least"), `pays`, `trade_fill`, `latched`
+        (finishing a purchase begun in this slot), `floor_done` (the floor's
+        slot, its amount in and the margin not wanting it), `sun_enough`,
+        `no_ceiling` (the ceiling is 0 - see `ceiling_why`), `topped_up`
+        (done for this slot) or `at_ceiling` (no room below the ceiling).
+        """
+        def verdict(buy, policy, why, ceiling=None, ceiling_why=None, slot=None):
+            return {
+                "buy": buy, "policy": policy, "why": why, "slot": slot,
+                "ceiling": ceiling, "ceiling_why": ceiling_why,
+            }
+
         slots = self._price_forecast()
         if slots is None:
-            return False, POLICY_DYNAMIC_NO_PRICES
-        if not self._in_a_buying_hour(online):
-            return False, None
+            return verdict(False, POLICY_DYNAMIC_NO_PRICES, "no_prices")
+        hour = self._buying_hour_reason(online)
+        if hour is None:
+            return verdict(False, None, "not_a_buy_slot")
         now = dt_util.utcnow()
         current = slot_at(slots, now)
 
@@ -2551,27 +2620,34 @@ class BatteryCoordinator:
         in_floor = key is not None and (
             self._floor_only_slot == key or current in self._floor_slots(slots, now)
         )
+        why = {"trade_fill": "trade_fill", "floor": "floor_amount"}.get(hour, "pays")
+        if hour == "latched":
+            # finishing a purchase: still for whatever it was started for
+            why = self._buying_why or "latched"
         if in_floor:
             margin = key in self.trade_fill_slots() or self._margin_buys(
                 slots, now, current, online
             )
+            if margin and why == "floor_amount":
+                why = "pays"    # the floor's slot, and one that pays anyway
             if self.floor_remaining_kwh() >= FLOOR_DONE_KWH:
                 # the day's amount is not in yet: buy at full power, up to
                 # "buy at most", until it is
                 ceiling = max(ceiling, self._bound_ceiling(100.0))
                 if not margin:
                     self._floor_only_slot = key
+                    why = "floor_amount"
             elif not margin:
                 # in: the floor has had its slot, and the margin did not want it
                 if self._buying_slot == key:
                     self._buying_slot = None
                 self._topped_up_slot = key
-                return False, reason
+                return verdict(False, reason, "floor_done", ceiling, reason, hour)
         on_floor = in_floor
         # the plain-threshold fallback, and only there: with a ceiling of its
         # own there is nothing for a bare "is there a lot of sun" to add
         if reason is None and not on_floor and self._sun_is_enough():
-            return False, None
+            return verdict(False, None, "sun_enough", ceiling, reason, hour)
         if ceiling <= 0:
             # more sun coming than the packs could hold, or a cheaper window
             # later: buying nothing is right - and a purchase begun earlier in
@@ -2580,13 +2656,13 @@ class BatteryCoordinator:
             # EUR 0.35 (1 October, 14 minutes at 86 %).
             if current is not None and self._buying_slot == _slot_key(current):
                 self._buying_slot = None
-            return False, reason
+            return verdict(False, reason, "no_ceiling", ceiling, reason, hour)
         # Start with more room than the band, then run to the line, then stop
         # for the rest of the slot. The two ends differ on purpose: one line
         # for both is a line a pack resting on it crosses every few ticks.
         key = _slot_key(current)
         if self._topped_up_slot == key:
-            return False, reason
+            return verdict(False, reason, "topped_up", ceiling, reason, hour)
         started = self._buying_slot == key
         if not any(
             self._room_to_buy(s.soc, s.charge_limit, ceiling, started=started) > 0
@@ -2594,9 +2670,10 @@ class BatteryCoordinator:
         ):
             if started:
                 self._topped_up_slot = key
-            return False, reason
+            return verdict(False, reason, "at_ceiling", ceiling, reason, hour)
         self._buying_slot = key
-        return True, POLICY_DYNAMIC_CHARGE
+        self._buying_why = why
+        return verdict(True, POLICY_DYNAMIC_CHARGE, why, ceiling, reason, hour)
 
     # -- selling to the grid -------------------------------------------------
 
@@ -3713,8 +3790,14 @@ class BatteryCoordinator:
         legs = self.phase_power() or {}
         cfg_by_name_all = {u.name: u for u in self._units}
         price = self.current_price()
+        verdict, self._buy_verdict = self._buy_verdict, None
         row = {
             "at": dt_util.utcnow().isoformat(),
+            # what it is doing, in a sentence - the first thing to read on a
+            # row, before the numbers that explain it
+            "doing": self._doing(
+                sum(alloc.values()) * (-1 if flow == FLOW_CHARGE else 1), verdict
+            ),
             "grid_w": round(grid),
             # how old the number we just regulated on actually was
             "grid_age_s": self._state_age(self._grid_sensor),
@@ -3768,6 +3851,7 @@ class BatteryCoordinator:
                 else round(self.last_trade_verdict["margin"], 4)
             ),
             "trade_why": (self.last_trade_verdict or {}).get("why"),
+            **self._buy_columns(verdict, price),
             # cumulative kWh produced today, if a solar sensor is configured -
             # the diff between two rows is the only reading that can settle
             # "was that solar" without guessing from grid_w alone.
@@ -4281,9 +4365,11 @@ class BatteryCoordinator:
         """
         previous, self._house_draw_at = self._house_draw_at, now
         packs = self._other_controller_power() if grid is not None else None
+        self._house_now_w = None
         if packs is None:
             return
         house = grid + packs
+        self._house_now_w = house
         if house <= 0:
             return
         if self._house_draw_w is None or previous is None:
@@ -4848,6 +4934,112 @@ class BatteryCoordinator:
         if value > 0 and self.unit_status[name].flow == FLOW_CHARGE:
             value = -value
         return round(value)
+
+    def _buy_columns(self, verdict: dict | None, price: dict | None) -> dict:
+        """Buying, for the trace: what was decided and on what numbers.
+
+        Every question about buying so far - "why only a quarter", "why not
+        today", "why 50 % again tonight" - needed the plan, the floor and the
+        house's draw at that moment, and the trace had none of them. Now it
+        has: the verdict and its reason, the ceiling and what set it, what a
+        kWh bought now costs out of the packs, the day's "buy at least", and
+        the plan's buy and sell hours as they stood.
+        """
+        verdict = verdict or {}
+        cost = self._buy_cost()
+        now_price = (price or {}).get("price")
+        target = self.floor_kwh()
+        plan = self._plan_slots or {}
+        ceiling = verdict.get("ceiling")
+        return {
+            "house_w": None if self._house_now_w is None else round(self._house_now_w),
+            "house_draw_w": None if self._house_draw_w is None else round(self._house_draw_w),
+            "buy_now": verdict.get("buy"),
+            "buy_why": verdict.get("why"),
+            "buy_slot": verdict.get("slot"),
+            "buy_ceiling_pct": None if ceiling is None else round(ceiling, 1),
+            "buy_ceiling_why": verdict.get("ceiling_why"),
+            "buy_cost_eur_kwh": (
+                round(cost(now_price), 4) if cost is not None and now_price is not None else None
+            ),
+            "price_margin_eur_kwh": self._price_margin,
+            "floor_kwh": None if target is None else round(target, 2),
+            "floor_done_kwh": None if target is None else round(self.floor_done_kwh(), 2),
+            "floor_left_kwh": None if target is None else round(self.floor_remaining_kwh(), 2),
+            "plan_buy": plan.get("buy"),
+            "plan_buy_later": plan.get("later"),
+            "plan_sell": plan.get("sell"),
+        }
+
+    def _doing(self, commanded: float, verdict: dict | None) -> str:
+        """One line, in the owner's language, of what this tick did and why.
+
+        From what the packs were told, not the setpoint: a setpoint too small
+        to hold is no command at all. What held it back follows in brackets,
+        so "na leeg" does not hide that the sun is going in.
+        """
+        why = (verdict or {}).get("why")
+        policy = self.active_policy
+        watts = abs(round(commanded))
+        alone = {
+            POLICY_DISABLED: "uitgeschakeld",
+            POLICY_NO_GRID_DATA: "geen meterstand: doet niets",
+            POLICY_GRID_STALE: "meterstand te oud: doet niets",
+            POLICY_NO_UNITS: "geen accu bereikbaar",
+            POLICY_PHASE_DETECT: "meet welke accu op welke fase zit",
+            POLICY_MODE_PAUSE: "pauze",
+        }.get(policy)
+        if alone:
+            said = alone
+        elif policy == POLICY_DYNAMIC_CHARGE:
+            if why == "floor_amount":
+                said = (
+                    f"koopt {watts} W voor het dagdoel (nog "
+                    f"{self.floor_remaining_kwh():.1f} kWh), ook al loont het niet"
+                )
+            else:
+                said = {
+                    "pays": f"koopt {watts} W: goedkoop kwartier, loont",
+                    "trade_fill": f"koopt {watts} W bij om vanavond te verkopen",
+                    "latched": f"koopt {watts} W: maakt dit kwartier af",
+                }.get(why, f"koopt {watts} W")
+        elif policy == POLICY_TRADE_SELL:
+            said = f"verkoopt {watts} W aan het net"
+        elif policy in (POLICY_FAST_CHARGE, POLICY_FAST_CHARGE_HOLD):
+            said = f"snelladen {watts} W" if watts else "snelladen klaar: houdt vol"
+        else:
+            if commanded > 0:
+                said = f"levert {watts} W aan het huis"
+            elif commanded < 0:
+                said = f"laadt {watts} W zon-overschot op"
+            else:
+                said = "staat stil"
+            held = {
+                POLICY_BUY_WINDOW: {
+                    "at_ceiling": "koopkwartier, op het koopplafond: ontlaadt niet",
+                    "topped_up": "koopkwartier, al bijgeladen: ontlaadt niet",
+                    "sun_enough": "koopkwartier, de zon vult genoeg: ontlaadt niet",
+                    "no_ceiling": "koopkwartier, nu niet kopen: ontlaadt niet",
+                    "floor_done": "koopkwartier, dagdoel al binnen: ontlaadt niet",
+                }.get(why, "koopkwartier: ontlaadt niet"),
+                POLICY_SOC_RESERVE: "reserve bereikt",
+                POLICY_PACKS_EMPTY: "accu's leeg",
+                POLICY_RECOVERING: "na leeg: ontlaadt pas weer na terugladen",
+                POLICY_PACKS_FULL: "accu's vol",
+                POLICY_MODE_CHARGE_ONLY: "stand: alleen laden",
+                POLICY_MODE_DISCHARGE_ONLY: "stand: alleen ontladen",
+                POLICY_DYNAMIC_NO_PRICES: "geen prijzen",
+                POLICY_SOLAR_HEADROOM: "koopt niet: de zon vult ze nog",
+                POLICY_CHEAPER_LATER: "koopt niet: later vandaag goedkoper",
+                POLICY_CHEAPER_TOMORROW: "koopt niet: morgen goedkoper",
+                POLICY_PHASE_LIMIT: "begrensd door de hoofdzekering",
+                POLICY_MIN_OUTPUT: "te weinig om op te sturen",
+                POLICY_EXTERNAL: "volgt een extern plan",
+                POLICY_EXTERNAL_STALE: "extern plan stil: regelt zelf",
+            }.get(policy)
+            if held:
+                said += f" ({held})"
+        return ("proefdraai: " if self.dry_run else "") + said
 
     def _trace_tick(self, row: dict, caps: dict) -> None:
         """Flatten one tick into CSV columns and hand it to the writer.
