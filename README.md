@@ -116,6 +116,7 @@ What each row carries:
 
 | column | meaning |
 | --- | --- |
+| `doing` | what this tick did, in one Dutch sentence. It is the second column, so it is the first thing to read, e.g. *koopt 7000 W voor het dagdoel (nog 9.4 kWh), ook al loont het niet*, *verkoopt 7000 W aan het net*, *laadt 1200 W zon-overschot op (na leeg: ontlaadt pas weer na terugladen)*. It is built from what the packs were told, so a setpoint too small to send reads as *staat stil*. A dry run starts with *proefdraai:* |
 | `grid_w` | the meter, as used (reconstructed in a shadow run) |
 | `observed_grid_w` | what the meter actually said |
 | `error_w`, `sp_before_w`, `sp_wanted_w`, `setpoint_w` | the whole integrator step |
@@ -136,6 +137,13 @@ What each row carries:
 | `mode`, `policy`, `status`, `dry_run`, `offline` | context |
 | `price_eur_kwh`, `price_role` | what this hour cost, and whether it was ranked `cheap` · `dear` · `normal` — so a trace can be read against the tariff without cross-checking the price chart by hand |
 | `market_price_eur_kwh` | the exchange price of the same slot, which is what export is settled against — what a kWh sent back was worth while a bought one cost `price_eur_kwh`. Direct supplier route only |
+| `house_w`, `house_draw_w` | the house less the sun (meter plus packs) this tick, and the hour-long average that buying works from |
+| `buy_now`, `buy_why` | Dynamic mode only: whether it bought this tick, and why or why not. The reasons for buying are `pays` (the margin says it pays), `floor_amount` (for the day's "buy at least", whether or not it pays) and `trade_fill` (to sell tonight). The reasons for not buying are `not_a_buy_slot`, `floor_done` (the floor's slot, but its amount is already in), `sun_enough`, `no_ceiling` (see `buy_ceiling_why`), `topped_up` (done for this slot), `at_ceiling` and `no_prices`. A purchase keeps the reason it started with until the end of its slot |
+| `buy_slot` | why this slot is a buying slot: `margin`, `floor`, `trade_fill`, or `latched` (a purchase already under way) |
+| `buy_ceiling_pct`, `buy_ceiling_why` | how full buying may make the packs, and what set that limit (`solar_headroom`, `cheaper_later`, `cheaper_tomorrow`, `trade_fill`, ...) |
+| `buy_cost_eur_kwh`, `price_margin_eur_kwh` | what a kWh bought now costs once it is back out of the packs (the round trip plus wear), and the margin it must leave |
+| `floor_kwh`, `floor_done_kwh`, `floor_left_kwh` | the day's "buy at least" amount, how much of it is in, and how much is still to buy |
+| `plan_buy`, `plan_buy_later`, `plan_sell` | the plan's slots ahead as they stood at this tick, in local time, e.g. `12:45-13:00 13:15-14:30`. `plan_buy_later` lists the slots the plan expects to buy in later. A slot on another day starts with its date |
 | `solar_produced_today_kwh` | the configured solar sensor's cumulative reading for the day, if one is set — diff two rows to get the rate; the only way to confirm "was that solar" rather than guessing from `grid_w` |
 
 Rows with `event=phase_probe` record a phase measurement: the deltas per leg,
