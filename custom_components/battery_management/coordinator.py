@@ -1470,10 +1470,14 @@ class BatteryCoordinator:
         for day in by_day.values():
             cheap |= {
                 _slot_key(s)
-                for s in pick_cheapest(
-                    day, self._cheap_hours, self._price_margin,
-                    cost=self._buy_cost(), **self._buy_energy(),
-                )
+                # A price fact, as the legend promises - "the cheapest hours of
+                # today" - with only the bare margin, so a flat day stays
+                # grey. Not the buying's full sum: with the round trip, the
+                # wear and the house's draw counted, a day of 0.32-0.49 painted
+                # two quarters green out of twenty (19 October) while the ring
+                # beside them was buying on others. Whether an hour is bought
+                # on is the ring's to say.
+                for s in pick_cheapest(day, self._cheap_hours, self._price_margin)
             }
             dear |= {_slot_key(s) for s in pick_dearest(day, self._expensive_hours)}
         return cheap, dear
