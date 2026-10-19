@@ -1465,7 +1465,8 @@ class BatteryCoordinator:
             cheap |= {
                 _slot_key(s)
                 for s in pick_cheapest(
-                    day, self._cheap_hours, self._price_margin, cost=self._buy_cost()
+                    day, self._cheap_hours, self._price_margin,
+                    cost=self._buy_cost(), spread=self._buy_spread(),
                 )
             }
             dear |= {_slot_key(s) for s in pick_dearest(day, self._expensive_hours)}
@@ -1505,7 +1506,7 @@ class BatteryCoordinator:
         return slot in slots_to_buy(
             forecast, now, self._cheap_hours, PRICE_WINDOW_HOURS,
             self._price_margin, self.hours_of_charge_needed(),
-            until=self._buy_before(), cost=self._buy_cost(),
+            until=self._buy_before(), cost=self._buy_cost(), spread=self._buy_spread(),
         )
 
     def remember_price_verdict(self, bought: bool = False) -> None:
@@ -1673,7 +1674,7 @@ class BatteryCoordinator:
         later = slots_to_buy(
             slots, now, self._cheap_hours, PRICE_WINDOW_HOURS, self._price_margin,
             self.hours_of_charge_needed(ceiling=held["then_to"]),
-            since=held["until"], cost=self._buy_cost(),
+            since=held["until"], cost=self._buy_cost(), spread=self._buy_spread(),
         ) if held else []
 
         # The band is ranked per calendar day instead, so it holds still. See
@@ -2483,7 +2484,7 @@ class BatteryCoordinator:
         return current in slots_to_buy(
             slots, now, self._cheap_hours, PRICE_WINDOW_HOURS, self._price_margin,
             self.hours_of_charge_needed(online), until=self._buy_before(),
-            cost=self._buy_cost(),
+            cost=self._buy_cost(), spread=self._buy_spread(),
         )
 
     def _dynamic_should_charge(self, online: dict) -> tuple[bool, str | None]:
@@ -2565,6 +2566,26 @@ class BatteryCoordinator:
         return export_value(
             self._feed_in, self._current_component("market_prices"), tax, saldering
         )
+
+    def _buy_spread(self) -> float | None:
+        """Over how many slots the house uses up one slot of full-power charge.
+
+        The packs at full power against the house's measured draw: at 7 kW
+        in and 700 W out, one slot of buying lasts ten slots of house. That
+        is what makes the margin a comparison of energy rather than of hours
+        (see `pick_cheapest`). None while the draw is unmeasured, or without
+        a purchase price - then the margin keeps its old, single reference.
+        """
+        if self._buy_cost() is None or not self._house_draw_w or self._house_draw_w <= 0:
+            return None
+        power = sum(
+            snap.unit_max
+            for cfg in self._units
+            if (snap := self._unit_snapshot(cfg)).online
+        )
+        if power <= 0:
+            return None
+        return max(power / self._house_draw_w, 1.0)
 
     def _buy_cost(self):
         """What a kWh bought at a price costs once it is back out of the packs.
@@ -2815,7 +2836,7 @@ class BatteryCoordinator:
         chosen = slots_to_buy(
             slots, now, self._cheap_hours, PRICE_WINDOW_HOURS, self._price_margin,
             self.hours_of_charge_needed(), until=self._buy_before(),
-            cost=self._buy_cost(),
+            cost=self._buy_cost(), spread=self._buy_spread(),
         )
         fill = self.trade_fill_slots()
         if fill:
