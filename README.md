@@ -938,7 +938,9 @@ hours it saves for. That is the same sum a sale is held to. A fixed five-cent
 gap covered the round trip at 0.20, but not at 0.34: on 18 October the old
 rule topped up at 0.338 for an evening at about 0.39. Such a kWh costs 0.384
 after the round trip, and 0.414 with three cents of wear, so the grid would
-have been cheaper. The chart's green hours use the same test. Without a
+have been cheaper. The chart's green hours do not: they stay what the
+legend says, the cheapest hours of the day (a flat day still paints none),
+and the blue ring shows which of them it will actually buy on. Without a
 purchase price there is no wear to count, and the margin keeps its old
 meaning: the bare gap, which has to cover those costs itself. Since the
 margin is now net, a lower setting (two or three cents) buys about as

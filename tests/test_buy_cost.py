@@ -53,10 +53,22 @@ def test_without_a_purchase_price_the_margin_is_the_bare_gap(afternoon, monkeypa
     assert buys(system) != []
 
 
-def test_the_chart_s_green_is_the_same_test(afternoon, monkeypatch):
-    """The cheap band says which hours are worth buying on; it must not paint
-    an hour green that the buying refuses."""
+def test_the_chart_s_green_is_a_price_fact_and_the_ring_the_decision(afternoon, monkeypatch):
+    """Green is "the cheapest hours of today", as the legend says - 0.338
+    against a 0.39 day is that, by more than the bare margin. Whether it is
+    bought on is the ring's: after the round trip and the wear it is not.
+    Painting green with the full sum left two quarters green out of twenty
+    on 19 October, next to a ring buying on others."""
     system = build(afternoon, monkeypatch, **DEAR_DAY)
+    co = system.coordinator
+
+    cheap, _dear = co._day_bands(co._price_forecast())
+    assert cheap
+    assert buys(system) == []
+
+
+def test_a_flat_day_is_still_not_green(afternoon, monkeypatch):
+    system = build(afternoon, monkeypatch, cheap=(), cheap_at=0.39, peak=(), ordinary=0.39)
 
     cheap, _dear = system.coordinator._day_bands(system.coordinator._price_forecast())
     assert cheap == set()
