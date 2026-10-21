@@ -138,7 +138,7 @@
       },
       "dynamic": {
         "title": "Dynamisch tarief",
-        "description": "Optioneel. Zonder prijssensor verschijnt de modus Dynamisch niet en verandert er verder niets. Beursprijzen volstaan: belasting en opslag verschuiven elk uur even veel, dus de volgorde van goedkoop naar duur blijft gelijk.\n\nHoe vol inkopen de accu's mag maken staat op drie plekken, in oplopende volgorde van gezag: het terugval-plafond hieronder, daarboven het gemeten zon-plafond, en daaromheen de twee schuiven \"Inkopen tot: minstens\" en \"Inkopen tot: hoogstens\" op de apparaatpagina - die zijn entiteiten, zodat je ze kunt bijstellen zonder herladen.",
+        "description": "Optioneel. Zonder prijssensor verschijnt de modus Dynamisch niet en verandert er verder niets. Beursprijzen volstaan: belasting en opslag verschuiven elk uur even veel, dus de volgorde van goedkoop naar duur blijft gelijk.\n\nHoe vol inkopen de accu's mag maken staat op drie plekken, in oplopende volgorde van gezag: het terugval-plafond hieronder, daarboven het gemeten zon-plafond, en daaromheen de twee schuiven \"Minimaal laden\" en \"Inkopen tot: hoogstens\" op de apparaatpagina - die zijn entiteiten, zodat je ze kunt bijstellen zonder herladen.",
         "data": {
           "price_source": "Waar de prijzen vandaan komen",
           "price_resolution": "Hoe de prijzen gelezen worden",
@@ -154,7 +154,7 @@
           "cheap_hours": "Hoeveel van de goedkoopste momenten van de komende dag gebruikt mogen worden om van het net te laden. Gerangschikt over een rollende 24 uur, niet over alles wat gepubliceerd is.",
           "price_margin": "Wat een kWh van het net na aftrek van alle kosten minstens moet opleveren ten opzichte van de dure uren waarvoor hij bewaard wordt. Met de aankoopprijs van de accu's ingevuld (Slim handelen) telt hij het rendementsverlies (~12%) en de slijtage zelf mee, en is dit wat er overblijft; zonder aankoopprijs is het het kale prijsverschil en moet het die kosten zelf dekken. Voorkomt ook dat \"de 3 goedkoopste resterende uren\" het duurste uur van de dag goedkoop noemt. 0 = alleen rangschikken.",
           "expensive_hours": "Kleurt alleen de prijsgrafiek: dit zijn de uren die als duurste worden getoond. Het houdt de packs niet tegen met ontladen - grid-nul is in elke modus de vloer, dus de packs dekken het huis ongeacht wat het uur kost. 0 verbergt de kleuring.",
-          "charge_below_soc": "Terugval-plafond: hoe vol inkopen de accu's hoogstens mag maken zolang de laadduur ongemeten is. Zodra die gemeten is neemt het zon-plafond het over, en dat blijft binnen de twee schuiven \"Inkopen tot: minstens\" en \"Inkopen tot: hoogstens\" op de apparaatpagina.",
+          "charge_below_soc": "Terugval-plafond: hoe vol inkopen de accu's hoogstens mag maken zolang de laadduur ongemeten is. Zodra die gemeten is neemt het zon-plafond het over, en dat blijft binnen de twee schuiven \"Minimaal laden\" en \"Inkopen tot: hoogstens\" op de apparaatpagina.",
           "fill_before_dear_day": "Standaard uit. Aan: als de goedkope uren van morgen duidelijk duurder zijn dan wat er van vandaag over is, koopt hij door tot \"Inkopen tot: hoogstens\" in plaats van te stoppen bij het plafond dat er anders zou gelden. Hij koopt nooit ruimte die de zon nog zou vullen - die stroom is gratis, en inkopen betekent dat je de middag exporteert in plaats van opslaat - dus met een zonvoorspelling ingesteld verandert dit weinig."
         }
       },
@@ -447,7 +447,10 @@
         "name": "SoC-reserve"
       },
       "buy_ceiling_min": {
-        "name": "Inkopen tot: minstens"
+        "name": "Minimaal laden"
+      },
+      "day_goal": {
+        "name": "Dagdoel"
       },
       "buy_ceiling_max": {
         "name": "Inkopen tot: hoogstens"

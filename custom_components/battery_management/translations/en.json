@@ -138,7 +138,7 @@
       },
       "dynamic": {
         "title": "Dynamic tariff",
-        "description": "Optional. Without a price sensor the Dynamic mode is not offered and nothing else changes. Exchange (day-ahead) prices are enough: tax and markup shift every hour equally, so the cheap-to-expensive order is the same.\n\nHow full buying may fill the packs is set in three places, in rising order of authority: the fallback ceiling below, then the measured solar ceiling, and around both the two sliders \"Buy up to: at least\" and \"Buy up to: at most\" on the device page - those are entities, so they can be moved without a reload.",
+        "description": "Optional. Without a price sensor the Dynamic mode is not offered and nothing else changes. Exchange (day-ahead) prices are enough: tax and markup shift every hour equally, so the cheap-to-expensive order is the same.\n\nHow full buying may fill the packs is set in three places, in rising order of authority: the fallback ceiling below, then the measured solar ceiling, and around both the two sliders \"Minimum charge\" and \"Buy up to: at most\" on the device page - those are entities, so they can be moved without a reload.",
         "data": {
           "price_source": "Where prices come from",
           "price_resolution": "How to read the prices",
@@ -154,7 +154,7 @@
           "cheap_hours": "How many of the coming day's cheapest slots may be used to charge from the grid. Ranked over a rolling 24 hours, not over everything published.",
           "price_margin": "What a kWh bought from the grid must still save after all costs, against the dear hours it is kept for. With the packs' purchase price filled in (Smart trading) the round-trip loss (~12%) and the wear are counted for you and this is what is left over; without it, this is the bare price gap and has to cover those costs itself. Also stops \"the 3 cheapest remaining hours\" from calling the dearest hour of the day cheap. 0 = rank only.",
           "expensive_hours": "Colours the price chart only: these are the hours shown as the dearest ahead. It does not stop the packs discharging - grid-zero is the floor in every mode, so the packs cover the house whatever the hour costs. 0 hides the colouring.",
-          "charge_below_soc": "Fallback ceiling: how full buying may fill the packs while the charge time is unmeasured. Once it is measured the solar-aware ceiling takes over, and that stays between the two sliders \"Buy up to: at least\" and \"Buy up to: at most\" on the device page.",
+          "charge_below_soc": "Fallback ceiling: how full buying may fill the packs while the charge time is unmeasured. Once it is measured the solar-aware ceiling takes over, and that stays between the two sliders \"Minimum charge\" and \"Buy up to: at most\" on the device page.",
           "fill_before_dear_day": "Off by default. On: when tomorrow's cheap hours are clearly dearer than what is left of today, buy up to \"Buy up to: at most\" instead of stopping at the ceiling that would otherwise apply. It never buys room the sun is expected to fill - that energy is free, and buying it exports the afternoon instead of storing it - so with a solar forecast configured this changes little."
         }
       },
@@ -447,7 +447,10 @@
         "name": "SoC reserve"
       },
       "buy_ceiling_min": {
-        "name": "Buy up to: at least"
+        "name": "Minimum charge"
+      },
+      "day_goal": {
+        "name": "Day goal"
       },
       "buy_ceiling_max": {
         "name": "Buy up to: at most"

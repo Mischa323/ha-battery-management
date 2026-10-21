@@ -90,25 +90,37 @@ const plan = (expected, margin = 0.05) => ({
 }
 
 {
-  const floor = { to: 50, kwh: 14, done_kwh: 13.1, remaining_kwh: 0.9,
+  const goal = { kwh: 14, done_kwh: 13.1, remaining_kwh: 0.9,
     hours: [{ start: "x", end: "y", price: 0.327 }] };
-  const out = render({ ...plan({ ...EXPECTED, grid_planned_kwh: 0.9 }), floor });
-  check("the floor is an amount for the day, with what is left of it",
-    out.why.includes("Laadt vandaag in elk geval 14.0 kWh (Koop minstens tot 50 %)") &&
-    out.why.includes("nog 0.90 kWh te gaan"), out.why);
+  const out = render({ ...plan({ ...EXPECTED, grid_planned_kwh: 0.9 }), goal });
+  check("the day goal says how much is still to go in",
+    out.why.includes("Dagdoel 14.0 kWh: laadt nog 0.90 kWh in de goedkoopste uren"), out.why);
+  const gone = render({ ...plan({ ...EXPECTED, grid_planned_kwh: 0 }),
+    goal: { ...goal, remaining_kwh: 3.3, hours: [] } });
+  check("open but without hours: let go, not forgotten",
+    gone.why.includes("Dagdoel 14.0 kWh: nog 3.3 kWh open") &&
+    gone.why.includes("laat hij gaan"), gone.why);
   const done = render({ ...plan({ ...EXPECTED, grid_planned_kwh: 0 }),
-    floor: { ...floor, done_kwh: 14.2, remaining_kwh: 0, hours: [] } });
-  check("and once it is in, says so instead of buying for a level",
-    done.why.includes("De 14.0 kWh van vandaag (Koop minstens tot 50 %) zit er al in."), done.why);
+    goal: { ...goal, done_kwh: 14.2, remaining_kwh: 0, hours: [] } });
+  check("and once it is in, says so",
+    done.why.includes("Dagdoel 14.0 kWh zit er al in."), done.why);
   const full = render({ ...plan({ ...EXPECTED, grid_planned_kwh: 0 }),
-    floor: { ...floor, done_kwh: 9, remaining_kwh: 0, hours: [] } });
+    goal: { ...goal, done_kwh: 9, remaining_kwh: 0, hours: [] } });
   check("full before it is in: says why the rest does not come, not that it is in",
-    full.why.includes("Van de 14.0 kWh van vandaag (Koop minstens tot 50 %) zit 9.0 kWh erin;") &&
+    full.why.includes("Dagdoel 14.0 kWh: 9.0 kWh erin;") &&
     full.why.includes("Inkopen tot: hoogstens") && !full.why.includes("zit er al in"), full.why);
-  const old = render({ ...plan({ ...EXPECTED, grid_planned_kwh: 3.5 }),
-    floor: { to: 70, hours: [{ start: "x", end: "y", price: 0.338 }] } });
-  check("an older integration's level still reads",
-    old.why.includes("Laadt in elk geval tot 70 % (Koop minstens tot)"), old.why);
+  const level = render({ ...plan({ ...EXPECTED, grid_planned_kwh: 3.5 }),
+    floor: { to: 30, hours: [{ start: "x", end: "y", price: 0.338 }] } });
+  check("the minimum is a level",
+    level.why.includes("Laadt in elk geval tot 30 % (Minimaal laden)"), level.why);
+  const both = render({ ...plan({ ...EXPECTED, grid_planned_kwh: 3.5 }),
+    floor: { to: 30, hours: [{ start: "x", end: "y", price: 0.338 }] }, goal });
+  check("and both say their piece",
+    both.why.includes("(Minimaal laden)") && both.why.includes("Dagdoel 14.0 kWh"), both.why);
+  const cached = render({ ...plan({ ...EXPECTED, grid_planned_kwh: 0.9 }),
+    floor: { to: 50, ...goal } });
+  check("the amount #31 sent as the floor still reads",
+    cached.why.includes("Dagdoel 14.0 kWh: laadt nog 0.90 kWh"), cached.why);
 }
 
 if (fails) { console.log(fails + " failed"); process.exit(1); }
