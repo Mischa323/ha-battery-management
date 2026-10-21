@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import math
 import statistics
 import time
 from collections import deque
@@ -60,6 +61,7 @@ from .prices import (
     pick_dearest,
     parse_forecast,
     slot_at,
+    slots_between,
     slots_to_buy,
     to_hourly,
     slots_in_window,
@@ -198,7 +200,7 @@ from .const import (
     BASE_LOAD_MIN_BUCKETS,
     BASE_LOAD_STEADY_W,
     BUY_CEILING_BAND,
-    FLOOR_DONE_KWH,
+    GOAL_DONE_KWH,
     PACK_DRAIN_MIN_KWH,
     SINGLE_PACK_BELOW_W,
     SINGLE_PACK_SWAP_POINTS,
@@ -691,7 +693,11 @@ class BatteryCoordinator:
         self._plan_slots: dict | None = None
         #: what was commanded into the packs today, for "buy at least" when
         #: no charging sensor measures it
-        self._floor_day: dict = {}
+        self._goal_day: dict = {}
+        #: "dagdoel": kWh into the packs each day, in the day's cheapest slots
+        self.day_goal_kwh: float = 0.0
+        #: the slot being bought on for the day goal alone
+        self._goal_only_slot: str | None = None
         #: the slot being bought on for "buy at least" alone, which stops at it
         self._floor_only_slot: str | None = None
         #: the same, learned per local hour of the day {0..23: W} - what the
@@ -857,7 +863,8 @@ class BatteryCoordinator:
             "single_pack": self.single_pack,
             "pack_drain_history": dict(self.pack_drain_history),
             "draw_profile": {str(h): round(w, 1) for h, w in self.draw_profile.items()},
-            "floor_day": dict(self._floor_day),
+            "goal_day": dict(self._goal_day),
+            "day_goal_kwh": self.day_goal_kwh,
             "saved_at": time.time(),
         }
 
@@ -1548,7 +1555,7 @@ class BatteryCoordinator:
         forecast = self._price_forecast() or []
         if _slot_key(slot) in self.trade_fill_slots():
             return True
-        if slot in self._floor_slots(forecast, now):
+        if slot in self._floor_slots(forecast, now) or slot in self._goal_slots(forecast, now):
             return True
         return slot in slots_to_buy(
             forecast, now, self._cheap_hours, PRICE_WINDOW_HOURS,
@@ -1838,15 +1845,18 @@ class BatteryCoordinator:
             "usable_capacity_kwh": self.usable_capacity_kwh(),
             "charge_ceiling": self.charge_ceiling(),
             "expected": self._expected_with_plan(buying + later, now),
-            # "buy at least" is binding: how full, and in which slots
+            # "minimaal laden" is binding: how full, and in which slots
             "floor": {
                 "to": self.buy_ceiling_min,
-                # an amount for the day, not a level for the evening
-                "kwh": None if self.floor_kwh() is None else round(self.floor_kwh(), 2),
-                "done_kwh": round(self.floor_done_kwh(), 2),
-                "remaining_kwh": round(self.floor_remaining_kwh(), 2),
                 "hours": describe(self._floor_slots(slots, now)) if slots else [],
             } if self.buy_ceiling_min > 0 else None,
+            # the day goal: how much, how much is in, and in which slots
+            "goal": {
+                "kwh": round(self.day_goal_kwh, 2),
+                "done_kwh": round(self.goal_done_kwh(), 2),
+                "remaining_kwh": round(self.goal_remaining_kwh(), 2),
+                "hours": describe(self._goal_slots(slots, now)) if slots else [],
+            } if self.day_goal_kwh > 0 else None,
             # what a quarter has to beat the dear hours by to be bought on,
             # after the round trip and the wear when those are counted
             "price_margin": self._price_margin,
@@ -1856,6 +1866,7 @@ class BatteryCoordinator:
             ),
             "buy_ceiling_min": self.buy_ceiling_min,
             "buy_ceiling_max": self.buy_ceiling_max,
+            "day_goal_kwh": self.day_goal_kwh,
             "soc_reserve": self.soc_reserve,
             "mode": self.mode,
         }
@@ -2537,7 +2548,8 @@ class BatteryCoordinator:
         """Why the hour we are in is one to buy in, or None when it is not.
 
         `latched` (a purchase under way finishes its slot), `trade_fill`,
-        `floor` or `margin` - the first that applies, in that order. The
+        `floor` ("minimaal laden"), `goal` (the day goal) or `margin` - the
+        first that applies, in that order. The
         trace carries it, so "why did it buy then" is in the file.
         """
         slots = self._price_forecast()
@@ -2555,6 +2567,8 @@ class BatteryCoordinator:
             return "trade_fill"
         if current in self._floor_slots(slots, now):
             return "floor"
+        if current in self._goal_slots(slots, now):
+            return "goal"
         if self._margin_buys(slots, now, current, online):
             return "margin"
         return None
@@ -2587,10 +2601,11 @@ class BatteryCoordinator:
     def _dynamic_verdict(self, online: dict) -> dict:
         """`_dynamic_should_charge`, with why: what the trace writes down.
 
-        `why` is one of `no_prices`, `not_a_buy_slot`, `floor_amount` (buying
-        for the day's "buy at least"), `pays`, `trade_fill`, `latched`
-        (finishing a purchase begun in this slot), `floor_done` (the floor's
-        slot, its amount in and the margin not wanting it), `sun_enough`,
+        `why` is one of `no_prices`, `not_a_buy_slot`, `minimum` (buying up to
+        "minimaal laden"), `day_goal` (buying for the day goal), `pays`,
+        `trade_fill`, `latched` (finishing a purchase begun in this slot),
+        `goal_done` (the goal's slot, its amount in and the margin not
+        wanting it), `sun_enough`,
         `no_ceiling` (the ceiling is 0 - see `ceiling_why`), `topped_up`
         (done for this slot) or `at_ceiling` (no room below the ceiling).
         """
@@ -2610,40 +2625,51 @@ class BatteryCoordinator:
         current = slot_at(slots, now)
 
         ceiling, reason = self._buy_ceiling()
-        # a slot spent on reaching "buy at least" fills to it whatever the
-        # holds say - that is what binding means (19 October)
-        # The floor's slots shrink as the day's amount goes in - once it is in
-        # there are none - so a slot bought on for the floor alone is
-        # remembered, or the latch that finishes a purchase would carry it on
-        # to the full ceiling.
+        # Two of the owner's own, both binding (21 October): "minimaal laden",
+        # a level the packs are brought up to in the cheapest slots before the
+        # coming peak, and the day goal, an amount bought in the day's
+        # cheapest slots. Neither asks the margin. Their slots shrink as the
+        # packs fill or the amount goes in, so a slot bought on for one of
+        # them alone is remembered - or the latch that finishes a purchase
+        # would carry it on to the full ceiling.
         key = _slot_key(current) if current is not None else None
-        in_floor = key is not None and (
-            self._floor_only_slot == key or current in self._floor_slots(slots, now)
+        floor_only = key is not None and self._floor_only_slot == key
+        on_floor = key is not None and (floor_only or current in self._floor_slots(slots, now))
+        in_goal = key is not None and (
+            self._goal_only_slot == key or current in self._goal_slots(slots, now)
         )
-        why = {"trade_fill": "trade_fill", "floor": "floor_amount"}.get(hour, "pays")
+        why = "trade_fill" if hour == "trade_fill" else "pays"
         if hour == "latched":
             # finishing a purchase: still for whatever it was started for
             why = self._buying_why or "latched"
-        if in_floor:
-            margin = key in self.trade_fill_slots() or self._margin_buys(
+        if on_floor or in_goal:
+            paying = key in self.trade_fill_slots() or self._margin_buys(
                 slots, now, current, online
             )
-            if margin and why == "floor_amount":
-                why = "pays"    # the floor's slot, and one that pays anyway
-            if self.floor_remaining_kwh() >= FLOOR_DONE_KWH:
-                # the day's amount is not in yet: buy at full power, up to
-                # "buy at most", until it is
+            if paying and why in ("minimum", "day_goal"):
+                why = "pays"    # their slot, and one that pays anyway
+            if in_goal and self.goal_remaining_kwh() >= GOAL_DONE_KWH:
+                # the day's amount is not in yet: at full power, up to "buy at
+                # most", until it is
                 ceiling = max(ceiling, self._bound_ceiling(100.0))
-                if not margin:
-                    self._floor_only_slot = key
-                    why = "floor_amount"
-            elif not margin:
-                # in: the floor has had its slot, and the margin did not want it
+                if not paying:
+                    self._goal_only_slot = key
+                    why = "day_goal"
+            elif on_floor and (floor_only or not paying):
+                # to the minimum, and no further - above it the margin decides,
+                # and it did not pick this slot
+                ceiling = self._bound_ceiling(self.buy_ceiling_min)
+                self._floor_only_slot = key
+                why = "minimum"
+            elif on_floor:
+                ceiling = max(ceiling, self._bound_ceiling(self.buy_ceiling_min))
+            elif not paying:
+                # the goal is in: it has had its slot, and the margin did not want it
                 if self._buying_slot == key:
                     self._buying_slot = None
                 self._topped_up_slot = key
-                return verdict(False, reason, "floor_done", ceiling, reason, hour)
-        on_floor = in_floor
+                return verdict(False, reason, "goal_done", ceiling, reason, hour)
+        on_floor = on_floor or in_goal
         # the plain-threshold fallback, and only there: with a ceiling of its
         # own there is nothing for a bare "is there a lot of sun" to add
         if reason is None and not on_floor and self._sun_is_enough():
@@ -2984,15 +3010,8 @@ class BatteryCoordinator:
                 margins[key] = round(margin, 4)
         return margins
 
-    def floor_kwh(self) -> float | None:
-        """What "buy at least" asks to go into the packs each day, in kWh."""
-        capacity = self.usable_capacity_kwh()
-        if self.buy_ceiling_min <= 0 or not capacity:
-            return None
-        return self.buy_ceiling_min / 100.0 * capacity
-
-    def floor_done_kwh(self) -> float:
-        """What has gone into the packs today, toward "buy at least".
+    def goal_done_kwh(self) -> float:
+        """What has gone into the packs today, toward the day goal.
 
         Measured by the charging sensors where they are configured - the sun
         included - and by what was commanded into the packs where they are not.
@@ -3000,24 +3019,18 @@ class BatteryCoordinator:
         if any(cfg.charge_power_sensor for cfg in self._units):
             return self.period_charged_kwh("day")
         today = dt_util.as_local(dt_util.utcnow()).date().isoformat()
-        return self._floor_day["wh"] / 1000.0 if self._floor_day.get("day") == today else 0.0
+        return self._goal_day["wh"] / 1000.0 if self._goal_day.get("day") == today else 0.0
 
-    def floor_remaining_kwh(self) -> float:
-        """How much of today's "buy at least" is still to go in, in kWh.
+    def goal_remaining_kwh(self) -> float:
+        """How much of today's goal is still to go in, in kWh.
 
-        An amount for the day, not a level for the evening - in the owner's
-        words on 19 October: "hij moet gewoon 50 % opgeladen zijn over de hele
-        dag ... als hij in de avond geen 50 % haalt is dat geen probleem". At
-        50 % of 28 kWh that is 14 kWh into the packs today, sun included,
-        bought in the cheapest slots. 13.1 kWh had gone in by 21:00 and it
-        planned another 6 to bring the level back up to 50 %.
-
-        Never more than there is room for below "buy at most".
+        Never more than there is room for below "buy at most" - and what did
+        not fit while the goal's slots went by does not come back: the packs
+        drawn down in the evening open room, but the slots it would be bought
+        in are no longer among the day's cheapest (see `_goal_slots`).
         """
-        target = self.floor_kwh()
-        if target is None or self._full_charge_minutes <= 0:
+        if self.day_goal_kwh <= 0 or self._full_charge_minutes <= 0:
             return 0.0
-        done = self.floor_done_kwh()
         room = 0.0
         for cfg in self._units:
             unit = self._unit_snapshot(cfg)
@@ -3025,27 +3038,67 @@ class BatteryCoordinator:
                 continue
             top = min(unit.charge_limit, self.buy_ceiling_max)
             room += max(top - unit.soc, 0.0) / 100.0 * unit.unit_max * self._full_charge_minutes / 60000.0
-        return max(min(target - done, room), 0.0)
+        return max(min(self.day_goal_kwh - self.goal_done_kwh(), room), 0.0)
 
-    def _floor_slots(self, slots, now) -> list:
-        """The cheapest slots left today that put the day's floor in.
-
-        Binding, asked for on 19 October: the owner would rather have the
-        day's amount in the packs, a few cents a kWh notwithstanding, than
-        have the margin decide that topping up does not pay. So for that
-        amount no margin is asked - only the cheapest slots before the end of
-        the day, at the packs' full power, as many as it takes - and beyond it
-        the margin decides as before.
-        """
-        remaining = self.floor_remaining_kwh()
-        if remaining < FLOOR_DONE_KWH or not slots:
-            return []
-        power = sum(
+    def _charge_kw(self) -> float:
+        """What the packs that are online take at full power, in kW."""
+        return sum(
             snap.unit_max for cfg in self._units if (snap := self._unit_snapshot(cfg)).online
         ) / 1000.0
-        if power <= 0:
+
+    def _goal_slots(self, slots, now) -> list:
+        """The slots still ahead in which the day goal is bought.
+
+        Asked for on 21 October, after #31 bought at 21:45 for an amount the
+        packs had had no room for at noon - at EUR 0.343, with tomorrow's
+        afternoon cheaper: "het dagdoel kijkt slim". So a slot qualifies on
+        two counts, both at the packs' full power:
+
+        * it is among the day's cheapest, ranked over the whole local day,
+          past slots included, for the whole goal. What did not go in while
+          those went by - the packs were full - is not chased into dearer
+          ones that evening;
+        * it is among the cheapest of the next 24 hours for what is still to
+          go in. Once tomorrow's prices are out, a cheaper afternoon tomorrow
+          beats this evening, and today's remainder is let go.
+        """
+        remaining = self.goal_remaining_kwh()
+        power = self._charge_kw()
+        if remaining < GOAL_DONE_KWH or not slots or power <= 0:
             return []
-        needed = remaining / power
+        start = dt_util.start_of_local_day(dt_util.as_local(now))
+        end = dt_util.start_of_local_day(dt_util.as_local(now) + timedelta(days=1))
+        today = slots_between(slots, start, end)
+        ahead = [s for s in slots if s.end > now and s.start < now + timedelta(hours=24)]
+
+        def cover(kwh: float, among: list) -> list:
+            # whole slots, rounded up: 10 kWh at 7 kW is two hours, not one
+            if not among:
+                return []
+            span = min((s.end - s.start).total_seconds() for s in among) / 3600.0
+            return pick_cheapest(among, math.ceil(kwh / power / span - 1e-9) * span)
+
+        day = {_slot_key(s) for s in cover(self.day_goal_kwh, today)}
+        soon = {_slot_key(s) for s in cover(remaining, ahead)}
+        return [s for s in today if s.end > now and _slot_key(s) in day and _slot_key(s) in soon]
+
+    def _floor_slots(self, slots, now) -> list:
+        """The cheapest slots before the end of today that reach "minimaal laden".
+
+        Binding, asked for on 19 October and kept a level on 21 October: the
+        owner would rather have the packs at their minimum, a few cents a kWh
+        notwithstanding, than have the margin decide that topping up does not
+        pay. So up to it no margin is asked - only the cheapest slots, as many
+        as it takes - and above it the margin decides as before. Before the
+        end of the day, not before the coming peak: "die ondergrens moet voor
+        het eind van de dag zijn, niet in de ochtend" (24 September), and the
+        cheapest hours to reach it may well lie after the morning's peak.
+        """
+        if self.buy_ceiling_min <= 0 or not slots or self._full_charge_minutes <= 0:
+            return []
+        needed = self.hours_of_charge_needed(ceiling=self.buy_ceiling_min)
+        if not needed:
+            return []
         end = dt_util.start_of_local_day(dt_util.as_local(now) + timedelta(days=1))
         return slots_to_buy(
             slots, now, max(self._cheap_hours, needed), PRICE_WINDOW_HOURS, 0.0,
@@ -3060,7 +3113,8 @@ class BatteryCoordinator:
             cost=self._buy_cost(), **self._buy_energy(),
         )
         extra = set(self.trade_fill_slots()) | {
-            _slot_key(slot) for slot in self._floor_slots(slots, now)
+            _slot_key(slot)
+            for slot in self._floor_slots(slots, now) + self._goal_slots(slots, now)
         }
         if extra:
             keys = {_slot_key(slot) for slot in chosen}
@@ -3341,6 +3395,14 @@ class BatteryCoordinator:
             raise ValueError(f"unknown trade mode {option!r}")
         self.trade_mode = option
         self._selling_slot = self._sold_out_slot = None
+        await self._store.async_save(self._state_to_save())
+        self._notify()
+        if self.enabled:
+            await self._async_tick(dt_util.utcnow())
+
+    async def async_set_day_goal(self, value: float) -> None:
+        """How much to put into the packs each day, in kWh. 0 is off."""
+        self.day_goal_kwh = max(0.0, float(value))
         await self._store.async_save(self._state_to_save())
         self._notify()
         if self.enabled:
@@ -3653,6 +3715,8 @@ class BatteryCoordinator:
                 "solar_capture_days": self.solar_capture()[1],
                 "buy_ceiling_min": self.buy_ceiling_min,
                 "buy_ceiling_max": self.buy_ceiling_max,
+                "day_goal_kwh": self.day_goal_kwh,
+                "day_goal_done_kwh": round(self.goal_done_kwh(), 2),
                 "external_setpoint_w": self.external_setpoint,
                 "external_plan_age_s": self.external_plan_age(),
                 "external_timeout_min": self._external_timeout,
@@ -4247,9 +4311,9 @@ class BatteryCoordinator:
             if self.unit_status[cfg.name].online
         )
         day = dt_util.as_local(dt_util.utcnow()).date().isoformat()
-        if self._floor_day.get("day") != day:
-            self._floor_day = {"day": day, "wh": 0.0}
-        self._floor_day["wh"] += commanded * elapsed / 3600.0
+        if self._goal_day.get("day") != day:
+            self._goal_day = {"day": day, "wh": 0.0}
+        self._goal_day["wh"] += commanded * elapsed / 3600.0
 
         charging = 0.0
         seen = False
@@ -4536,11 +4600,15 @@ class BatteryCoordinator:
         # a choice, like the trade mode: restored whether or not it is on
         if stored.get("single_pack") is not None:
             self.single_pack = bool(stored["single_pack"])
-        if isinstance(stored.get("floor_day"), dict) and "day" in stored["floor_day"]:
-            self._floor_day = {
-                "day": str(stored["floor_day"]["day"]),
-                "wh": float(stored["floor_day"].get("wh") or 0.0),
+        # "floor_day" is what #31 called it, when the goal was the floor
+        counted = stored.get("goal_day") or stored.get("floor_day")
+        if isinstance(counted, dict) and "day" in counted:
+            self._goal_day = {
+                "day": str(counted["day"]),
+                "wh": float(counted.get("wh") or 0.0),
             }
+        if stored.get("day_goal_kwh") is not None:
+            self.day_goal_kwh = max(0.0, float(stored["day_goal_kwh"]))
         for hour, watts in (stored.get("draw_profile") or {}).items():
             # a measurement, like the nights: restored whatever its age
             if watts is not None and str(hour).isdigit() and 0 <= int(hour) < 24:
@@ -4948,7 +5016,7 @@ class BatteryCoordinator:
         verdict = verdict or {}
         cost = self._buy_cost()
         now_price = (price or {}).get("price")
-        target = self.floor_kwh()
+        goal = self.day_goal_kwh if self.day_goal_kwh > 0 else None
         plan = self._plan_slots or {}
         ceiling = verdict.get("ceiling")
         return {
@@ -4963,9 +5031,10 @@ class BatteryCoordinator:
                 round(cost(now_price), 4) if cost is not None and now_price is not None else None
             ),
             "price_margin_eur_kwh": self._price_margin,
-            "floor_kwh": None if target is None else round(target, 2),
-            "floor_done_kwh": None if target is None else round(self.floor_done_kwh(), 2),
-            "floor_left_kwh": None if target is None else round(self.floor_remaining_kwh(), 2),
+            "minimum_pct": self.buy_ceiling_min or None,
+            "goal_kwh": goal,
+            "goal_done_kwh": None if goal is None else round(self.goal_done_kwh(), 2),
+            "goal_left_kwh": None if goal is None else round(self.goal_remaining_kwh(), 2),
             "plan_buy": plan.get("buy"),
             "plan_buy_later": plan.get("later"),
             "plan_sell": plan.get("sell"),
@@ -4992,10 +5061,15 @@ class BatteryCoordinator:
         if alone:
             said = alone
         elif policy == POLICY_DYNAMIC_CHARGE:
-            if why == "floor_amount":
+            if why == "day_goal":
                 said = (
                     f"koopt {watts} W voor het dagdoel (nog "
-                    f"{self.floor_remaining_kwh():.1f} kWh), ook al loont het niet"
+                    f"{self.goal_remaining_kwh():.1f} kWh), ook al loont het niet"
+                )
+            elif why == "minimum":
+                said = (
+                    f"koopt {watts} W tot het minimum van "
+                    f"{self.buy_ceiling_min:.0f} %, ook al loont het niet"
                 )
             else:
                 said = {
@@ -5020,7 +5094,7 @@ class BatteryCoordinator:
                     "topped_up": "koopkwartier, al bijgeladen: ontlaadt niet",
                     "sun_enough": "koopkwartier, de zon vult genoeg: ontlaadt niet",
                     "no_ceiling": "koopkwartier, nu niet kopen: ontlaadt niet",
-                    "floor_done": "koopkwartier, dagdoel al binnen: ontlaadt niet",
+                    "goal_done": "koopkwartier, dagdoel al binnen: ontlaadt niet",
                 }.get(why, "koopkwartier: ontlaadt niet"),
                 POLICY_SOC_RESERVE: "reserve bereikt",
                 POLICY_PACKS_EMPTY: "accu's leeg",

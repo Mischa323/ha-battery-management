@@ -19,14 +19,14 @@ from custom_components.battery_management.const import CONF_TRACE
 from custom_components.battery_management.trace import Trace
 
 from .conftest import GRID_SENSOR
-from .test_buy_floor import DEAR_DAY, day  # noqa: F401
+from .test_day_goal import DEAR_DAY, day  # noqa: F401
 from .test_trade_fill import afternoon, prices  # noqa: F401
 from .test_trade_sell import trading  # noqa: F401
 
 
-async def at_first_floor_slot(system, monkeypatch):
+async def at_first_goal_slot(system, monkeypatch):
     co = system.coordinator
-    first = co._floor_slots(co._price_forecast(), coordinator_module.dt_util.utcnow())[0]
+    first = co._goal_slots(co._price_forecast(), coordinator_module.dt_util.utcnow())[0]
     at = first.start + timedelta(minutes=1)
     monkeypatch.setattr(coordinator_module.dt_util, "utcnow", lambda: at)
     system.hass.states.set(GRID_SENSOR, 300)
@@ -37,21 +37,21 @@ async def at_first_floor_slot(system, monkeypatch):
 async def test_buying_for_the_day_s_amount_says_so(day, monkeypatch):
     system = day(soc=40.0, done_kwh=4.0)
 
-    row = await at_first_floor_slot(system, monkeypatch)
+    row = await at_first_goal_slot(system, monkeypatch)
 
     assert row["buy_now"] is True
-    assert row["buy_why"] == "floor_amount"
-    assert row["buy_slot"] == "floor"
-    assert row["floor_kwh"] == pytest.approx(14.0)
-    assert row["floor_done_kwh"] == pytest.approx(4.0)
-    assert row["floor_left_kwh"] == pytest.approx(10.0)
+    assert row["buy_why"] == "day_goal"
+    assert row["buy_slot"] == "goal"
+    assert row["goal_kwh"] == pytest.approx(14.0)
+    assert row["goal_done_kwh"] == pytest.approx(4.0)
+    assert row["goal_left_kwh"] == pytest.approx(10.0)
     assert row["doing"].startswith("koopt ")
     assert "dagdoel (nog 10.0 kWh)" in row["doing"]
 
 
-async def test_once_it_is_in_the_floor_s_slot_says_why_it_stopped(day, monkeypatch):
+async def test_once_it_is_in_the_goal_s_slot_says_why_it_stopped(day, monkeypatch):
     system = day(soc=40.0, done_kwh=4.0)
-    row = await at_first_floor_slot(system, monkeypatch)
+    row = await at_first_goal_slot(system, monkeypatch)
     assert row["buy_now"] is True
 
     system.coordinator.test_done[0] = 14.0
@@ -59,12 +59,12 @@ async def test_once_it_is_in_the_floor_s_slot_says_why_it_stopped(day, monkeypat
     row = system.coordinator.tick_log[-1]
 
     assert row["buy_now"] is False
-    assert row["buy_why"] == "floor_done"
+    assert row["buy_why"] == "goal_done"
 
 
 async def test_what_a_kwh_bought_now_costs_out_of_the_packs(day, monkeypatch):
     """0.338 through the 88 % round trip, plus 8500 / (10000 x 28) of wear."""
-    row = await at_first_floor_slot(day(soc=40.0), monkeypatch)
+    row = await at_first_goal_slot(day(soc=40.0), monkeypatch)
 
     assert row["buy_cost_eur_kwh"] == pytest.approx(0.338 / 0.88 + 8500 / 280000, abs=1e-3)
     assert row["price_margin_eur_kwh"] == 0.03
@@ -157,24 +157,24 @@ async def test_the_sentence_opens_the_row_on_disk(build_system, tmp_path):
 
 
 async def test_still_the_day_s_amount_on_the_slot_s_next_tick(day, monkeypatch):
-    """The second tick finds the purchase under way - it is still for the floor."""
+    """The second tick finds the purchase under way - it is still for the goal."""
     system = day(soc=40.0, done_kwh=4.0)
-    await at_first_floor_slot(system, monkeypatch)
+    await at_first_goal_slot(system, monkeypatch)
 
     await system.coordinator._async_tick(None)
     row = system.coordinator.tick_log[-1]
 
     assert row["buy_now"] is True
     assert row["buy_slot"] == "latched"
-    assert row["buy_why"] == "floor_amount"
+    assert row["buy_why"] == "day_goal"
 
 
-async def test_a_floor_slot_that_pays_anyway_says_it_pays(day, monkeypatch):
-    """0.21 against a 0.45 evening clears the margin: the floor is not why."""
+async def test_a_goal_slot_that_pays_anyway_says_it_pays(day, monkeypatch):
+    """0.21 against a 0.45 evening clears the margin: the goal is not why."""
     system = day(soc=40.0, cheap=(13, 14, 15, 16), cheap_at=0.21,
                  peak=(18, 19, 20, 21), ordinary=0.30)
 
-    row = await at_first_floor_slot(system, monkeypatch)
+    row = await at_first_goal_slot(system, monkeypatch)
 
     assert row["buy_now"] is True
     assert row["buy_why"] == "pays"

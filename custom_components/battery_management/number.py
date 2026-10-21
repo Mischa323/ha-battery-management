@@ -1,9 +1,9 @@
-"""Number entity: the state-of-charge reserve."""
+"""Number entities: the reserve, the buying bounds and the day goal."""
 from __future__ import annotations
 
 from homeassistant.components.number import NumberEntity, NumberMode
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import PERCENTAGE, EntityCategory
+from homeassistant.const import PERCENTAGE, EntityCategory, UnitOfEnergy
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -20,6 +20,7 @@ async def async_setup_entry(
         [
             SocReserveNumber(coordinator, entry),
             BuyCeilingMinNumber(coordinator, entry),
+            DayGoalNumber(coordinator, entry),
             BuyCeilingMaxNumber(coordinator, entry),
             SellFloorNumber(coordinator, entry),
         ]
@@ -155,3 +156,49 @@ class SellFloorNumber(_CeilingNumber):
 
     async def async_set_native_value(self, value: float) -> None:
         await self.coordinator.async_set_sell_floor(value)
+
+
+class DayGoalNumber(NumberEntity):
+    """How much to put into the packs each day, in the day's cheapest slots.
+
+    Beside "Minimum charge", which is a level: this is an amount, bought
+    whether or not the margin says it pays, but only in the cheapest slots of
+    the day - and only where tomorrow is not cheaper still. What does not fit
+    while those slots go by is let go, not chased into the evening.
+
+    Defaults to 0 - off.
+    """
+
+    _attr_has_entity_name = True
+    _attr_should_poll = False
+    _attr_translation_key = "day_goal"
+    _attr_icon = "mdi:battery-charging-high"
+    _attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
+    _attr_native_min_value = 0
+    _attr_native_step = 0.5
+    _attr_mode = NumberMode.SLIDER
+    _attr_entity_category = EntityCategory.CONFIG
+
+    def __init__(self, coordinator: BatteryCoordinator, entry: ConfigEntry) -> None:
+        self.coordinator = coordinator
+        self._attr_unique_id = f"{entry.entry_id}_day_goal"
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, entry.entry_id)},
+            name="Battery Management",
+            manufacturer="Battery Management",
+        )
+
+    async def async_added_to_hass(self) -> None:
+        self.coordinator.async_add_listener(self.async_write_ha_state)
+
+    @property
+    def native_max_value(self) -> float:
+        # the bank, once its size is known; until then room for a big one
+        return round(self.coordinator.usable_capacity_kwh() or 50.0)
+
+    @property
+    def native_value(self) -> float:
+        return self.coordinator.day_goal_kwh
+
+    async def async_set_native_value(self, value: float) -> None:
+        await self.coordinator.async_set_day_goal(value)

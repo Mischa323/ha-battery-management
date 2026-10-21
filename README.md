@@ -138,11 +138,12 @@ What each row carries:
 | `price_eur_kwh`, `price_role` | what this hour cost, and whether it was ranked `cheap` · `dear` · `normal` — so a trace can be read against the tariff without cross-checking the price chart by hand |
 | `market_price_eur_kwh` | the exchange price of the same slot, which is what export is settled against — what a kWh sent back was worth while a bought one cost `price_eur_kwh`. Direct supplier route only |
 | `house_w`, `house_draw_w` | the house less the sun (meter plus packs) this tick, and the hour-long average that buying works from |
-| `buy_now`, `buy_why` | Dynamic mode only: whether it bought this tick, and why or why not. The reasons for buying are `pays` (the margin says it pays), `floor_amount` (for the day's "buy at least", whether or not it pays) and `trade_fill` (to sell tonight). The reasons for not buying are `not_a_buy_slot`, `floor_done` (the floor's slot, but its amount is already in), `sun_enough`, `no_ceiling` (see `buy_ceiling_why`), `topped_up` (done for this slot), `at_ceiling` and `no_prices`. A purchase keeps the reason it started with until the end of its slot |
-| `buy_slot` | why this slot is a buying slot: `margin`, `floor`, `trade_fill`, or `latched` (a purchase already under way) |
+| `buy_now`, `buy_why` | Dynamic mode only: whether it bought this tick, and why or why not. The reasons for buying are `pays` (the margin says it pays), `minimum` (up to *Minimum charge*), `day_goal` (for the *Day goal*; both whether or not it pays) and `trade_fill` (to sell tonight). The reasons for not buying are `not_a_buy_slot`, `goal_done` (the goal's slot, but its amount is already in), `sun_enough`, `no_ceiling` (see `buy_ceiling_why`), `topped_up` (done for this slot), `at_ceiling` and `no_prices`. A purchase keeps the reason it started with until the end of its slot |
+| `buy_slot` | why this slot is a buying slot: `margin`, `floor` (*Minimum charge*), `goal` (*Day goal*), `trade_fill`, or `latched` (a purchase already under way) |
 | `buy_ceiling_pct`, `buy_ceiling_why` | how full buying may make the packs, and what set that limit (`solar_headroom`, `cheaper_later`, `cheaper_tomorrow`, `trade_fill`, ...) |
 | `buy_cost_eur_kwh`, `price_margin_eur_kwh` | what a kWh bought now costs once it is back out of the packs (the round trip plus wear), and the margin it must leave |
-| `floor_kwh`, `floor_done_kwh`, `floor_left_kwh` | the day's "buy at least" amount, how much of it is in, and how much is still to buy |
+| `minimum_pct` | *Minimum charge* |
+| `goal_kwh`, `goal_done_kwh`, `goal_left_kwh` | the *Day goal*, how much of it is in, and how much is still to buy |
 | `plan_buy`, `plan_buy_later`, `plan_sell` | the plan's slots ahead as they stood at this tick, in local time, e.g. `12:45-13:00 13:15-14:30`. `plan_buy_later` lists the slots the plan expects to buy in later. A slot on another day starts with its date |
 | `solar_produced_today_kwh` | the configured solar sensor's cumulative reading for the day, if one is set — diff two rows to get the rate; the only way to confirm "was that solar" rather than guessing from `grid_w` |
 
@@ -800,7 +801,8 @@ acts in Dynamic tariff — see [Selling to the grid](#selling-to-the-grid).
 | Number | What it does |
 | --- | --- |
 | **SoC reserve** | Charge held back, in every mode. Raises each pack's *own* discharge floor rather than clamping the pair, so the split tapers towards it and a fuller pack carries the load alone. 0 = off. |
-| **Buy up to: at least** | Floor under the computed charge ceiling. Use it when the solar forecast is too gloomy to trust. |
+| **Minimum charge** (*Minimaal laden*) | A level. Below it, the packs are bought up to it in today's cheapest hours, whether or not the margin says it pays. It is also the floor under the computed charge ceiling. 0 = off. |
+| **Day goal** (*Dagdoel*) | An amount in kWh to put into the packs each day, sun included. It is bought only in the day's cheapest hours, and only when tomorrow is not cheaper. Whatever does not fit is let go. 0 = off. |
 | **Buy up to: at most** | Cap on the computed charge ceiling. Use it when the forecast under-reads, which would otherwise let it buy more than needed. |
 | **Sell down to: at least** | How far selling to the grid may empty a pack. The reserve still applies underneath; the higher of the two wins. |
 
@@ -978,17 +980,35 @@ weighs each dear slot by the draw of its own hour, and never by less than
 last night's standby load. The profile is in the diagnostics as
 `house_draw_profile_w`.
 
-**"Buy up to: at least" is binding, and it is an amount for the day.** At
-50 % of a 28 kWh bank, 14 kWh go into the packs each day, sun included. Whatever
-is missing is bought in the cheapest slots before midnight, at full power,
-whether or not the margin says it pays. Beyond that amount the margin decides.
-It is not a level the packs must still hold in the evening. In the owner's
-words on 19 October: *"hij moet gewoon 50 % opgeladen zijn over de hele dag …
-als hij in de avond geen 50 % haalt is dat geen probleem"*. The first version
-did treat it as a level, and planned another 6 kWh at night after 13.1 kWh had
-already gone in. It is never more than the room below "Buy up to: at most".
-The plan card says how much and how much is still to go, and the Plan sensor
-carries `floor` (`kwh`, `done_kwh`, `remaining_kwh`, `hours`). Set it to 0 to
+**Two sliders the owner sets, both binding: one fixed, one that looks at
+prices.** They were asked for on 21 October, after a single slider had been a
+level first and then an amount.
+
+*Minimum charge* is a level. Below it, the cheapest hours before the end of
+the day are bought until the packs reach it, at full power and whether or not
+the margin says it pays. Above it the margin decides. A slot bought for the
+minimum alone stops at the minimum. It aims at the end of the day, not the
+coming peak, as the owner put it on 24 September: *"die ondergrens moet voor
+het eind van de dag zijn, niet in de ochtend"*.
+
+*Day goal* is an amount. At 14 kWh, 14 kWh go into the packs each day, sun
+included. That is counted by the charging sensors where they are configured,
+and otherwise by what was commanded into the packs. It is bought whether or not
+the margin says it pays, but only in a slot that passes two tests, both at the
+packs' full power:
+
+- The slot is among the day's cheapest for the whole goal, ranked over the
+  whole local day with past slots included. Whatever did not fit while those
+  slots went by is let go. On 21 October the amount was chased into the
+  evening instead: 21:45 at EUR 0.343 was bought for kWh the packs had had no
+  room for at noon.
+- The slot is among the cheapest of the next 24 hours for what is still left.
+  Once tomorrow's prices are out, a cheaper afternoon tomorrow beats this
+  evening.
+
+Neither is ever more than the room below "Buy up to: at most". The plan card
+says what each one is doing. The Plan sensor carries `floor` (`to`, `hours`)
+and `goal` (`kwh`, `done_kwh`, `remaining_kwh`, `hours`). Set both to 0 to
 leave everything to the margin.
 
 The margin is measured against the dear hours of the next 24 hours. Once
@@ -1134,7 +1154,7 @@ So the deadline stays and the *amount* now looks past it. When the cheap hours
 on the far side of the coming peak are cheaper than this side by more than the
 margin, it holds back — and how far depends on *when* that cheaper window is.
 
-**Later the same day: buy nothing now.** *Buy up to: at least* is a target for
+**Later the same day: buy nothing now.** *Minimum charge* is a target for
 the **end of the day**, in the owner's words: "die ondergrens moet voor het
 eind van de dag zijn niet in de ochtend". A cheaper window later that day is
 still in time to reach it, at a better price, so the morning peak is met on
@@ -1144,7 +1164,7 @@ afternoon.
 
 **Only past midnight: buy the floor, no more.** Then the end of the day comes
 before any cheaper chance, and the floor is what the packs meet it with — the
-bridge into the evening. With *Buy up to: at least* at 0 nothing is held back
+bridge into the evening. With *Minimum charge* at 0 nothing is held back
 here, because "buy nothing before the evening peak" is exactly the fault above
 arriving from the other direction.
 
@@ -1214,7 +1234,7 @@ question for tomorrow's prices to answer: with a much cheaper day coming there
 is no sense filling to the brim tonight.
 
 So when the cheap hours beyond local midnight are cheaper than the rest of
-today by more than the margin, the ceiling drops to **Buy up to: at least** — take
+today by more than the margin, the ceiling drops to **Minimum charge** — take
 what tonight needs, top up on the cheap day. That comparison is made across the
 day boundary rather than across the peak: everything beyond a peak is dearer
 than the cheap hour before it on every ordinary day, so that comparison fires
@@ -1226,7 +1246,7 @@ packs that hold exactly that much means buy nothing, peak ahead or not; half a
 day of sun means buy to half and leave the rest to the roof. The peak boundary
 decides **when** it may buy, never how much.
 
-**This does nothing until you set a floor.** *Buy up to: at least* ships at 0, and
+**This does nothing until you set a floor.** *Minimum charge* ships at 0, and
 reading that as a level to stop at would mean "buy nothing", which is the fault
 it was reported alongside. With no floor stated, nothing is lowered.
 
@@ -1251,7 +1271,7 @@ on how full.
 ### Bounding it by hand
 
 Two sliders bound the computed ceiling, because it is only as good as the solar
-forecast behind it: **Buy up to: at least** and **Buy up to: at most**. Leave them at
+forecast behind it: **Minimum charge** and **Buy up to: at most**. Leave them at
 0 and 100 and the calculation passes through untouched. They only limit buying
 from the grid — charging from your own surplus is never capped, since that would
 be throwing sun away.
@@ -1291,7 +1311,7 @@ only with every pack more than two points above its sell line. It then carries o
 slot. It never sells in an hour it is buying in, and only in Dynamic tariff.
 
 **Filling up to sell.** Buying for the house alone stops where the house
-needs it to: on a day before a cheaper one only at **Buy up to: at least**.
+needs it to: on a day before a cheaper one only at **Minimum charge**.
 If that is also the sell line, the evening has nothing to sell. Reported on
 8 October: both at 70 %, a sale on the plan, and nothing above the line. So
 with trading **On** (not in shadow, which sells nothing), a cheap afternoon is

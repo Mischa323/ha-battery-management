@@ -2129,35 +2129,45 @@ function paysSays(expected, margin, cost) {
 }
 
 /**
- * "Buy at least" is binding (19 October), and an amount for the day: so
- * many kWh into the packs, in the day's cheapest hours, whether or not the
- * margin says it pays - not a level the packs must still hold in the
- * evening. Say how much and how much is in, so a purchase on a dear day does
- * not read like the margin being ignored.
+ * "Minimaal laden" is binding (19 October), and a level: up to it the
+ * cheapest hours of today are bought on whether or not the margin says it
+ * pays. Say so, so a purchase on a dear day does not read like the margin
+ * being ignored.
  */
 function floorSays(floor) {
   if (!floor || !floor.to) return "";
-  const pct = Math.round(floor.to);
-  // an amount for the day since the evening of 19 October; an older
-  // integration only knows the level
-  if (floor.kwh == null) {
-    return (floor.hours || []).length
-      ? " Laadt in elk geval tot " + pct +
-        " % (Koop minstens tot) in de goedkoopste uren van vandaag, ook als dat niet loont."
-      : "";
+  // #31 sent the day goal here, as an amount; the integration and the card
+  // ship together, but a cached card meets a newer integration all the same
+  if (floor.kwh != null) return goalSays(floor);
+  return (floor.hours || []).length
+    ? " Laadt in elk geval tot " + Math.round(floor.to) +
+      " % (Minimaal laden) in de goedkoopste uren van vandaag, ook als dat niet loont."
+    : "";
+}
+
+/**
+ * The day goal (21 October): so many kWh into the packs each day, in the
+ * day's cheapest hours, whether or not the margin says it pays - and let go
+ * rather than chased once those hours are gone or tomorrow is cheaper. Say
+ * which of those it is, so an evening without a purchase does not read as
+ * the goal forgotten.
+ */
+function goalSays(goal) {
+  if (!goal || !goal.kwh) return "";
+  const amount = kwh(goal.kwh);
+  const left = goal.remaining_kwh || 0;
+  if (left > 0.05) {
+    return (goal.hours || []).length
+      ? " Dagdoel " + amount + ": laadt nog " + kwh(left) +
+        " in de goedkoopste uren, ook als dat niet loont."
+      : " Dagdoel " + amount + ": nog " + kwh(left) + " open, maar de goedkoopste uren " +
+        "van vandaag zijn voorbij of morgen is goedkoper - dat laat hij gaan.";
   }
-  const amount = kwh(floor.kwh);
-  if ((floor.remaining_kwh || 0) <= 0.05) {
-    // nothing left to buy: either it is in, or there is no room for the rest
-    if (floor.done_kwh != null && floor.done_kwh < floor.kwh - 0.05) {
-      return " Van de " + amount + " van vandaag (Koop minstens tot " + pct + " %) zit " +
-        kwh(floor.done_kwh) + " erin; meer past er niet onder \"Inkopen tot: hoogstens\".";
-    }
-    return " De " + amount + " van vandaag (Koop minstens tot " + pct + " %) zit er al in.";
+  if (goal.done_kwh != null && goal.done_kwh < goal.kwh - 0.05) {
+    return " Dagdoel " + amount + ": " + kwh(goal.done_kwh) +
+      " erin; meer past er niet onder \"Inkopen tot: hoogstens\".";
   }
-  return " Laadt vandaag in elk geval " + amount + " (Koop minstens tot " + pct +
-    " %) in de goedkoopste uren, ook als dat niet loont; nog " +
-    kwh(floor.remaining_kwh) + " te gaan.";
+  return " Dagdoel " + amount + " zit er al in.";
 }
 
 /**
@@ -2364,7 +2374,7 @@ class BatteryManagementPlanCard extends HTMLElement {
           : "";
       el("plwhy").textContent =
         (limited ? paysSays(expected, plan.price_margin, plan.buy_cost) : ceilingSays(expected.ceiling)) + short +
-        (plan.waiting ? waitingSays(plan.waiting).why : "") + floorSays(plan.floor) + fillSays(plan.trade);
+        (plan.waiting ? waitingSays(plan.waiting).why : "") + floorSays(plan.floor) + goalSays(plan.goal) + fillSays(plan.trade);
       el("plsunshare").textContent = sunShareSays(expected);
     } else {
       el("plsun").textContent = "—";
