@@ -95,6 +95,8 @@ from .const import (
     CONF_UNIT_PHASE,
     CONF_TARGET_NUMBER,
     CONF_TRACE,
+    CONF_NOTIFY,
+    CONF_NOTIFY_SERVICE,
     CONF_TRACE_DAYS,
     CONF_FAST_CHARGE_HOLD,
     CONF_FILL_BEFORE_DEAR_DAY,
@@ -202,6 +204,10 @@ from .const import (
     BUY_CEILING_BAND,
     GOAL_DONE_KWH,
     PACK_DRAIN_MIN_KWH,
+    ALERT_NO_GRID_S,
+    ALERT_OFFLINE_S,
+    ALERT_SHORT_KWH,
+    DEFAULT_NOTIFY,
     ROUND_TRIP_BOUNDS,
     ROUND_TRIP_DAYS,
     ROUND_TRIP_MIN_DAYS,
@@ -594,6 +600,15 @@ class BatteryCoordinator:
         self._command_ack: dict[str, float] = {}
         # short and stable for the lifetime of this coordinator
         self._run_id: str = f"{int(time.time()) % 100000:05d}"
+        # telling the owner when something is off (1 November)
+        self._notify_on = bool(data.get(CONF_NOTIFY, DEFAULT_NOTIFY))
+        self._notify_service = str(data.get(CONF_NOTIFY_SERVICE) or "").strip()
+        #: what has been said, so each event is said once: {key: when}
+        self._alerted: dict[str, str] = {}
+        #: since when a pack, or the meter, has been gone (time.time())
+        self._gone_since: dict[str, float] = {}
+        self._alert_slot: str | None = None
+        self.last_alert: dict | None = None
         self._trace: Trace | None = None
         if data.get(CONF_TRACE, DEFAULT_TRACE):
             self._trace = Trace(
@@ -708,6 +723,7 @@ class BatteryCoordinator:
         self._house_now_w: float | None = None
         #: this tick's buying verdict, for the trace (`_dynamic_verdict`)
         self._buy_verdict: dict | None = None
+        self._last_buy_why: str | None = None
         #: why the purchase under way was started, for its later ticks
         self._buying_why: str | None = None
         #: the buy and sell slots of the last plan worked out, for the trace
@@ -4117,6 +4133,9 @@ class BatteryCoordinator:
                     "round_trip": round(self.round_trip(), 3),
                     "round_trip_history": dict(sorted(self.round_trip_history.items())),
                     "round_trip_today": self._rt_day,
+                    # the last thing the owner was told, and what is not repeated
+                    "last_alert": self.last_alert,
+                    "alerted": dict(self._alerted),
                     "house_draw_w": (
                         None if self._house_draw_w is None else round(self._house_draw_w)
                     ),
@@ -4196,6 +4215,7 @@ class BatteryCoordinator:
         cfg_by_name_all = {u.name: u for u in self._units}
         price = self.current_price()
         verdict, self._buy_verdict = self._buy_verdict, None
+        self._last_buy_why = (verdict or {}).get("why")
         row = {
             "at": dt_util.utcnow().isoformat(),
             # what it is doing, in a sentence - the first thing to read on a
@@ -6111,6 +6131,118 @@ class BatteryCoordinator:
     async def _async_tick(self, _now) -> None:
         with self._fill_memo_scope():
             await self._tick(_now)
+            try:
+                await self._check_alerts()
+            except Exception:  # noqa: BLE001 - a message must never break a tick
+                _LOGGER.exception("could not check what to tell the owner")
+
+    # -- telling the owner ---------------------------------------------------
+
+    async def _check_alerts(self) -> None:
+        """Say once when something is off that the owner would want to know.
+
+        Asked for on 1 November, from the list of what other systems do: a
+        pack unreachable for ten minutes, the meter unreadable for five, a
+        purchase at peak price, and the packs expected to run dry in the
+        coming peak even with what is kept for it. Each once per occurrence -
+        per episode, per slot, per peak - never every tick.
+        """
+        if not self._notify_on or not self.enabled:
+            return
+        now = time.time()
+        for cfg in self._units:
+            key = f"pack_offline:{cfg.name}"
+            if self.unit_status[cfg.name].online:
+                self._gone_since.pop(key, None)
+                self._alerted.pop(key, None)
+                continue
+            since = self._gone_since.setdefault(key, now)
+            if now - since >= ALERT_OFFLINE_S:
+                await self._alert(
+                    key, f"{cfg.name} is niet bereikbaar",
+                    f"{cfg.name} reageert al {round((now - since) / 60)} minuten niet. "
+                    "Hij wordt niet aangestuurd tot hij terug is; de andere accu neemt het over.",
+                )
+        key = "no_grid"
+        if self.active_policy in (POLICY_NO_GRID_DATA, POLICY_GRID_STALE):
+            since = self._gone_since.setdefault(key, now)
+            if now - since >= ALERT_NO_GRID_S:
+                await self._alert(
+                    key, "Geen meterstand",
+                    f"De meter is al {round((now - since) / 60)} minuten niet te lezen. "
+                    "Zolang dat zo is, stuurt hij de accu's niet aan.",
+                )
+        else:
+            self._gone_since.pop(key, None)
+            self._alerted.pop(key, None)
+        if self.mode != MODE_DYNAMIC:
+            return
+        slots = self._price_forecast()
+        moment = dt_util.utcnow()
+        current = slot_at(slots, moment) if slots else None
+        if current is None:
+            return
+        if self.active_policy == POLICY_DYNAMIC_CHARGE:
+            window = slots_in_window(slots, moment, PRICE_WINDOW_HOURS)
+            dear = pick_dearest(window, self._expensive_hours) if self._expensive_hours > 0 else []
+            if dear and current.price >= self._dear_line(dear):
+                why = {
+                    "minimum": "om het minimum te halen",
+                    "day_goal": "voor het dagdoel",
+                    "trade_fill": "om vanavond te verkopen",
+                }.get(self._last_buy_why, "")
+                await self._alert(
+                    f"dear_buy:{_slot_key(current)}", "Koopt tegen piekprijs",
+                    f"Hij koopt nu tegen €{current.price:.3f} per kWh{' ' + why if why else ''}, "
+                    "op het niveau van de piek. Kijk in de trace naar buy_why als dat niet klopt.",
+                )
+        # the forecast once a slot, not every tick
+        if self._alert_slot == _slot_key(current):
+            return
+        self._alert_slot = _slot_key(current)
+        peak = self._peak_run(slots, moment)
+        if not peak:
+            return
+        forecast = self.soc_forecast(slots, moment, self.peak_holds(slots, moment))
+        if forecast is None:
+            return
+        keys = {_slot_key(s) for s in peak}
+        rows = [r for r in forecast["slots"] if _slot_key(r["slot"]) in keys]
+        short = sum(r["short"] for r in rows)
+        if short < ALERT_SHORT_KWH:
+            return
+        empty = next((r for r in rows if r["short"] > 0), rows[0])
+        price = sum(s.price for s in peak) / len(peak)
+        await self._alert(
+            f"short_in_peak:{_slot_key(peak[0])}", "Accu's leeg in de piek",
+            f"Volgens de verwachting zijn de accu's om {dt_util.as_local(empty['slot'].start):%H:%M} "
+            f"leeg, in de piek van {dt_util.as_local(peak[0].start):%H:%M} (gem. €{price:.2f}). "
+            f"Dan komt nog ongeveer {short:.1f} kWh van het net. Ook met wat hij ervoor bewaart, "
+            "is er niet meer te halen.",
+        )
+
+    async def _alert(self, key: str, title: str, message: str) -> None:
+        """Send one message, once: Home Assistant's own list, and the phone."""
+        if key in self._alerted:
+            return
+        self._alerted[key] = dt_util.utcnow().isoformat()
+        # what is no longer current is forgotten, so the record stays small
+        for old in sorted(self._alerted, key=self._alerted.get)[:-50]:
+            del self._alerted[old]
+        self.last_alert = {"key": key, "title": title, "message": message,
+                           "at": self._alerted[key]}
+        _LOGGER.info("%s: %s", title, message)
+        await self.hass.services.async_call(
+            "persistent_notification", "create",
+            {"title": f"Battery Management: {title}", "message": message,
+             "notification_id": f"{DOMAIN}_{key.split(':')[0]}"},
+            blocking=False,
+        )
+        domain, _, service = self._notify_service.partition(".")
+        if domain and service:
+            await self.hass.services.async_call(
+                domain, service, {"title": title, "message": message}, blocking=False,
+            )
 
     async def _tick(self, _now) -> None:
         if self._detecting:

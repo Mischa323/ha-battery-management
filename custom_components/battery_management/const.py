@@ -467,6 +467,8 @@ TICK_LOG_SIZE = 1000
 # config directory instead: one row per tick, every input and every bound, so a
 # question about last week can be answered by arithmetic instead of memory.
 CONF_TRACE = "trace"                 # write it at all
+CONF_NOTIFY = "notify"               # tell the owner when something is off
+CONF_NOTIFY_SERVICE = "notify_service"  # and where to, beside Home Assistant itself
 CONF_TRACE_DAYS = "trace_days"       # how many days of files to keep
 DEFAULT_TRACE = True
 DEFAULT_TRACE_DAYS = 14
@@ -675,3 +677,11 @@ PERIOD_SUFFIX = {
 SAVE_DELAY = 30  # seconds
 
 UNAVAILABLE_STATES = ("unavailable", "unknown", "none", None, "")
+
+#: Notifications (1 November): on by default, to Home Assistant's own list
+DEFAULT_NOTIFY = True
+#: how long a pack or the meter may be gone before it is worth a message
+ALERT_OFFLINE_S = 600
+ALERT_NO_GRID_S = 300
+#: what the peak may go short of before it is worth a message, in kWh
+ALERT_SHORT_KWH = 1.0

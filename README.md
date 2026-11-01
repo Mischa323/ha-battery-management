@@ -877,6 +877,23 @@ capped — that would be throwing sun away.
 | No grid reading | The meter cannot be read; nothing is commanded |
 | Coordinator off | The kill switch is off |
 
+## Notifications
+
+Since 1 November the integration says so when something is off. It says it
+once per occurrence: per episode, per slot, per peak.
+
+| When | Message |
+| --- | --- |
+| A pack has been unreachable for 10 minutes | *Batterij 2 is niet bereikbaar* |
+| The meter has been unreadable for 5 minutes | *Geen meterstand* |
+| It buys at peak level (within the price margin of the dearest hours) | *Koopt tegen piekprijs*, with the price and what it buys for |
+| The forecast has the packs dry in the coming peak by at least 1 kWh, even with what is kept for it | *Accu's leeg in de piek*, with when, and how much the grid supplies then |
+
+The messages always go to Home Assistant's own notifications. Under
+*Configure → Logboek en vangnetten* they can be switched off, and a notify
+service can be added for the phone, e.g. `notify.mobile_app_<phone>`. The
+diagnostics carry `last_alert`.
+
 ## Checking the meter is read correctly
 
 Three sensors, which together are how a shadow run is verified:

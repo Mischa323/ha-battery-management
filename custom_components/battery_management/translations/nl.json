@@ -251,13 +251,17 @@
           "trace": "Logboekbestand schrijven",
           "trace_days": "Bewaren",
           "grid_max_age": "Meter negeren na (seconden)",
-          "external_timeout": "Minuten dat een extern setpoint geldig blijft"
+          "external_timeout": "Minuten dat een extern setpoint geldig blijft",
+          "notify": "Meldingen sturen",
+          "notify_service": "Ook naar (notify-dienst)"
         },
         "data_description": {
           "trace": "Eén CSV-regel per tick in config/battery_management_trace/, zodat een vraag over vorige week nog te beantwoorden is. Kost ongeveer 2 MB per dag.",
           "trace_days": "Hele dagen ouder dan dit worden verwijderd.",
           "grid_max_age": "Stop met regelen zodra de meter zo lang niets meer heeft gemeld, in plaats van door te rekenen op een getal dat stilstaat. Een bevroren meting blijft gewoon leesbaar, dus niets anders merkt het op: het setpoint loopt naar volle ontlading en blijft daar. 0 vertrouwt de meting ongeacht zijn leeftijd.",
-          "external_timeout": "In de modus Extern plan: komt er binnen deze tijd geen nieuw plan, dan gaat de sturing terug naar de meter volgen in plaats van te bevriezen op het laatste commando."
+          "external_timeout": "In de modus Extern plan: komt er binnen deze tijd geen nieuw plan, dan gaat de sturing terug naar de meter volgen in plaats van te bevriezen op het laatste commando.",
+          "notify": "Als een accu tien minuten onbereikbaar is, de meter vijf minuten niet te lezen is, hij tegen piekprijs koopt, of de accu's naar verwachting leeg raken in de komende piek. Altijd naar de meldingen van Home Assistant; één keer per gebeurtenis.",
+          "notify_service": "Optioneel, voor je telefoon: de notify-dienst, bijvoorbeeld notify.mobile_app_jouw_telefoon. Leeg: alleen de meldingen in Home Assistant zelf."
         }
       },
       "shadow": {

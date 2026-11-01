@@ -67,6 +67,9 @@ from .const import (
     CONF_SOC_SENSOR,
     CONF_TARGET_NUMBER,
     CONF_TRACE,
+    CONF_NOTIFY,
+    CONF_NOTIFY_SERVICE,
+    DEFAULT_NOTIFY,
     CONF_TRACE_DAYS,
     CONF_CHARGE_POWER_SENSOR,
     CONF_UNIT_POWER_SENSOR,
@@ -274,6 +277,12 @@ def _logging_schema(defaults: dict) -> vol.Schema:
                 CONF_TRACE_DAYS,
                 default=defaults.get(CONF_TRACE_DAYS, DEFAULT_TRACE_DAYS),
             ): _amount(1, 90, "dagen"),
+            vol.Optional(
+                CONF_NOTIFY, default=defaults.get(CONF_NOTIFY, DEFAULT_NOTIFY)
+            ): bool,
+            vol.Optional(
+                CONF_NOTIFY_SERVICE, default=defaults.get(CONF_NOTIFY_SERVICE, "")
+            ): str,
             vol.Optional(
                 CONF_GRID_MAX_AGE,
                 default=defaults.get(CONF_GRID_MAX_AGE, DEFAULT_GRID_MAX_AGE),
