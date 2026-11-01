@@ -3,9 +3,10 @@
 Asked for on 19 October: the owner would rather have the packs at their
 minimum, a few cents a kWh notwithstanding, than have the margin decide that
 topping up does not pay. Up to it no margin is asked - only the cheapest slots
-before the end of the day, as many as it takes - and above it the margin decides
+before the coming peak, as many as it takes - and above it the margin decides
 as before. On 21 October it was split from the day goal (`test_day_goal.py`):
-this one is the fixed one, that one looks at prices.
+this one is the fixed one, that one looks at prices. Aimed at the peak since 1
+November, after aiming at midnight had it buying at night.
 """
 from __future__ import annotations
 
@@ -60,17 +61,49 @@ def test_above_the_minimum_the_margin_decides(day):
     assert bought(day(soc=75.0)) == []
 
 
-def test_only_before_the_end_of_the_day(day):
-    """Tomorrow's cheap hours do not count towards today's minimum - and the
-    end of the day, not the coming peak: "die ondergrens moet voor het eind
-    van de dag zijn, niet in de ochtend" (24 September)."""
-    system = day(cheap=(), cheap_at=0.39, peak=(), ordinary=0.39, tomorrow=0.10)
+def evening(day, monkeypatch, hour, soc=20.0):
+    """Today's peak 18:00-22:00 at 0.45, 22:00-24:00 at 0.40; tomorrow the
+    same peak, with 12:00-14:00 at 0.30 before it."""
+    tomorrow = {24 + h: 0.30 for h in (12, 13)} | {24 + h: 0.45 for h in (18, 19, 20, 21)}
+    system = day(soc=soc, floor=50.0, cheap=(), peak=(18, 19, 20, 21), peak_at=0.45,
+                 ordinary=0.39, overrides={22: 0.40, 23: 0.40, **tomorrow})
+    moment = coordinator_module.dt_util.utcnow().replace(hour=hour, minute=30)
+    monkeypatch.setattr(coordinator_module.dt_util, "utcnow", lambda: moment)
+    co = system.coordinator
+    return co._floor_slots(co._price_forecast(), moment), moment
+
+
+def test_only_before_the_coming_peak(day):
+    """22:00 at 0.10 is cheaper, but it comes after the peak the minimum is for."""
+    system = day(cheap=(13,), cheap_at=0.338, peak=(18, 19, 20, 21), peak_at=0.45,
+                 ordinary=0.39, overrides={22: 0.10, 23: 0.10})
     co = system.coordinator
     now = coordinator_module.dt_util.utcnow()
 
     slots = co._floor_slots(co._price_forecast(), now)
     assert slots
-    assert all(s.start.date() == now.date() for s in slots)
+    assert all(s.end <= now.replace(hour=18) for s in slots)
+
+
+def test_after_the_peak_not_tonight_but_before_tomorrow_s(day, monkeypatch):
+    """1 November: aimed at midnight, it bought at 0.42-0.43 after the peak,
+    for the house to draw back out overnight. After the peak the next one is
+    tomorrow's, and the cheapest slots before it are tomorrow's noon."""
+    slots, moment = evening(day, monkeypatch, hour=22)
+
+    assert slots
+    assert all(s.start.date() > moment.date() for s in slots)
+    assert {s.price for s in slots} == {0.30}
+
+
+def test_not_in_the_peak_it_is_meant_for(day, monkeypatch):
+    """Inside the peak, "before the next dear slot" would be the slot it is
+    in. The stretch under way is skipped: nothing at 0.45."""
+    slots, moment = evening(day, monkeypatch, hour=19)
+
+    assert slots
+    assert all(s.price < 0.45 for s in slots)
+    assert all(s.start.date() > moment.date() for s in slots)
 
 
 def test_the_plan_says_how_full_and_when(day):

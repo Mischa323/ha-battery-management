@@ -2130,8 +2130,8 @@ function paysSays(expected, margin, cost) {
 
 /**
  * "Minimaal laden" is binding (19 October), and a level: up to it the
- * cheapest hours of today are bought on whether or not the margin says it
- * pays. Say so, so a purchase on a dear day does not read like the margin
+ * cheapest hours before the coming peak are bought on whether or not the
+ * margin says it pays. Say so, so a purchase on a dear day does not read like the margin
  * being ignored.
  */
 function floorSays(floor) {
@@ -2141,7 +2141,7 @@ function floorSays(floor) {
   if (floor.kwh != null) return goalSays(floor);
   return (floor.hours || []).length
     ? " Laadt in elk geval tot " + Math.round(floor.to) +
-      " % (Minimaal laden) in de goedkoopste uren van vandaag, ook als dat niet loont."
+      " % (Minimaal laden) in de goedkoopste uren vóór de piek, ook als dat niet loont."
     : "";
 }
 

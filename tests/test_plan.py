@@ -1033,22 +1033,23 @@ async def test_it_waits_for_the_cheaper_window_on_the_far_side(planned):
     assert system.coordinator.setpoint >= 0
 
 
-async def test_the_floor_is_for_the_end_of_the_day_not_the_morning(planned):
-    """Asked for by the owner on 24 September, after the floor had been
-    topping the packs up before the morning peak: "die ondergrens moet voor
-    het eind van de dag zijn niet in de ochtend".
-
-    With a cheaper window later the same day there is time to reach the floor
-    there, at a better price - so even nearly empty packs buy nothing now.
+async def test_the_minimum_is_for_the_coming_peak(planned):
+    """On 24 September the owner asked for the floor to be "voor het eind van
+    de dag ... niet in de ochtend", and so it held back for a cheaper window
+    on the far side of the peak. On 1 November, with the floor become
+    "minimaal laden", that had it buying at 0.42-0.43 at night while the packs
+    met the peak empty - so it is for the coming peak again, asked for in
+    those words: nearly empty packs before a peak buy up to the minimum now,
+    in the cheapest slots on this side of it, whatever comes after.
     """
     system = before_the_peak(planned, soc=20.0, floor=50.0)
 
     await system.coordinator._async_tick(None)
 
-    assert system.coordinator._buy_ceiling() == (0.0, POLICY_CHEAPER_LATER)
-    assert system.coordinator.active_policy != POLICY_DYNAMIC_CHARGE
-    # and today's target still includes the floor, reached in that window
-    assert system.coordinator.charge_ceiling() >= 50.0
+    assert system.coordinator.active_policy == POLICY_DYNAMIC_CHARGE
+    assert system.coordinator.tick_log[-1]["buy_why"] == "minimum"
+    # and no further than the minimum: the far side is still cheaper
+    assert system.coordinator.tick_log[-1]["buy_ceiling_pct"] == 50.0
 
 
 async def test_it_still_buys_the_bridge_the_floor_asks_for(planned):

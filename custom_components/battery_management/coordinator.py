@@ -3083,27 +3083,60 @@ class BatteryCoordinator:
         return [s for s in today if s.end > now and _slot_key(s) in day and _slot_key(s) in soon]
 
     def _floor_slots(self, slots, now) -> list:
-        """The cheapest slots before the end of today that reach "minimaal laden".
+        """The cheapest slots before the coming peak that reach "minimaal laden".
 
         Binding, asked for on 19 October and kept a level on 21 October: the
         owner would rather have the packs at their minimum, a few cents a kWh
         notwithstanding, than have the margin decide that topping up does not
         pay. So up to it no margin is asked - only the cheapest slots, as many
-        as it takes - and above it the margin decides as before. Before the
-        end of the day, not before the coming peak: "die ondergrens moet voor
-        het eind van de dag zijn, niet in de ochtend" (24 September), and the
-        cheapest hours to reach it may well lie after the morning's peak.
+        as it takes - and above it the margin decides as before.
+
+        Before the coming peak, not before the end of the day (1 November).
+        Aimed at midnight, it bought 12.3 kWh at EUR 0.416 on the evening of
+        30 October and 8 at 0.429 the next - after the peak, for the house to
+        draw back out overnight at night prices - while on 1 November the
+        packs met the EUR 0.49 peak empty. Once the peak has passed, the next
+        one is tomorrow's, and the cheapest slots before it are tomorrow's.
         """
         if self.buy_ceiling_min <= 0 or not slots or self._full_charge_minutes <= 0:
             return []
         needed = self.hours_of_charge_needed(ceiling=self.buy_ceiling_min)
         if not needed:
             return []
-        end = dt_util.start_of_local_day(dt_util.as_local(now) + timedelta(days=1))
+        end = self._next_peak_start(slots, now)
+        if end is None:
+            return []
         return slots_to_buy(
             slots, now, max(self._cheap_hours, needed), PRICE_WINDOW_HOURS, 0.0,
             needed, until=end,
         )
+
+    def _next_peak_start(self, slots, now):
+        """When the next dear stretch begins - not the one we are in.
+
+        `_buy_before` is enough for the margin, which never buys a dear slot
+        anyway. The minimum asks no margin, so inside the peak "before the next
+        dear slot" would be the slot it is in, at the peak's price. The
+        stretch under way is skipped; None when no other is in sight.
+        """
+        if self._expensive_hours <= 0:
+            return None
+        window = slots_in_window(slots, now, PRICE_WINDOW_HOURS)
+        dear = sorted(pick_dearest(window, self._expensive_hours), key=lambda s: s.start)
+        current = slot_at(slots, now)
+        edge = (
+            current.end
+            if current is not None and _slot_key(current) in {_slot_key(s) for s in dear}
+            else None
+        )
+        for slot in dear:
+            if slot.start <= now:
+                continue
+            if edge is not None and slot.start == edge:
+                edge = slot.end     # still the stretch we are in
+                continue
+            return slot.start
+        return None
 
     def _buy_slots(self, slots, now) -> list:
         """The cheap hours the packs still have room for - the plan's buying."""
