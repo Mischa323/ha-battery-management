@@ -251,13 +251,17 @@
           "trace": "Write a trace file",
           "trace_days": "Keep for",
           "grid_max_age": "Ignore the meter after (seconds)",
-          "external_timeout": "Minutes an external setpoint stays valid"
+          "external_timeout": "Minutes an external setpoint stays valid",
+          "notify": "Send notifications",
+          "notify_service": "Also to (notify service)"
         },
         "data_description": {
           "trace": "One CSV row per tick under config/battery_management_trace/, so a question about last week can still be answered. Costs about 2 MB a day.",
           "trace_days": "Whole days older than this are deleted.",
           "grid_max_age": "Stop regulating once the meter has not reported for this long, instead of integrating a number that stopped moving. A frozen reading stays perfectly readable, so nothing else notices it: the setpoint walks to full discharge and holds there. 0 trusts the reading whatever its age.",
-          "external_timeout": "In External plan mode: if no new plan arrives within this time, control returns to following the meter instead of freezing on the last instruction."
+          "external_timeout": "In External plan mode: if no new plan arrives within this time, control returns to following the meter instead of freezing on the last instruction.",
+          "notify": "When a pack has been unreachable for ten minutes, the meter cannot be read for five, it buys at peak price, or the packs are expected to run dry in the coming peak. Always to Home Assistant's notifications; once per event.",
+          "notify_service": "Optional, for your phone: the notify service, e.g. notify.mobile_app_your_phone. Empty: Home Assistant's own notifications only."
         }
       },
       "shadow": {
