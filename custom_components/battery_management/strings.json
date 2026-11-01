@@ -109,7 +109,8 @@
           "kp": "Gain (Kp)",
           "kp_return": "Return gain",
           "interval": "Control interval (seconds)",
-          "min_output": "Minimum output (W)"
+          "min_output": "Minimum output (W)",
+          "big_loads": "Big consumers (power sensors)"
         },
         "data_description": {
           "bias": "Aim for this much import instead of exactly zero, so a brief overshoot still exports nothing.",
@@ -117,7 +118,8 @@
           "kp": "How hard it corrects per tick: new setpoint = old + Kp x error. Higher reacts faster and overshoots sooner. 0.25 at 15 s is proven stable here.",
           "kp_return": "How fast the command is wound back down. Higher than the gain above on purpose: coming back cannot oscillate, and it is what stops the packs exporting into a load that has already gone away. Set it equal to the gain above for the old symmetric behaviour.",
           "interval": "Seconds between decisions. Do not go below 15: the Modbus sensors lag 10-30 s, and at 10 s both packs wound up and discharged into an export.",
-          "min_output": "The smallest amount a pack is ever given. It is never split into two shares below this, never handed out under this, and never asked for less than this - a pack that small does not regulate accurately and its own firmware says so. Small demands go to one pack; below three quarters of this value the packs stop entirely, so a setpoint resting near the line cannot switch them on and off every tick. The setpoint keeps integrating meanwhile, so a persistent small import climbs over on its own. Measure it for your hardware."
+          "min_output": "The smallest amount a pack is ever given. It is never split into two shares below this, never handed out under this, and never asked for less than this - a pack that small does not regulate accurately and its own firmware says so. Small demands go to one pack; below three quarters of this value the packs stop entirely, so a setpoint resting near the line cannot switch them on and off every tick. The setpoint keeps integrating meanwhile, so a persistent small import climbs over on its own. Measure it for your hardware.",
+          "big_loads": "Their power sensors, in W: an airco, a car charger, a heat pump. Their use is kept out of the house's learned profile and the standby measurement. The switch \"Packs feed big consumers\" decides whether the packs cover them."
         }
       },
       "battery": {
@@ -342,7 +344,8 @@
           "phase_detect": "Measuring which pack is on which phase",
           "recovering": "Charging back up before it discharges again",
           "grid_stale": "Grid meter has stopped reporting",
-          "no_units": "No packs reachable"
+          "no_units": "No packs reachable",
+          "big_load": "A big consumer runs on the grid"
         }
       },
       "solar_remaining": {
@@ -445,6 +448,9 @@
       },
       "fast_charge": {
         "name": "Fast charge (emergency)"
+      },
+      "feed_big_loads": {
+        "name": "Packs feed big consumers"
       }
     },
     "number": {

@@ -313,6 +313,7 @@ POLICY_MODE_PAUSE = "mode_pause"                    # mode holds everything at 0
 POLICY_DYNAMIC_CHARGE = "dynamic_charge"      # buying now because it is cheap
 POLICY_BUY_WINDOW = "buy_window"              # a cheap hour: not selling what we came to buy
 POLICY_SAVE_FOR_PEAK = "save_for_peak"        # cheaper than the coming peak: keeping the charge for it
+POLICY_BIG_LOAD = "big_load"                  # a big consumer runs on the grid, not on the packs
 POLICY_SOLAR_HEADROOM = "solar_headroom"      # not buying, the sun still fits
 POLICY_CHEAPER_TOMORROW = "cheaper_tomorrow"  # holding back, a cheaper day is coming
 POLICY_CHEAPER_LATER = "cheaper_later"        # holding back, a cheaper window today
@@ -339,6 +340,7 @@ POLICIES = [
     POLICY_DYNAMIC_CHARGE,
     POLICY_BUY_WINDOW,
     POLICY_SAVE_FOR_PEAK,
+    POLICY_BIG_LOAD,
     POLICY_SOLAR_HEADROOM,
     POLICY_CHEAPER_TOMORROW,
     POLICY_CHEAPER_LATER,
@@ -468,6 +470,7 @@ TICK_LOG_SIZE = 1000
 # question about last week can be answered by arithmetic instead of memory.
 CONF_TRACE = "trace"                 # write it at all
 CONF_NOTIFY = "notify"               # tell the owner when something is off
+CONF_BIG_LOADS = "big_loads"         # power sensors of the big consumers: airco, car, heat pump
 CONF_NOTIFY_SERVICE = "notify_service"  # and where to, beside Home Assistant itself
 CONF_TRACE_DAYS = "trace_days"       # how many days of files to keep
 DEFAULT_TRACE = True

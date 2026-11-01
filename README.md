@@ -877,6 +877,26 @@ capped — that would be throwing sun away.
 | No grid reading | The meter cannot be read; nothing is commanded |
 | Coordinator off | The kill switch is off |
 
+## Big consumers
+
+An airco, a car charger, a heat pump: set their power sensors (in W, or kW
+where the sensor says so) under *Configure → Regelen → Grote verbruikers*.
+This has two effects. Both were asked for on 1 November, after the airco
+dehumidifying all night had already pushed the standby measurement up.
+
+- **Their use stays out of what is learned about the house.** That covers the
+  per-hour profile, the hourly average and the standby measurement. An
+  evening of the car charging would otherwise teach every evening to expect
+  it.
+- **The switch *Accu's voeden grote verbruikers* decides who covers them.** On
+  (the default) works as before: the packs follow the meter, whatever draws.
+  Off, the packs give the house what it draws without them, and the big
+  consumers run on the grid. A car at 11 kW would otherwise empty the packs
+  in an hour, at whatever that hour costs. The status is then *Grote
+  verbruiker loopt via het net*.
+
+The trace carries `big_load_w`.
+
 ## Notifications
 
 Since 1 November the integration says so when something is off. It says it
