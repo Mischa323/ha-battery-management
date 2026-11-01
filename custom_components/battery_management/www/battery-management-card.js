@@ -2239,6 +2239,67 @@ function waitingSays(waiting, now = Date.now()) {
  * row carrying what became of it. A plan card that forgets the morning by
  * teatime cannot be used to check anything.
  */
+/**
+ * The expected charge for the next 24 hours, as a line (1 November).
+ *
+ * So "will it reach the peak" is answered before the evening, not found in
+ * the trace after it: the coming peak is shaded red, the hours kept for it
+ * orange. Empty without a forecast - an older integration, or the packs'
+ * size not yet measured.
+ */
+function socLine(forecast) {
+  const rows = (forecast && forecast.soc) || [];
+  if (rows.length < 2) return "";
+  const t = rows.map((r) => Date.parse(r.start));
+  const t0 = t[0];
+  const span = t[t.length - 1] - t0 || 1;
+  const x = (ms) => Math.max(0, Math.min(100, ((ms - t0) / span) * 100));
+  const band = (from, to, cls) => {
+    const a = x(Date.parse(from));
+    const b = x(Date.parse(to));
+    return b > a ? `<rect class="${cls}" x="${a}" y="0" width="${b - a}" height="100"/>` : "";
+  };
+  const peak = forecast.peak ? band(forecast.peak.start, forecast.peak.end, "peak") : "";
+  const holds = (forecast.hold_hours || []).map((h) => band(h.start, h.end, "hold")).join("");
+  const points = rows
+    .map((r, i) => x(t[i]).toFixed(2) + "," + (100 - Math.max(0, Math.min(100, r.soc))).toFixed(1))
+    .join(" ");
+  return '<div class="soc"><svg viewBox="0 0 100 100" preserveAspectRatio="none">' +
+    peak + holds + `<polyline class="line" points="${points}"/></svg>` +
+    `<div class="axis muted"><span>${hhmm(rows[0].start)} · ${Math.round(rows[0].soc)} %</span>` +
+    `<span>${hhmm(rows[rows.length - 1].start)} · ${Math.round(rows[rows.length - 1].soc)} %</span></div></div>`;
+}
+
+/**
+ * What the forecast means, in a sentence: what is kept for the peak, or when
+ * the packs run dry, or how low they get.
+ */
+function holdSays(forecast) {
+  if (!forecast) return "";
+  const holds = forecast.hold_hours || [];
+  const peak = forecast.peak;
+  if (holds.length && peak) {
+    const runs = [];
+    for (const h of holds) {
+      const last = runs[runs.length - 1];
+      if (last && Date.parse(last.end) === Date.parse(h.start)) last.end = h.end;
+      else runs.push({ start: h.start, end: h.end });
+    }
+    const when = runs.map((r) => hhmm(r.start) + "–" + hhmm(r.end)).join(", ");
+    return "Bewaart lading voor de piek van " + hhmm(peak.start) + " (gem. €" +
+      peak.price.toFixed(2).replace(".", ",") + "): ontlaadt niet " + when +
+      ", het huis neemt dan goedkoper van het net.";
+  }
+  if (forecast.empty_at) {
+    return "Verwacht leeg om " + hhmm(forecast.empty_at) +
+      (forecast.short_kwh ? "; daarna nog " + kwh(forecast.short_kwh) + " van het net." : ".");
+  }
+  return forecast.lowest
+    ? "Raakt de komende 24 uur niet leeg; laagste stand " + Math.round(forecast.lowest.soc) +
+      " % om " + hhmm(forecast.lowest.start) + "."
+    : "";
+}
+
 class BatteryManagementPlanCard extends HTMLElement {
   setConfig(config) {
     if (!config) throw new Error("Invalid configuration");
@@ -2305,6 +2366,12 @@ class BatteryManagementPlanCard extends HTMLElement {
           .tag.later { border:1px solid var(--info-color,#039be5);
                        color:var(--info-color,#039be5); }
           .note { font-size:.86em; margin:4px 0 0; }
+          .soc svg { width:100%; height:64px; display:block; }
+          .soc .line { fill:none; stroke:var(--info-color,#039be5); stroke-width:2;
+                       vector-effect:non-scaling-stroke; }
+          .soc .peak { fill:var(--error-color,#db4437); opacity:.12; }
+          .soc .hold { fill:var(--warning-color,#ffa600); opacity:.25; }
+          .soc .axis { display:flex; justify-content:space-between; font-size:.75em; }
         </style>
         <div class="plc">
           <div class="row"><b id="plnow">—</b><span class="muted" id="plmode"></span></div>
@@ -2322,6 +2389,9 @@ class BatteryManagementPlanCard extends HTMLElement {
           </div>
           <div class="muted note" id="plwhy"></div>
           <div class="muted note" id="plsunshare"></div>
+          <h4>Verwacht accuniveau</h4>
+          <div id="plsoc"></div>
+          <div class="muted note" id="plhold"></div>
         </div>
       </ha-card>`;
     this._built = true;
@@ -2405,6 +2475,10 @@ class BatteryManagementPlanCard extends HTMLElement {
     // tomorrow's and so not in today's list at all.
     // ---- when it sells, if slim handelen is on ----
     el("plsell").innerHTML = planState ? sellNotes(plan, sellRows) : "";
+
+    // ---- how full, the next 24 hours ----
+    el("plsoc").innerHTML = socLine(plan.forecast);
+    el("plhold").textContent = holdSays(plan.forecast);
 
     const ahead = rows.filter((h) => !h.past);
     el("plnone").textContent = !planState

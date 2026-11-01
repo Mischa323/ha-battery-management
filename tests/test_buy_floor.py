@@ -134,3 +134,21 @@ async def test_the_tick_buys_to_the_minimum_and_stops_there(day, monkeypatch):
     system.hass.states.set(system.soc(1), 70.0)
     await co._async_tick(None)
     assert co.active_policy != POLICY_DYNAMIC_CHARGE
+
+
+def test_not_in_a_dip_inside_the_peak(day, monkeypatch):
+    """1 November, 19:38: the packs empty in the peak, the minimum at 25 %, and
+    19:30 at 0.4873 a hair under the quarters around it - so it fell outside
+    the dearest hours, the peak seemed to start at 19:45, and the minimum
+    bought the one quarter before it at peak price. Here: tomorrow's peak is
+    the dearest, tonight's 19:00 sits two cents under 20:00-22:00."""
+    tomorrow = {24 + h: 0.46 for h in (18, 19)}
+    system = day(soc=5.0, floor=25.0, cheap=(), peak=(18, 20, 21), peak_at=0.45,
+                 ordinary=0.38, overrides={19: 0.43, **tomorrow})
+    moment = coordinator_module.dt_util.utcnow().replace(hour=19, minute=38)
+    monkeypatch.setattr(coordinator_module.dt_util, "utcnow", lambda: moment)
+    co = system.coordinator
+
+    slots = co._floor_slots(co._price_forecast(), moment)
+    assert slots
+    assert all(s.price < 0.43 for s in slots)

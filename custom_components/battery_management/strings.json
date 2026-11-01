@@ -325,6 +325,7 @@
           "mode_pause": "Mode: paused",
           "dynamic_charge": "Buying now, prices are low",
           "buy_window": "Cheap hour, so not discharging",
+          "save_for_peak": "Keeping the charge for the coming peak",
           "dynamic_no_prices": "Dynamic, but no prices available",
           "external_plan": "Following an external plan",
           "external_stale": "External plan went quiet, regulating on its own",
