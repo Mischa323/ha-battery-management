@@ -980,7 +980,28 @@ needed four. Each hour of the day keeps its own slow average of meter plus
 packs, with about three days of memory, which survives a restart. The margin
 weighs each dear slot by the draw of its own hour, and never by less than
 last night's standby load. The profile is in the diagnostics as
-`house_draw_profile_w`.
+`house_draw_profile_w`. Since 1 November Saturdays and Sundays keep their own
+profile (`house_draw_profile_weekend_w`), because a weekend evening is not a
+Tuesday evening. Until a weekend hour has been learned, the weekday hour
+stands in for it.
+
+**The round trip is measured.** The 0.88 above, and in selling, is where it
+starts. Each day the integration counts three things:
+
+- what was commanded into the packs, except into a pack already at its
+  charge limit;
+- what came out of their AC outputs;
+- how their charge moved between the start and the end of the day.
+
+The charge left over is valued at one leg of the loss. *(out + left over ×
+0.94) ÷ in* is that day's round trip: the house's own loads, the packs' own
+upkeep and the low-load hours included, not a datasheet figure. A day
+needs at least 5 kWh in and a result between 70 % and 97 %. Once three days
+are measured, the median of the last fourteen replaces the 0.88 everywhere:
+buying, selling, the forecast and the cards. It needs the packs' AC output
+sensors. The diagnostics carry `round_trip`, `round_trip_history` and
+`round_trip_today`, and the Plan sensor's `buy_cost` says how many days the
+figure rests on.
 
 **Two sliders the owner sets, both binding: one fixed, one that looks at
 prices.** They were asked for on 21 October, after a single slider had been a

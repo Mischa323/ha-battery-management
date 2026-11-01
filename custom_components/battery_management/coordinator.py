@@ -202,6 +202,10 @@ from .const import (
     BUY_CEILING_BAND,
     GOAL_DONE_KWH,
     PACK_DRAIN_MIN_KWH,
+    ROUND_TRIP_BOUNDS,
+    ROUND_TRIP_DAYS,
+    ROUND_TRIP_MIN_DAYS,
+    ROUND_TRIP_MIN_KWH,
     SINGLE_PACK_BELOW_W,
     SINGLE_PACK_SWAP_POINTS,
     SOLAR_CAPTURE_DAYS,
@@ -696,6 +700,10 @@ class BatteryCoordinator:
         #: slow average - how much the packs will give up overnight, which is
         #: room the sun has to fill before it can refill anything sold
         self._house_draw_w: float | None = None
+        #: today's flows through the packs, for the measured round trip
+        self._rt_day: dict | None = None
+        #: {"2026-11-01": {"charged_kwh", "delivered_kwh", "stored_kwh", "round_trip"}}
+        self.round_trip_history: dict[str, dict] = {}
         #: meter plus packs this tick - the house less the sun - for the trace
         self._house_now_w: float | None = None
         #: this tick's buying verdict, for the trace (`_dynamic_verdict`)
@@ -716,6 +724,8 @@ class BatteryCoordinator:
         #: the same, learned per local hour of the day {0..23: W} - what the
         #: house draws at dinner time is not what it draws at noon
         self.draw_profile: dict[int, float] = {}
+        #: the same for Saturdays and Sundays, which are other days (1 November)
+        self.draw_profile_weekend: dict[int, float] = {}
         self._house_draw_at: float | None = None
         #: the standby load of the last night measured: {night, w, at,
         #: average_w}, or None before the first. Per night in the history.
@@ -876,6 +886,11 @@ class BatteryCoordinator:
             "single_pack": self.single_pack,
             "pack_drain_history": dict(self.pack_drain_history),
             "draw_profile": {str(h): round(w, 1) for h, w in self.draw_profile.items()},
+            "draw_profile_weekend": {
+                str(h): round(w, 1) for h, w in self.draw_profile_weekend.items()
+            },
+            "rt_day": self._rt_day,
+            "round_trip_history": dict(self.round_trip_history),
             "goal_day": dict(self._goal_day),
             "day_goal_kwh": self.day_goal_kwh,
             "saved_at": time.time(),
@@ -1883,7 +1898,11 @@ class BatteryCoordinator:
             # after the round trip and the wear when those are counted
             "price_margin": self._price_margin,
             "buy_cost": (
-                {"round_trip": ROUND_TRIP, "wear_eur_kwh": round(self.battery_wear(), 4)}
+                {
+                    "round_trip": round(self.round_trip(), 3),
+                    "measured_days": len(self.round_trip_history),
+                    "wear_eur_kwh": round(self.battery_wear(), 4),
+                }
                 if self._buy_cost() is not None else None
             ),
             "buy_ceiling_min": self.buy_ceiling_min,
@@ -2385,7 +2404,7 @@ class BatteryCoordinator:
         while sale_kwh and buy_kwh and filled < room - 1e-9:
             value, sell_left = sale_kwh[0]
             price, buy_left, key = buy_kwh[0]
-            if sell_margin(value, price, wear) < self._trade_margin:
+            if sell_margin(value, price, wear, self.round_trip()) < self._trade_margin:
                 break
             step = min(sell_left, buy_left, room - filled)
             filled += step
@@ -2759,8 +2778,11 @@ class BatteryCoordinator:
         dinner time that needed four. Never below last night's standby load:
         whatever the hour, the house draws at least that.
         """
-        hour = dt_util.as_local(slot.start).hour
-        draw = self.draw_profile.get(hour, self._house_draw_w)
+        local = dt_util.as_local(slot.start)
+        hour = local.hour
+        # Saturday and Sunday by their own hours, once those are learned
+        weekend = self.draw_profile_weekend.get(hour) if local.weekday() >= 5 else None
+        draw = weekend if weekend is not None else self.draw_profile.get(hour, self._house_draw_w)
         if draw is None:
             return None
         floor = (self.base_load or {}).get("w")
@@ -2801,7 +2823,90 @@ class BatteryCoordinator:
         wear = self.battery_wear()
         if wear is None:
             return None
-        return lambda price: price / ROUND_TRIP + wear
+        trip = self.round_trip()
+        return lambda price: price / trip + wear
+
+    def _pack_energy(self) -> float | None:
+        """What the packs hold now, in kWh - None unless every pack is read."""
+        if self._full_charge_minutes <= 0:
+            return None
+        total = 0.0
+        for cfg in self._units:
+            unit = self._unit_snapshot(cfg)
+            if not unit.online or unit.soc is None:
+                return None
+            total += unit.soc / 100.0 * unit.unit_max * self._full_charge_minutes / 60000.0
+        return total
+
+    def _track_round_trip(self, day: str, elapsed: float) -> None:
+        """Count a day's flows through the packs, and close yesterday's.
+
+        In: what was commanded into them - a pack at its charge limit takes
+        nothing, so that is not counted. Out: what their AC outputs report.
+        The day's change of charge settles the difference, through one leg of
+        the default loss (`_close_round_trip`). Measured this way it is the
+        house's own round trip - its loads, the packs' upkeep, the low-load
+        hours the night measurement found at ~80 % - not a datasheet's.
+        """
+        run = self._rt_day
+        if run is not None and run.get("day") != day:
+            self._close_round_trip(run)
+            run = None
+        if run is None:
+            self._rt_day = run = {
+                "day": day, "start_kwh": self._pack_energy(),
+                "charged_wh": 0.0, "delivered_wh": 0.0, "valid": True,
+            }
+        if not run["valid"]:
+            return
+        for cfg in self._units:
+            unit = self._unit_snapshot(cfg)
+            status = self.unit_status[cfg.name]
+            if not unit.online:
+                continue
+            if status.target < 0 and unit.soc < unit.charge_limit - 0.5:
+                run["charged_wh"] += -status.target * elapsed / 3600.0
+            power = self._unit_power(cfg.name)
+            if power is None:
+                # without the packs' own output the day says nothing
+                run["valid"] = False
+                return
+            run["delivered_wh"] += max(power, 0.0) * elapsed / 3600.0
+
+    def _close_round_trip(self, run: dict) -> None:
+        end = self._pack_energy()
+        start = run.get("start_kwh")
+        charged = run["charged_wh"] / 1000.0
+        if not run["valid"] or start is None or end is None or charged < ROUND_TRIP_MIN_KWH:
+            return
+        delivered = run["delivered_wh"] / 1000.0
+        stored = end - start
+        # what was left in the packs is worth what it will deliver: one leg
+        value = (delivered + stored * math.sqrt(ROUND_TRIP)) / charged
+        low, high = ROUND_TRIP_BOUNDS
+        if not low <= value <= high:
+            return
+        self.round_trip_history[run["day"]] = {
+            "charged_kwh": round(charged, 2),
+            "delivered_kwh": round(delivered, 2),
+            "stored_kwh": round(stored, 2),
+            "round_trip": round(value, 3),
+        }
+        for old in sorted(self.round_trip_history)[:-BASE_LOAD_HISTORY]:
+            del self.round_trip_history[old]
+
+    def round_trip(self) -> float:
+        """What a kWh through the packs comes back as: measured, or 0.88.
+
+        The median of the last `ROUND_TRIP_DAYS` measured days, once there
+        are `ROUND_TRIP_MIN_DAYS`. Asked for on 1 November: the 12 % was a
+        datasheet figure, and the nights had measured 78-98 % one way
+        depending on the load.
+        """
+        days = [r["round_trip"] for _, r in sorted(self.round_trip_history.items())][-ROUND_TRIP_DAYS:]
+        if len(days) < ROUND_TRIP_MIN_DAYS:
+            return ROUND_TRIP
+        return statistics.median(days)
 
     def battery_wear(self) -> float | None:
         """EUR per kWh through the packs, from what the owner paid for them."""
@@ -2974,7 +3079,7 @@ class BatteryCoordinator:
                 verdict["why"] = why
                 return verdict
         verdict["margin"] = sell_margin(
-            verdict["value"], verdict["refill"], verdict["wear"]
+            verdict["value"], verdict["refill"], verdict["wear"], self.round_trip()
         )
         if verdict["margin"] < self._trade_margin:
             verdict["why"] = "margin_too_small"
@@ -3027,7 +3132,7 @@ class BatteryCoordinator:
             refill = self._refill_for(slot, ctx)["refill"]
             if refill is None:
                 continue
-            margin = sell_margin(value, refill, wear)
+            margin = sell_margin(value, refill, wear, self.round_trip())
             if margin >= self._trade_margin:
                 margins[key] = round(margin, 4)
         return margins
@@ -3252,7 +3357,7 @@ class BatteryCoordinator:
             for u, c in zip(units, caps)
         )
         power = self._charge_kw()
-        leg = math.sqrt(ROUND_TRIP)
+        leg = math.sqrt(self.round_trip())
         buys, sells = plan or self._planned_flows(slots, now)
         out = []
         for slot in sorted(slots, key=lambda s: s.start):
@@ -4004,6 +4109,14 @@ class BatteryCoordinator:
                     "house_draw_profile_w": {
                         str(h): round(w) for h, w in sorted(self.draw_profile.items())
                     },
+                    "house_draw_profile_weekend_w": {
+                        str(h): round(w) for h, w in sorted(self.draw_profile_weekend.items())
+                    },
+                    # what a kWh through the packs comes back as, and the days
+                    # it was measured on
+                    "round_trip": round(self.round_trip(), 3),
+                    "round_trip_history": dict(sorted(self.round_trip_history.items())),
+                    "round_trip_today": self._rt_day,
                     "house_draw_w": (
                         None if self._house_draw_w is None else round(self._house_draw_w)
                     ),
@@ -4542,6 +4655,7 @@ class BatteryCoordinator:
         if self._goal_day.get("day") != day:
             self._goal_day = {"day": day, "wh": 0.0}
         self._goal_day["wh"] += commanded * elapsed / 3600.0
+        self._track_round_trip(day, elapsed)
 
         charging = 0.0
         seen = False
@@ -4671,13 +4785,14 @@ class BatteryCoordinator:
         self._house_draw_w += weight * (house - self._house_draw_w)
         # And per hour of the day, slowly: each hour is seen for an hour a
         # day, so three hours of observation is three days of memory.
-        hour = dt_util.as_local(dt_util.utcnow()).hour
-        known = self.draw_profile.get(hour)
+        local = dt_util.as_local(dt_util.utcnow())
+        profile = self.draw_profile_weekend if local.weekday() >= 5 else self.draw_profile
+        known = profile.get(local.hour)
         if known is None:
-            self.draw_profile[hour] = house
+            profile[local.hour] = house
         else:
             slow = min(max(now - previous, 0.0) / (3 * 3600.0), 1.0)
-            self.draw_profile[hour] = known + slow * (house - known)
+            profile[local.hour] = known + slow * (house - known)
 
     def _track_base_load(self, grid: float | None, now: float) -> None:
         """Measure tonight's standby load, and report it once the night is over.
@@ -4837,10 +4952,19 @@ class BatteryCoordinator:
             }
         if stored.get("day_goal_kwh") is not None:
             self.day_goal_kwh = max(0.0, float(stored["day_goal_kwh"]))
-        for hour, watts in (stored.get("draw_profile") or {}).items():
-            # a measurement, like the nights: restored whatever its age
-            if watts is not None and str(hour).isdigit() and 0 <= int(hour) < 24:
-                self.draw_profile[int(hour)] = float(watts)
+        for key, profile in (
+            ("draw_profile", self.draw_profile),
+            ("draw_profile_weekend", self.draw_profile_weekend),
+        ):
+            for hour, watts in (stored.get(key) or {}).items():
+                # a measurement, like the nights: restored whatever its age
+                if watts is not None and str(hour).isdigit() and 0 <= int(hour) < 24:
+                    profile[int(hour)] = float(watts)
+        if isinstance(stored.get("rt_day"), dict) and "day" in stored["rt_day"]:
+            self._rt_day = dict(stored["rt_day"])
+        for day, record in (stored.get("round_trip_history") or {}).items():
+            if isinstance(record, dict) and record.get("round_trip") is not None:
+                self.round_trip_history[str(day)] = dict(record)
         for night, record in (stored.get("pack_drain_history") or {}).items():
             if isinstance(record, dict) and record.get("efficiency") is not None:
                 self.pack_drain_history[str(night)] = dict(record)
@@ -5035,6 +5159,7 @@ class BatteryCoordinator:
             "refill_solar_share": solar.get("share"),
             "wear_eur_kwh": cents("wear"),
             "margin_eur_kwh": cents("margin"),
+            "round_trip": round(self.round_trip(), 3),
             "min_margin_eur_kwh": self._trade_margin,
             "why": verdict.get("why"),
             "saldering": self.saldering_active(),

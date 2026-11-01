@@ -86,14 +86,17 @@ def wear_per_kwh(price: float, cycles: float, capacity_kwh: float | None) -> flo
     return price / (cycles * capacity_kwh)
 
 
-def sell_margin(value: float, refill_price: float, wear: float) -> float:
+def sell_margin(
+    value: float, refill_price: float, wear: float, round_trip: float = ROUND_TRIP
+) -> float:
     """Euros made per kilowatt hour sold now and bought back later.
 
-    Refilling one kilowatt hour takes 1 / ROUND_TRIP from the meter, so the
-    refill is dearer than its price. The wear is paid once per kilowatt hour
-    through the packs.
+    Refilling one kilowatt hour takes 1 / round_trip from the meter, so the
+    refill is dearer than its price - the measured round trip where there is
+    one (`BatteryCoordinator.round_trip`). The wear is paid once per kilowatt
+    hour through the packs.
     """
-    return value - refill_price / ROUND_TRIP - wear
+    return value - refill_price / round_trip - wear
 
 
 def grid_cost(grid_w: float, price: float, value: float, hours: float) -> float:

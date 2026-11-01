@@ -2599,13 +2599,16 @@ function tradeSum(attrs) {
   // Where the refill comes from, when the sun has a share in it: "terugkopen"
   // alone would read as a grid purchase at a price no grid hour has.
   const share = attrs.refill_solar_share;
+  // measured since 1 November; an older integration only knows the 12 %
+  const trip = attrs.round_trip || 0.88;
+  const loss = Math.round((1 - trip) * 100) + " % verlies";
   const refill =
     share > 0
-      ? "Terugvullen (" + Math.round(share * 100) + " % zon, incl. 12 % verlies)"
-      : "Terugkopen (incl. 12 % verlies)";
+      ? "Terugvullen (" + Math.round(share * 100) + " % zon, incl. " + loss + ")"
+      : "Terugkopen (incl. " + loss + ")";
   return [
     ["Opbrengst per kWh", euro(v, 3)],
-    [refill, euro(-r / 0.88, 3)],
+    [refill, euro(-r / trip, 3)],
     ["Slijtage accu's", euro(-w, 3)],
     ["Winst per kWh (minimaal " + euro(attrs.min_margin_eur_kwh, 2) + ")", euro(attrs.margin_eur_kwh, 3)],
   ];
