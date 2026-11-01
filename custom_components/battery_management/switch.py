@@ -22,6 +22,7 @@ async def async_setup_entry(
             FastChargeSwitch(coordinator, entry),
             DryRunSwitch(coordinator, entry),
             SinglePackSwitch(coordinator, entry),
+            FeedBigLoadsSwitch(coordinator, entry),
         ]
     )
 
@@ -150,3 +151,35 @@ class SinglePackSwitch(_BaseSwitch):
 
     async def async_turn_off(self, **kwargs) -> None:
         await self.coordinator.async_set_single_pack(False)
+
+
+class FeedBigLoadsSwitch(_BaseSwitch):
+    """Whether the packs cover the big consumers - airco, car, heat pump.
+
+    On, as it always was: the packs follow the meter, whatever draws. Off,
+    the packs give the house what it draws without the consumers configured
+    under Control, and those run on the grid. Their use is kept out of the
+    house's learned profile either way.
+    """
+
+    _attr_translation_key = "feed_big_loads"
+    _attr_icon = "mdi:transmission-tower-import"
+    _attr_entity_category = EntityCategory.CONFIG
+
+    def __init__(self, coordinator, entry) -> None:
+        super().__init__(coordinator, entry)
+        self._attr_unique_id = f"{entry.entry_id}_feed_big_loads"
+
+    @property
+    def is_on(self) -> bool:
+        return self.coordinator.feed_big_loads
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        return {"big_load_w": round(self.coordinator.big_load_w())}
+
+    async def async_turn_on(self, **kwargs) -> None:
+        await self.coordinator.async_set_feed_big_loads(True)
+
+    async def async_turn_off(self, **kwargs) -> None:
+        await self.coordinator.async_set_feed_big_loads(False)

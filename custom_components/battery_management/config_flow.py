@@ -68,6 +68,7 @@ from .const import (
     CONF_TARGET_NUMBER,
     CONF_TRACE,
     CONF_NOTIFY,
+    CONF_BIG_LOADS,
     CONF_NOTIFY_SERVICE,
     DEFAULT_NOTIFY,
     CONF_TRACE_DAYS,
@@ -230,6 +231,14 @@ def _control_schema(defaults: dict) -> vol.Schema:
                 ),
             ): vol.Coerce(float),
             vol.Optional(CONF_INTERVAL, default=defaults.get(CONF_INTERVAL, DEFAULT_INTERVAL)): int,
+            # the airco, a car, a heat pump: kept out of the house's profile, and
+            # on the grid rather than the packs when the switch says so
+            vol.Optional(
+                CONF_BIG_LOADS,
+                description={"suggested_value": defaults.get(CONF_BIG_LOADS)},
+            ): selector.EntitySelector(
+                selector.EntitySelectorConfig(domain="sensor", multiple=True)
+            ),
             vol.Optional(CONF_MIN_OUTPUT, default=defaults.get(CONF_MIN_OUTPUT, DEFAULT_MIN_OUTPUT)): int,
         }
     )
@@ -713,7 +722,7 @@ class BatteryManagementOptionsFlow(OptionsFlow):
         self, user_input: dict | None = None
     ) -> ConfigFlowResult:
         if user_input is not None:
-            return self._save(user_input)
+            return self._save(user_input, CONF_BIG_LOADS)
         defaults = {**self._entry.data, **self._entry.options}
         return self.async_show_form(
             step_id="control", data_schema=_control_schema(defaults)

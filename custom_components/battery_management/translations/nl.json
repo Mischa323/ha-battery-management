@@ -109,7 +109,8 @@
           "kp": "Versterking (Kp)",
           "kp_return": "Terugregelfactor",
           "interval": "Regelinterval (seconden)",
-          "min_output": "Minimaal vermogen (W)"
+          "min_output": "Minimaal vermogen (W)",
+          "big_loads": "Grote verbruikers (vermogenssensoren)"
         },
         "data_description": {
           "bias": "Streef naar zoveel afname in plaats van precies nul, zodat een kleine doorschieter alsnog niets teruglevert.",
@@ -117,7 +118,8 @@
           "kp": "Hoe hard hij per tick corrigeert: nieuw setpoint = oud + Kp x afwijking. Hoger reageert sneller en schiet eerder door. 0,25 bij 15 s is hier stabiel gebleken.",
           "kp_return": "Hoe snel de opdracht weer wordt afgebouwd. Bewust hoger dan de factor hierboven: teruggaan kan niet gaan slingeren, en het is precies wat voorkomt dat de accus terugleveren aan een verbruik dat al weg is. Zet hem gelijk aan de factor hierboven voor het oude, symmetrische gedrag.",
           "interval": "Seconden tussen beslissingen. Ga niet onder 15: de Modbus-sensoren lopen 10-30 s achter, en bij 10 s liepen beide packs op en ontlaadden ze in een teruglevering.",
-          "min_output": "Het kleinste vermogen dat een accu ooit krijgt. Het wordt nooit gesplitst in twee aandelen hieronder, nooit lager uitgedeeld, en er wordt nooit minder gevraagd - zo'n kleine waarde regelt een accu niet nauwkeurig en zijn eigen firmware zegt dat ook. Kleine vraag gaat naar één accu; onder driekwart van deze waarde stoppen ze helemaal, zodat een setpoint vlak bij de grens ze niet elke tick aan en uit zet. Het setpoint blijft ondertussen integreren, dus een aanhoudende kleine afname klimt er vanzelf overheen. Meet hem voor jouw hardware."
+          "min_output": "Het kleinste vermogen dat een accu ooit krijgt. Het wordt nooit gesplitst in twee aandelen hieronder, nooit lager uitgedeeld, en er wordt nooit minder gevraagd - zo'n kleine waarde regelt een accu niet nauwkeurig en zijn eigen firmware zegt dat ook. Kleine vraag gaat naar één accu; onder driekwart van deze waarde stoppen ze helemaal, zodat een setpoint vlak bij de grens ze niet elke tick aan en uit zet. Het setpoint blijft ondertussen integreren, dus een aanhoudende kleine afname klimt er vanzelf overheen. Meet hem voor jouw hardware.",
+          "big_loads": "Hun vermogenssensoren, in W: een airco, een laadpaal, een warmtepomp. Hun verbruik telt niet mee in het geleerde huisprofiel en de sluipverbruik-meting. De schakelaar \"Accu's voeden grote verbruikers\" bepaalt of de accu's ze dekken."
         }
       },
       "battery": {
@@ -342,7 +344,8 @@
           "phase_detect": "Meten welke accu op welke fase zit",
           "recovering": "Eerst terugladen voordat hij weer ontlaadt",
           "grid_stale": "Netmeter meldt niets meer",
-          "no_units": "Geen packs bereikbaar"
+          "no_units": "Geen packs bereikbaar",
+          "big_load": "Grote verbruiker loopt via het net"
         }
       },
       "solar_remaining": {
@@ -445,6 +448,9 @@
       },
       "fast_charge": {
         "name": "Snelladen (noodgeval)"
+      },
+      "feed_big_loads": {
+        "name": "Accu's voeden grote verbruikers"
       }
     },
     "number": {

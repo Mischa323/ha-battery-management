@@ -96,6 +96,7 @@ from .const import (
     CONF_TARGET_NUMBER,
     CONF_TRACE,
     CONF_NOTIFY,
+    CONF_BIG_LOADS,
     CONF_NOTIFY_SERVICE,
     CONF_TRACE_DAYS,
     CONF_FAST_CHARGE_HOLD,
@@ -237,6 +238,7 @@ from .const import (
     POLICY_DISABLED,
     POLICY_BUY_WINDOW,
     POLICY_SAVE_FOR_PEAK,
+    POLICY_BIG_LOAD,
     POLICY_CHEAPER_LATER,
     POLICY_TRADE_FILL,
     POLICY_TRADE_SELL,
@@ -600,6 +602,10 @@ class BatteryCoordinator:
         self._command_ack: dict[str, float] = {}
         # short and stable for the lifetime of this coordinator
         self._run_id: str = f"{int(time.time()) % 100000:05d}"
+        # the big consumers (1 November): out of the house's profile, and off
+        # the packs when the owner says so
+        self._big_loads: list[str] = list(data.get(CONF_BIG_LOADS) or [])
+        self.feed_big_loads: bool = True
         # telling the owner when something is off (1 November)
         self._notify_on = bool(data.get(CONF_NOTIFY, DEFAULT_NOTIFY))
         self._notify_service = str(data.get(CONF_NOTIFY_SERVICE) or "").strip()
@@ -902,6 +908,7 @@ class BatteryCoordinator:
             "single_pack": self.single_pack,
             "pack_drain_history": dict(self.pack_drain_history),
             "draw_profile": {str(h): round(w, 1) for h, w in self.draw_profile.items()},
+            "feed_big_loads": self.feed_big_loads,
             "draw_profile_weekend": {
                 str(h): round(w, 1) for h, w in self.draw_profile_weekend.items()
             },
@@ -4796,6 +4803,9 @@ class BatteryCoordinator:
             return
         house = grid + packs
         self._house_now_w = house
+        # what the house itself draws: the airco or the car is not the house,
+        # and an evening of either would teach every evening to expect it
+        house -= self.big_load_w()
         if house <= 0:
             return
         if self._house_draw_w is None or previous is None:
@@ -4847,7 +4857,8 @@ class BatteryCoordinator:
         packs = self._other_controller_power() if grid is not None else None
         if packs is None:
             return
-        house = grid + packs
+        # the standby measurement is of the house, not of an airco left on
+        house = grid + packs - self.big_load_w()
         tonight = self._night
         tonight["seconds"] += elapsed
         tonight["wh"] += house * elapsed / 3600.0
@@ -4963,6 +4974,8 @@ class BatteryCoordinator:
         # a choice, like the trade mode: restored whether or not it is on
         if stored.get("single_pack") is not None:
             self.single_pack = bool(stored["single_pack"])
+        if stored.get("feed_big_loads") is not None:
+            self.feed_big_loads = bool(stored["feed_big_loads"])
         # "floor_day" is what #31 called it, when the goal was the floor
         counted = stored.get("goal_day") or stored.get("floor_day")
         if isinstance(counted, dict) and "day" in counted:
@@ -5006,6 +5019,28 @@ class BatteryCoordinator:
             "nights_both": sum(1 for n in nights if n["mode"] == "both"),
             "history": dict(sorted(self.pack_drain_history.items())),
         }
+
+    def big_load_w(self) -> float:
+        """What the big consumers draw now, in W - 0 for any that cannot be read.
+
+        A sensor in kW is taken as such: a car charger's integration often
+        publishes 7.4, and 7.4 W of airco would be a curious thing to plan for.
+        """
+        total = 0.0
+        for entity_id in self._big_loads:
+            value = self._read_float(entity_id)
+            if value is None or value <= 0:
+                continue
+            state = self.hass.states.get(entity_id)
+            unit = str((getattr(state, "attributes", None) or {}).get("unit_of_measurement") or "")
+            total += value * 1000.0 if unit.lower() == "kw" else value
+        return total
+
+    async def async_set_feed_big_loads(self, value: bool) -> None:
+        """Whether the packs cover the big consumers, or the grid does."""
+        self.feed_big_loads = bool(value)
+        self._save_state()
+        self._notify()
 
     async def async_set_single_pack(self, value: bool) -> None:
         self.single_pack = bool(value)
@@ -5395,6 +5430,7 @@ class BatteryCoordinator:
         return {
             "house_w": None if self._house_now_w is None else round(self._house_now_w),
             "house_draw_w": None if self._house_draw_w is None else round(self._house_draw_w),
+            "big_load_w": round(self.big_load_w()) if self._big_loads else None,
             "buy_now": verdict.get("buy"),
             "buy_why": verdict.get("why"),
             "buy_slot": verdict.get("slot"),
@@ -5481,6 +5517,7 @@ class BatteryCoordinator:
                     "goal_done": "koopkwartier, dagdoel al binnen: ontlaadt niet",
                 }.get(why, "koopkwartier: ontlaadt niet"),
                 POLICY_SAVE_FOR_PEAK: self._saving_for(),
+                POLICY_BIG_LOAD: f"grote verbruiker ({round(self.big_load_w())} W) via het net",
                 POLICY_SOC_RESERVE: "reserve bereikt",
                 POLICY_PACKS_EMPTY: "accu's leeg",
                 POLICY_RECOVERING: "na leeg: ontlaadt pas weer na terugladen",
@@ -6421,6 +6458,26 @@ class BatteryCoordinator:
             elif self.mode == MODE_PAUSE:
                 upper = lower = 0.0
 
+            # A big consumer on the grid, when the owner says so (1 November):
+            # the packs give the house what it draws without it, no more. A
+            # car charging at 11 kW would otherwise empty them in an hour at
+            # whatever the hour costs.
+            big_load_policy = None
+            big = self.big_load_w() if not self.feed_big_loads else 0.0
+            packs_now = None
+            if big > 0:
+                packs_now = self._other_controller_power()
+                if packs_now is None:
+                    # no reading: what they were told, which they mostly do
+                    packs_now = sum(
+                        self.unit_status[name].target for name in online
+                    )
+            if packs_now is not None:
+                cap = max(grid + packs_now - big, 0.0)
+                if cap < upper:
+                    upper = cap
+                    big_load_policy = POLICY_BIG_LOAD
+
             # Buying from the grid is the one thing that cannot be expressed as
             # a bound: there is no surplus to regulate against, so this forces a
             # value. Everything else stays a bound on grid-zero.
@@ -6519,6 +6576,7 @@ class BatteryCoordinator:
                 dynamic_policy
                 or trade_policy
                 or buy_window_policy
+                or big_load_policy
                 or external_policy
                 or phase_policy
                 or self._classify(error, sp, online, maxdis, maxchg)
