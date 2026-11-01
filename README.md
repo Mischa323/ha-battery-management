@@ -801,7 +801,7 @@ acts in Dynamic tariff — see [Selling to the grid](#selling-to-the-grid).
 | Number | What it does |
 | --- | --- |
 | **SoC reserve** | Charge held back, in every mode. Raises each pack's *own* discharge floor rather than clamping the pair, so the split tapers towards it and a fuller pack carries the load alone. 0 = off. |
-| **Minimum charge** (*Minimaal laden*) | A level. Below it, the packs are bought up to it in today's cheapest hours, whether or not the margin says it pays. It is also the floor under the computed charge ceiling. 0 = off. |
+| **Minimum charge** (*Minimaal laden*) | A level. Below it, the packs are bought up to it in the cheapest hours before the coming peak, whether or not the margin says it pays. It is also the floor under the computed charge ceiling. 0 = off. |
 | **Day goal** (*Dagdoel*) | An amount in kWh to put into the packs each day, sun included. It is bought only in the day's cheapest hours, and only when tomorrow is not cheaper. Whatever does not fit is let go. 0 = off. |
 | **Buy up to: at most** | Cap on the computed charge ceiling. Use it when the forecast under-reads, which would otherwise let it buy more than needed. |
 | **Sell down to: at least** | How far selling to the grid may empty a pack. The reserve still applies underneath; the higher of the two wins. |
@@ -984,12 +984,17 @@ last night's standby load. The profile is in the diagnostics as
 prices.** They were asked for on 21 October, after a single slider had been a
 level first and then an amount.
 
-*Minimum charge* is a level. Below it, the cheapest hours before the end of
-the day are bought until the packs reach it, at full power and whether or not
-the margin says it pays. Above it the margin decides. A slot bought for the
-minimum alone stops at the minimum. It aims at the end of the day, not the
-coming peak, as the owner put it on 24 September: *"die ondergrens moet voor
-het eind van de dag zijn, niet in de ochtend"*.
+*Minimum charge* is a level. Below it, the cheapest hours before the coming
+peak are bought until the packs reach it, at full power and whether or not the
+margin says it pays. Above it the margin decides. A slot bought for the
+minimum alone stops at the minimum. A peak already under way does not count,
+so the minimum never buys at that peak's price. Once a peak has passed, the
+next one is tomorrow's.
+
+Until 1 November it aimed at midnight instead, as asked on 24 September. On
+the evenings of 30 and 31 October that had it buying 20 kWh at EUR 0.42-0.43
+after the peak, for the house to draw back out overnight, while on 1 November
+the packs met the EUR 0.49 peak empty.
 
 *Day goal* is an amount. At 14 kWh, 14 kWh go into the packs each day, sun
 included. That is counted by the charging sensors where they are configured,

@@ -41,13 +41,18 @@ const hourEnd = new Date(hourStart.getTime() + 3600e3);
 const utc = [{ start: hourStart.toISOString(), end: hourEnd.toISOString(), price: 0.2, role: "normal" }];
 check("current slot found (Z)", priceBars(utc).bars[0].current === true, priceBars(utc).bars[0]);
 
+// the wall clock with its own offset: +02:00 in summer, +01:00 in winter - a
+// fixed +02:00 put "now" an hour off from the last Sunday of October on
 const offsetIso = (d) => {
   const pad = (n) => String(n).padStart(2, "0");
+  const off = -d.getTimezoneOffset();
+  const sign = off >= 0 ? "+" : "-";
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T` +
-    `${pad(d.getHours())}:${pad(d.getMinutes())}:00+02:00`;
+    `${pad(d.getHours())}:${pad(d.getMinutes())}:00` +
+    `${sign}${pad(Math.floor(Math.abs(off) / 60))}:${pad(Math.abs(off) % 60)}`;
 };
 const local = [{ start: offsetIso(hourStart), end: offsetIso(hourEnd), price: 0.2, role: "normal" }];
-check("current slot found (+02:00)", priceBars(local).bars[0].current === true, priceBars(local).bars[0]);
+check("current slot found (local offset)", priceBars(local).bars[0].current === true, priceBars(local).bars[0]);
 check("summary finds it too", priceSummary(local).current !== undefined, priceSummary(local));
 
 console.log(fails ? `\n${fails} FAILED` : "\nclock checks pass");
