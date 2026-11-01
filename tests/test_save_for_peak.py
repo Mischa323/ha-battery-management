@@ -217,15 +217,27 @@ def test_a_purchase_before_the_peak_is_in_the_forecast(house):
 
 
 def test_the_peak_is_one_stretch(house):
-    """18:00-20:00 and 21:00-23:00 dear, 20:00 a little less: the peak the hold
-    is for ends at 20:00."""
-    day = dict(cheap=(), ordinary=0.42, peak=(18, 19, 21, 22), peak_at=0.45,
-               overrides={20: 0.44})
+    """18:00-20:00 and 21:00-23:00 dear, 20:00 well below them: the peak the
+    hold is for ends at 20:00."""
+    day = dict(cheap=(), ordinary=0.38, peak=(18, 19, 21, 22), peak_at=0.45,
+               overrides={20: 0.39})
     system = house(**day)
     co = system.coordinator
     run = co._peak_run(co._price_forecast(), coordinator_module.dt_util.utcnow())
 
     assert [s.start.hour for s in run] == [18, 19]
+
+
+def test_a_dip_inside_the_peak_is_still_the_peak(house):
+    """1 November: 19:30 at 0.4873 between quarters at 0.489. Within the price
+    margin of the peak, it is the peak."""
+    day = dict(cheap=(), ordinary=0.38, peak=(18, 19, 21, 22), peak_at=0.45,
+               overrides={20: 0.44})
+    system = house(**day)
+    co = system.coordinator
+    run = co._peak_run(co._price_forecast(), coordinator_module.dt_util.utcnow())
+
+    assert [s.start.hour for s in run] == [18, 19, 20, 21, 22]
 
 
 def test_no_more_than_the_peak_is_short_of(house):

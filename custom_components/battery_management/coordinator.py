@@ -3133,31 +3133,45 @@ class BatteryCoordinator:
             needed, until=end,
         )
 
+    def _dear_line(self, dear) -> float:
+        """From what price a slot counts as part of a peak.
+
+        The dearest hours are a count, and inside a peak the price moves
+        quarter by quarter: on 1 November 19:30 at 0.4873 fell just outside
+        them while 19:45 at 0.4892 was in, so the peak seemed to start at
+        19:45 and the minimum bought the one quarter before it, at peak price.
+        Anything within the price margin of the cheapest dear slot is peak.
+        """
+        return min(s.price for s in dear) - self._price_margin
+
     def _next_peak_start(self, slots, now):
         """When the next dear stretch begins - not the one we are in.
 
         `_buy_before` is enough for the margin, which never buys a dear slot
         anyway. The minimum asks no margin, so inside the peak "before the next
         dear slot" would be the slot it is in, at the peak's price. The
-        stretch under way is skipped; None when no other is in sight.
+        stretch under way - every slot from now on at peak level, see
+        `_dear_line` - is skipped; None when no other is in sight.
         """
         if self._expensive_hours <= 0:
             return None
         window = slots_in_window(slots, now, PRICE_WINDOW_HOURS)
-        dear = sorted(pick_dearest(window, self._expensive_hours), key=lambda s: s.start)
+        dear = pick_dearest(window, self._expensive_hours)
+        if not dear:
+            return None
+        keys = {_slot_key(s) for s in dear}
+        line = self._dear_line(dear)
         current = slot_at(slots, now)
-        edge = (
-            current.end
-            if current is not None and _slot_key(current) in {_slot_key(s) for s in dear}
-            else None
-        )
-        for slot in dear:
+        edge = current.end if current is not None and current.price >= line else None
+        for slot in sorted(window, key=lambda s: s.start):
             if slot.start <= now:
                 continue
-            if edge is not None and slot.start == edge:
+            if edge is not None and slot.start == edge and slot.price >= line:
                 edge = slot.end     # still the stretch we are in
                 continue
-            return slot.start
+            edge = None
+            if _slot_key(slot) in keys:
+                return slot.start
         return None
 
     def _forecast_block(self, slots, now) -> dict | None:
@@ -3194,12 +3208,12 @@ class BatteryCoordinator:
         if start is None:
             return []
         window = slots_in_window(slots, now, PRICE_WINDOW_HOURS)
-        dear = {_slot_key(s) for s in pick_dearest(window, self._expensive_hours)}
+        line = self._dear_line(pick_dearest(window, self._expensive_hours))
         run, edge = [], start
         for slot in sorted(slots, key=lambda s: s.start):
             if slot.start < start:
                 continue
-            if slot.start != edge or _slot_key(slot) not in dear:
+            if slot.start != edge or slot.price < line:
                 break
             run.append(slot)
             edge = slot.end

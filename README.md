@@ -990,7 +990,9 @@ level first and then an amount.
 peak are bought until the packs reach it, at full power and whether or not the
 margin says it pays. Above it the margin decides. A slot bought for the
 minimum alone stops at the minimum. A peak already under way does not count,
-so the minimum never buys at that peak's price. Once a peak has passed, the
+so the minimum never buys at that peak's price. A slot within the price margin
+of the peak's cheapest dear slot counts as peak too. On 1 November, 19:30 at
+EUR 0.487 fell just outside the dearest hours, and the minimum bought it. Once a peak has passed, the
 next one is tomorrow's.
 
 Until 1 November it aimed at midnight instead, as asked on 24 September. On
