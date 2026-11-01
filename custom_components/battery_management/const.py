@@ -649,6 +649,14 @@ SINGLE_PACK_SWAP_POINTS = 5
 #: what each night's pack efficiency rests on. SoC comes in whole points, so a
 #: night that drained less than this is mostly rounding.
 PACK_DRAIN_MIN_KWH = 1.0
+#: The round trip measured per day: no less than this through the packs, or
+#: one percent of SoC either way is too much of the answer
+ROUND_TRIP_MIN_KWH = 5.0
+#: days the measured round trip is taken over, and how many it needs first
+ROUND_TRIP_DAYS = 14
+ROUND_TRIP_MIN_DAYS = 3
+#: what a measured day may say before it is a sensor fault, not a pack
+ROUND_TRIP_BOUNDS = (0.70, 0.97)
 
 PERIOD_HISTORY = {
     PERIOD_DAY: 62,
