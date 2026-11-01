@@ -226,6 +226,7 @@ from .const import (
     POLICY_MIN_OUTPUT,
     POLICY_DISABLED,
     POLICY_BUY_WINDOW,
+    POLICY_SAVE_FOR_PEAK,
     POLICY_CHEAPER_LATER,
     POLICY_TRADE_FILL,
     POLICY_TRADE_SELL,
@@ -318,6 +319,18 @@ def _ranges(hours) -> str:
         + f"{start:%H:%M}-{end:%H:%M}"
         for start, end in out
     )
+
+def _local_time(start: str) -> str:
+    """"19:00", or "02-11 19:00" when it is not today - for the trace."""
+    moment = dt_util.as_local(datetime.fromisoformat(start))
+    today = dt_util.as_local(dt_util.utcnow()).date()
+    return (f"{moment:%d-%m} " if moment.date() != today else "") + f"{moment:%H:%M}"
+
+
+def _slot_key_of(start: str) -> str:
+    """`_slot_key` for a slot start already written out, as the plan does."""
+    return datetime.fromisoformat(start).astimezone(timezone.utc).isoformat()
+
 
 def _slot_key(slot) -> str:
     """A stable identity for a price slot: its start, normalised to UTC.
@@ -1696,6 +1709,8 @@ class BatteryCoordinator:
             "buy": _ranges(h for h in ahead if h.get("buy")),
             "later": _ranges(h for h in ahead if h.get("expected")),
             "sell": _ranges(h for h in ahead if h.get("sell")),
+            "hold": _ranges(h for h in ahead if h.get("hold")),
+            "empty_at": (plan.get("forecast") or {}).get("empty_at"),
         }
         return plan
 
@@ -1817,9 +1832,16 @@ class BatteryCoordinator:
             if slot.end > day_start
         ]
 
+        forecast = self._forecast_block(slots, now) if slots else None
+        held_at = set((forecast or {}).pop("_holds", ()))
+        for hour in hours:
+            hour["hold"] = not hour["past"] and _slot_key_of(hour["start"]) in held_at
+
         return {
             "has_prices": slots is not None,
             "hours": hours,
+            # how full the packs are expected to be, and what is kept for the peak
+            "forecast": forecast,
             "cheap_hours": describe(cheapest),
             "buy_hours": describe(buying),
             "waiting": None if held is None else {
@@ -3137,6 +3159,165 @@ class BatteryCoordinator:
                 continue
             return slot.start
         return None
+
+    def _forecast_block(self, slots, now) -> dict | None:
+        """The forecast as the plan publishes it: the line, the low point, the
+        peak it is for, and the slots kept for that peak."""
+        holds = self.peak_holds(slots, now)
+        forecast = self.soc_forecast(slots, now, holds)
+        if forecast is None:
+            return None
+        rows = forecast["slots"]
+        peak = self._peak_run(slots, now)
+        empty = next((r for r in rows if r["short"] > GOAL_DONE_KWH), None)
+        low = min(rows, key=lambda r: r["soc"]) if rows else None
+        return {
+            "soc": [{"start": r["slot"].start.isoformat(), "soc": r["soc"]} for r in rows],
+            "empty_at": empty["slot"].start.isoformat() if empty else None,
+            "short_kwh": round(sum(r["short"] for r in rows), 2),
+            "lowest": {"start": low["slot"].start.isoformat(), "soc": low["soc"]} if low else None,
+            "peak": {
+                "start": peak[0].start.isoformat(),
+                "end": peak[-1].end.isoformat(),
+                "price": round(sum(s.price for s in peak) / len(peak), 4),
+            } if peak else None,
+            "hold_hours": [
+                {"start": s.start.isoformat(), "end": s.end.isoformat(), "price": round(s.price, 4)}
+                for s in sorted(slots, key=lambda s: s.start) if _slot_key(s) in holds
+            ],
+            "_holds": holds,
+        }
+
+    def _peak_run(self, slots, now) -> list:
+        """The slots of the coming peak: the dear stretch `_next_peak_start` finds."""
+        start = self._next_peak_start(slots, now)
+        if start is None:
+            return []
+        window = slots_in_window(slots, now, PRICE_WINDOW_HOURS)
+        dear = {_slot_key(s) for s in pick_dearest(window, self._expensive_hours)}
+        run, edge = [], start
+        for slot in sorted(slots, key=lambda s: s.start):
+            if slot.start < start:
+                continue
+            if slot.start != edge or _slot_key(slot) not in dear:
+                break
+            run.append(slot)
+            edge = slot.end
+        return run
+
+    def soc_forecast(self, slots, now, holds=frozenset(), *, plan=None) -> dict | None:
+        """How full the packs are expected to be, slot by slot, for 24 hours.
+
+        A walk forward from the charge they hold now: the house's draw for
+        each hour of the day (`_draw_in`, which is already the house less the
+        sun it usually has) comes out of the packs, the plan's buying slots
+        put the packs' full power in, its selling slots take it out, and a
+        slot in `holds` gives the house nothing - the grid covers it. Losses
+        are half the round trip each way. What the packs cannot give once
+        they are at their floor is `short`: the house buys it at that slot's
+        price.
+
+        Deliberately the plan's own picture and not a promise: the sun beyond
+        the usual is left out, so on a bright day the packs end fuller than
+        this says. None while the packs' size is unknown.
+        """
+        if not slots or self._full_charge_minutes <= 0:
+            return None
+        units = [self._unit_snapshot(cfg) for cfg in self._units]
+        units = [u for u in units if u.online]
+        if not units:
+            return None
+        caps = [u.unit_max * self._full_charge_minutes / 60000.0 for u in units]
+        total = sum(caps)
+        floor = sum(c * self._discharge_floor(u) / 100.0 for u, c in zip(units, caps))
+        energy = sum(
+            c * max(u.soc - self._discharge_floor(u), 0.0) / 100.0 for u, c in zip(units, caps)
+        )
+        top = sum(
+            c * max(min(u.charge_limit, self.buy_ceiling_max) - self._discharge_floor(u), 0.0) / 100.0
+            for u, c in zip(units, caps)
+        )
+        power = self._charge_kw()
+        leg = math.sqrt(ROUND_TRIP)
+        buys, sells = plan or self._planned_flows(slots, now)
+        out = []
+        for slot in sorted(slots, key=lambda s: s.start):
+            if slot.end <= now or slot.start >= now + timedelta(hours=24):
+                continue
+            hours = (slot.end - max(slot.start, now)).total_seconds() / 3600.0
+            key = _slot_key(slot)
+            draw = (self._draw_in(slot) or 0.0) / 1000.0 * hours
+            given = short = 0.0
+            if key in buys:
+                energy = min(max(top, energy), energy + power * hours * leg)
+            elif key in sells:
+                energy = max(energy - power * hours / leg, 0.0)
+            elif key in holds:
+                pass
+            else:
+                given = min(draw, energy * leg)
+                short = draw - given
+                energy -= given / leg
+            out.append({
+                "slot": slot,
+                "soc": round((floor + energy) / total * 100.0, 1),
+                "given": given,
+                "short": short,
+            })
+        return {"slots": out, "capacity": total}
+
+    def _planned_flows(self, slots, now) -> tuple[set, set]:
+        """The plan's buying and selling slots, as keys, for the forecast."""
+        buys = {_slot_key(s) for s in self._buy_slots(slots, now)}
+        sells = set(self.planned_sell_slots(slots, buys)) if self.trade_mode == TRADE_ON else set()
+        return buys, sells
+
+    def peak_holds(self, slots, now) -> frozenset:
+        """Slots before the coming peak in which the packs give the house nothing.
+
+        Asked for on 1 November: the packs carried the house through the
+        afternoon at EUR 0.40 and met the EUR 0.49 peak empty. When the
+        forecast runs the packs dry inside the coming peak, the cheapest
+        slots before it - each at least the price margin below the peak's
+        average, so keeping the charge pays - are left to the grid until what
+        they keep covers what the peak would go short of. The charge is not
+        lost: it goes out in the peak instead. Surplus sun still goes in.
+        """
+        if self.mode != MODE_DYNAMIC or not slots:
+            return frozenset()
+        peak = self._peak_run(slots, now)
+        if not peak:
+            return frozenset()
+        flows = self._planned_flows(slots, now)
+        forecast = self.soc_forecast(slots, now, plan=flows)
+        if forecast is None:
+            return frozenset()
+        keys = {_slot_key(s) for s in peak}
+        short = sum(r["short"] for r in forecast["slots"] if _slot_key(r["slot"]) in keys)
+        if short < GOAL_DONE_KWH:
+            return frozenset()
+        price = sum(s.price for s in peak) / len(peak)
+        start = peak[0].start
+        candidates = sorted(
+            (
+                r["slot"] for r in forecast["slots"]
+                if r["slot"].start < start and r["slot"].price <= price - self._price_margin
+            ),
+            key=lambda s: (s.price, s.start),
+        )
+        # One at a time, cheapest first, the forecast walked again each time:
+        # what a slot keeps flows on through the slots after it, and a dearer
+        # one still before the peak would spend it there instead.
+        holds: set = set()
+        for slot in candidates:
+            if short < GOAL_DONE_KWH:
+                break
+            # even one the packs would be empty in by then: kept earlier, the
+            # charge would otherwise be spent there on its way to the peak
+            holds.add(_slot_key(slot))
+            forecast = self.soc_forecast(slots, now, frozenset(holds), plan=flows)
+            short = sum(r["short"] for r in forecast["slots"] if _slot_key(r["slot"]) in keys)
+        return frozenset(holds)
 
     def _buy_slots(self, slots, now) -> list:
         """The cheap hours the packs still have room for - the plan's buying."""
@@ -5071,7 +5252,18 @@ class BatteryCoordinator:
             "plan_buy": plan.get("buy"),
             "plan_buy_later": plan.get("later"),
             "plan_sell": plan.get("sell"),
+            # kept for the coming peak, and when the forecast runs dry
+            "plan_hold": plan.get("hold"),
+            "forecast_empty_at": _local_time(plan["empty_at"]) if plan.get("empty_at") else None,
         }
+
+    def _saving_for(self) -> str:
+        """"bewaart voor de piek van 17:00", for the trace's sentence."""
+        slots = self._price_forecast()
+        peak = self._peak_run(slots, dt_util.utcnow()) if slots else []
+        if not peak:
+            return "bewaart voor de piek"
+        return f"bewaart voor de piek van {dt_util.as_local(peak[0].start):%H:%M}"
 
     def _doing(self, commanded: float, verdict: dict | None) -> str:
         """One line, in the owner's language, of what this tick did and why.
@@ -5129,6 +5321,7 @@ class BatteryCoordinator:
                     "no_ceiling": "koopkwartier, nu niet kopen: ontlaadt niet",
                     "goal_done": "koopkwartier, dagdoel al binnen: ontlaadt niet",
                 }.get(why, "koopkwartier: ontlaadt niet"),
+                POLICY_SAVE_FOR_PEAK: self._saving_for(),
                 POLICY_SOC_RESERVE: "reserve bereikt",
                 POLICY_PACKS_EMPTY: "accu's leeg",
                 POLICY_RECOVERING: "na leeg: ontlaadt pas weer na terugladen",
@@ -5980,6 +6173,17 @@ class BatteryCoordinator:
                     # regulating underneath it and surplus still goes in.
                     upper = min(upper, 0.0)
                     buy_window_policy = POLICY_BUY_WINDOW
+                else:
+                    # Keeping the charge for the coming peak (1 November): a
+                    # bound like the buying hour's, so surplus still goes in
+                    # and the house takes the grid at this slot's lower price.
+                    forecast = self._price_forecast()
+                    current = slot_at(forecast, dt_util.utcnow()) if forecast else None
+                    if current is not None and _slot_key(current) in self.peak_holds(
+                        forecast, dt_util.utcnow()
+                    ):
+                        upper = min(upper, 0.0)
+                        buy_window_policy = POLICY_SAVE_FOR_PEAK
 
             # Selling is the mirror image of buying: a forced value, not a
             # bound, because there is no deficit to regulate against. Never in

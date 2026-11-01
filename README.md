@@ -144,6 +144,7 @@ What each row carries:
 | `buy_cost_eur_kwh`, `price_margin_eur_kwh` | what a kWh bought now costs once it is back out of the packs (the round trip plus wear), and the margin it must leave |
 | `minimum_pct` | *Minimum charge* |
 | `goal_kwh`, `goal_done_kwh`, `goal_left_kwh` | the *Day goal*, how much of it is in, and how much is still to buy |
+| `plan_hold`, `forecast_empty_at` | the slots kept for the coming peak, and when the forecast has the packs run dry |
 | `plan_buy`, `plan_buy_later`, `plan_sell` | the plan's slots ahead as they stood at this tick, in local time, e.g. `12:45-13:00 13:15-14:30`. `plan_buy_later` lists the slots the plan expects to buy in later. A slot on another day starts with its date |
 | `solar_produced_today_kwh` | the configured solar sensor's cumulative reading for the day, if one is set — diff two rows to get the rate; the only way to confirm "was that solar" rather than guessing from `grid_w` |
 
@@ -862,7 +863,8 @@ capped — that would be throwing sun away.
 | Held back by the main fuse | One leg of your supply is close to its fuse; see the Fuse headroom sensor |
 | Measuring which pack is on which phase | A detection run is in progress; the packs hold at 0 for about a minute |
 | Buying now, prices are low | A cheap hour, packs low, little sun coming |
-| Holding the charge for dearer hours | Refusing to discharge now so the kWh go to the peak |
+| Cheap hour, so not discharging | An hour bought in: not selling what it came to buy |
+| Keeping the charge for the coming peak | Cheaper than the coming peak, and without it the packs would run dry in the peak: the house takes the grid now |
 | Holding back, a cheaper day is coming | Tomorrow buys cheaper, so tonight takes only what the floor asks for |
 | Holding back, cheaper later today | A cheaper window follows the coming peak; buying stops at the floor until then |
 | Not buying, the sun still fits | What is coming free would not fit if it bought now |
@@ -1015,6 +1017,28 @@ Neither is ever more than the room below "Buy up to: at most". The plan card
 says what each one is doing. The Plan sensor carries `floor` (`to`, `hours`)
 and `goal` (`kwh`, `done_kwh`, `remaining_kwh`, `hours`). Set both to 0 to
 leave everything to the margin.
+
+**Keeping the charge for the peak.** Grid-zero gives the house whatever it
+asks, whenever it asks. On 1 November that meant the packs carried the house
+through the afternoon at EUR 0.40 and met the EUR 0.49 peak empty. Now the
+plan walks the packs' charge forward, slot by slot, for 24 hours, using the
+same parts as the buying: the house's draw for each hour of the day, the
+purchases and sales the plan has in it, and half the round trip lost each
+way.
+
+When that walk runs the packs dry inside the coming peak, the cheapest slots
+before it are left to the grid until what they keep covers the peak. Only
+slots at least the price margin below the peak's average qualify. In such a
+slot the packs give the house nothing, and surplus sun still goes in. The
+charge is not lost: it goes out in the peak instead. The status is *Keeping
+the charge for the coming peak*.
+
+The walk leaves out sun beyond the usual, so on a bright day the packs end up
+fuller than it says. The plan card draws the walk as a line under *Verwacht
+accuniveau*, with the peak shaded red and the kept hours orange. Underneath it
+says what is kept, or when the packs run dry, or how low they get. The Plan
+sensor carries it as `forecast` (`soc`, `empty_at`, `short_kwh`, `lowest`,
+`peak`, `hold_hours`), and each hour has `hold`.
 
 The margin is measured against the dear hours of the next 24 hours. Once
 tomorrow's prices are published, a dear morning tomorrow lets today's cheap
