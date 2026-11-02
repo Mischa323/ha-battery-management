@@ -1047,7 +1047,12 @@ level first and then an amount.
 *Minimum charge* is a level. Below it, the cheapest hours before the coming
 peak are bought until the packs reach it, at full power and whether or not the
 margin says it pays. Above it the margin decides. A slot bought for the
-minimum alone stops at the minimum. A peak already under way does not count,
+minimum alone stops at the minimum. Before the peak the minimum is also
+kept: at or under it, the packs do not discharge, and the house takes those
+quarters from the grid. The status is *Houdt het minimum vast voor de piek*.
+On 2 November, without this, the house drew the packs under 25 % again and
+again in the run-up to the morning peak. The minimum bought them back each
+time: 8.2 kWh at up to EUR 0.47. A peak already under way does not count,
 so the minimum never buys at that peak's price. A slot within the price margin
 of the peak's cheapest dear slot counts as peak too. On 1 November, 19:30 at
 EUR 0.487 fell just outside the dearest hours, and the minimum bought it. Once a peak has passed, the
@@ -1323,8 +1328,13 @@ question for tomorrow's prices to answer: with a much cheaper day coming there
 is no sense filling to the brim tonight.
 
 So when the cheap hours beyond local midnight are cheaper than the rest of
-today by more than the margin, the ceiling drops to **Minimum charge** — take
-what tonight needs, top up on the cheap day. That comparison is made across the
+today by more than the margin, the ceiling drops to what tonight needs, and
+the rest is topped up on the cheap day. *What tonight needs* is the coming
+peak's draw, from the learned profile, through one leg of the measured loss,
+on top of the packs' floor. It is never less than **Minimum charge**. Until
+2 November it was the minimum alone. With the minimum at 25 % and a one-cent
+margin, that bought the packs to 25 % in the day's cheapest hours, and the
+forecast had them dry at 21:00. That comparison is made across the
 day boundary rather than across the peak: everything beyond a peak is dearer
 than the cheap hour before it on every ordinary day, so that comparison fires
 constantly and says nothing. It also stands down when either side is too thin a

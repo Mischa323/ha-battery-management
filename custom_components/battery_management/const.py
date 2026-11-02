@@ -314,6 +314,7 @@ POLICY_DYNAMIC_CHARGE = "dynamic_charge"      # buying now because it is cheap
 POLICY_BUY_WINDOW = "buy_window"              # a cheap hour: not selling what we came to buy
 POLICY_SAVE_FOR_PEAK = "save_for_peak"        # cheaper than the coming peak: keeping the charge for it
 POLICY_BIG_LOAD = "big_load"                  # a big consumer runs on the grid, not on the packs
+POLICY_MINIMUM_HOLD = "minimum_hold"          # at the minimum before the peak: kept, not bought again
 POLICY_SOLAR_HEADROOM = "solar_headroom"      # not buying, the sun still fits
 POLICY_CHEAPER_TOMORROW = "cheaper_tomorrow"  # holding back, a cheaper day is coming
 POLICY_CHEAPER_LATER = "cheaper_later"        # holding back, a cheaper window today
@@ -341,6 +342,7 @@ POLICIES = [
     POLICY_BUY_WINDOW,
     POLICY_SAVE_FOR_PEAK,
     POLICY_BIG_LOAD,
+    POLICY_MINIMUM_HOLD,
     POLICY_SOLAR_HEADROOM,
     POLICY_CHEAPER_TOMORROW,
     POLICY_CHEAPER_LATER,

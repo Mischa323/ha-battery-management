@@ -345,7 +345,8 @@
           "recovering": "Charging back up before it discharges again",
           "grid_stale": "Grid meter has stopped reporting",
           "no_units": "No packs reachable",
-          "big_load": "A big consumer runs on the grid"
+          "big_load": "A big consumer runs on the grid",
+          "minimum_hold": "At the minimum, kept for the peak"
         }
       },
       "solar_remaining": {

@@ -239,6 +239,7 @@ from .const import (
     POLICY_BUY_WINDOW,
     POLICY_SAVE_FOR_PEAK,
     POLICY_BIG_LOAD,
+    POLICY_MINIMUM_HOLD,
     POLICY_CHEAPER_LATER,
     POLICY_TRADE_FILL,
     POLICY_TRADE_SELL,
@@ -2206,7 +2207,7 @@ class BatteryCoordinator:
             # *reason*: a floor sitting above the sun's ceiling has taken
             # nothing off, and naming a cheaper tomorrow there would send
             # someone looking at prices for a ceiling the roof is holding down.
-            lowered = min(ceiling, self.buy_ceiling_min)
+            lowered = min(ceiling, self._tonight_level())
             if lowered < ceiling:
                 reason = POLICY_CHEAPER_TOMORROW
             ceiling = lowered
@@ -2268,11 +2269,42 @@ class BatteryCoordinator:
             # peak", which is the fault #7 was opened for, and two tests in
             # `test_plan.py` go red the moment this guard is dropped.
             if self.buy_ceiling_min > 0:
-                held = min(ceiling, self.buy_ceiling_min)
+                held = min(ceiling, self._tonight_level())
                 if held < ceiling:
                     reason = POLICY_CHEAPER_LATER
                 ceiling = held
         return self._with_trade_fill(self._bound_ceiling(ceiling), reason)
+
+    def _tonight_level(self) -> float:
+        """How full to buy when a cheaper day is coming: what tonight needs.
+
+        Was the minimum alone. On 2 November, with the minimum at 25 % and
+        tomorrow a cent cheaper, the packs were bought to 25 % in the day's
+        cheapest hours and the forecast had them dry at 21:00 - "het zijn nu
+        de goedkope uren, dan zou hij toch moeten inkopen zodat hij voor
+        vanavond klaar staat". Now: what the coming peak draws, through one
+        leg of the loss, on top of the packs' floor - and never less than the
+        minimum. The cheaper day still gets the rest.
+        """
+        level = self.buy_ceiling_min
+        slots = self._price_forecast()
+        capacity = self.usable_capacity_kwh()
+        if not slots or not capacity:
+            return level
+        now = dt_util.utcnow()
+        peak = self._peak_run(slots, now)
+        if not peak:
+            return level
+        need = sum(
+            (self._draw_in(s) or 0.0) / 1000.0
+            * (s.end - max(s.start, now)).total_seconds() / 3600.0
+            for s in peak
+        )
+        units = [self._unit_snapshot(cfg) for cfg in self._units]
+        floors = [self._discharge_floor(u) for u in units if u.online]
+        floor = sum(floors) / len(floors) if floors else 0.0
+        wanted = floor + need / math.sqrt(self.round_trip()) / capacity * 100.0
+        return max(level, min(wanted, 100.0))
 
     def _with_trade_fill(self, ceiling: float, reason: str | None) -> tuple[float, str | None]:
         """Raise the ceiling to what tonight's sale makes worth buying, if more.
@@ -3272,6 +3304,39 @@ class BatteryCoordinator:
         """
         return min(s.price for s in dear) - self._price_margin
 
+    def _in_peak(self, slots, now) -> bool:
+        """Is the slot we are in at peak level (see `_dear_line`)?"""
+        current = slot_at(slots, now)
+        if current is None or self._expensive_hours <= 0:
+            return False
+        dear = pick_dearest(slots_in_window(slots, now, PRICE_WINDOW_HOURS), self._expensive_hours)
+        return bool(dear) and current.price >= self._dear_line(dear)
+
+    def _minimum_holds(self, online: dict) -> bool:
+        """At or under "minimaal laden" before the peak: keep it, do not spend it.
+
+        2 November: at 25 % before the morning peak, the house drew the packs
+        under it, the minimum bought them back, the house drew them under it
+        again - 8.2 kWh bought between 03:45 and 07:45 at up to EUR 0.47,
+        2.1 kWh of it straight through the packs to the house at a loss.
+        Before the peak the minimum is kept instead: the house takes those
+        quarters from the grid, which is cheaper than through the packs. In
+        the peak it goes out, which is what it is for.
+        """
+        if self.buy_ceiling_min <= 0 or self._full_charge_minutes <= 0:
+            return False
+        slots = self._price_forecast()
+        if not slots:
+            return False
+        now = dt_util.utcnow()
+        if self._in_peak(slots, now) or self._next_peak_start(slots, now) is None:
+            return False
+        held = [(s.soc, s.unit_max) for s in online.values() if s.soc is not None]
+        if not held:
+            return False
+        level = sum(soc * size for soc, size in held) / sum(size for _, size in held)
+        return level <= self.buy_ceiling_min
+
     def _next_peak_start(self, slots, now):
         """When the next dear stretch begins - not the one we are in.
 
@@ -3444,6 +3509,8 @@ class BatteryCoordinator:
             (
                 r["slot"] for r in forecast["slots"]
                 if r["slot"].start < start and r["slot"].price <= price - self._price_margin
+                # a slot it buys in gives the house nothing from the packs anyway
+                and _slot_key(r["slot"]) not in flows[0]
             ),
             key=lambda s: (s.price, s.start),
         )
@@ -5517,6 +5584,7 @@ class BatteryCoordinator:
                     "goal_done": "koopkwartier, dagdoel al binnen: ontlaadt niet",
                 }.get(why, "koopkwartier: ontlaadt niet"),
                 POLICY_SAVE_FOR_PEAK: self._saving_for(),
+                POLICY_MINIMUM_HOLD: f"houdt het minimum van {self.buy_ceiling_min:.0f} % vast voor de piek",
                 POLICY_BIG_LOAD: f"grote verbruiker ({round(self.big_load_w())} W) via het net",
                 POLICY_SOC_RESERVE: "reserve bereikt",
                 POLICY_PACKS_EMPTY: "accu's leeg",
@@ -6512,6 +6580,9 @@ class BatteryCoordinator:
                     ):
                         upper = min(upper, 0.0)
                         buy_window_policy = POLICY_SAVE_FOR_PEAK
+                    elif self._minimum_holds(online):
+                        upper = min(upper, 0.0)
+                        buy_window_policy = POLICY_MINIMUM_HOLD
 
             # Selling is the mirror image of buying: a forced value, not a
             # bound, because there is no deficit to regulate against. Never in
