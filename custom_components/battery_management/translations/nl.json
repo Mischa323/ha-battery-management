@@ -345,7 +345,8 @@
           "recovering": "Eerst terugladen voordat hij weer ontlaadt",
           "grid_stale": "Netmeter meldt niets meer",
           "no_units": "Geen packs bereikbaar",
-          "big_load": "Grote verbruiker loopt via het net"
+          "big_load": "Grote verbruiker loopt via het net",
+          "minimum_hold": "Houdt het minimum vast voor de piek"
         }
       },
       "solar_remaining": {
