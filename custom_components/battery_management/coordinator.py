@@ -3392,6 +3392,16 @@ class BatteryCoordinator:
                 {"start": s.start.isoformat(), "end": s.end.isoformat(), "price": round(s.price, 4)}
                 for s in sorted(slots, key=lambda s: s.start) if _slot_key(s) in holds
             ],
+            # the packs' own SoC sensors and sizes, so a card can draw what
+            # already happened beside what is expected (3 November)
+            "soc_entities": [
+                {
+                    "entity": cfg.soc_sensor,
+                    "kwh": round(snap.unit_max * self._full_charge_minutes / 60000.0, 2),
+                }
+                for cfg in self._units
+                if (snap := self._unit_snapshot(cfg)).online and cfg.soc_sensor
+            ],
             "_holds": holds,
         }
 

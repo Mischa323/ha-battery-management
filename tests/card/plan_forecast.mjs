@@ -24,6 +24,8 @@ const check = (name, cond, got) => {
   else console.log("ok  ", name);
 };
 
+// "now" is where the example data starts, whatever day the tests run on
+Date.now = () => Date.parse("2026-11-01T00:05:00+01:00");
 new Function(src)();
 const Plan = _defined.get("battery-management-plan-card");
 const nodes = new Map();
@@ -57,7 +59,7 @@ const base = { mode: "dynamic", has_prices: true, hours: [], expected: {} };
       { start: at(16), end: at(17), price: 0.41 },
     ],
   } });
-  check("a line is drawn", out.soc.includes("<polyline") && out.soc.includes("<svg"), out.soc);
+  check("a line is drawn", out.soc.includes('<polyline class="line"') && out.soc.includes("<svg"), out.soc);
   check("the peak is shaded, and the kept hours", out.soc.includes('class="peak"') &&
     (out.soc.match(/class="hold"/g) || []).length === 3, out.soc);
   check("the sentence names the peak, its price and the kept hours, merged",

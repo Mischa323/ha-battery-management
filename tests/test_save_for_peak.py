@@ -176,6 +176,9 @@ def test_the_plan_carries_the_line_the_low_point_and_the_kept_hours(house):
     assert len(block["hold_hours"]) == 5
     assert [h for h in plan["hours"] if h["hold"]]
     assert "_holds" not in block
+    # what a card needs to fetch the history beside it
+    assert [e["kwh"] for e in block["soc_entities"]] == [pytest.approx(14.0)] * 2
+    assert all(e["entity"].startswith("sensor.") for e in block["soc_entities"])
 
 
 def test_with_the_hold_the_forecast_is_held_too(house):

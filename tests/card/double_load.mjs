@@ -32,6 +32,7 @@ const EXPECTED = [
   "battery-management-card",
   "battery-management-prices-card",
   "battery-management-plan-card",
+  "battery-management-forecast-card",
   "battery-management-trade-card",
   "battery-management-savings-card",
 ];
