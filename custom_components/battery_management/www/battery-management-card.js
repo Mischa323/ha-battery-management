@@ -2240,37 +2240,6 @@ function waitingSays(waiting, now = Date.now()) {
  * teatime cannot be used to check anything.
  */
 /**
- * The expected charge for the next 24 hours, as a line (1 November).
- *
- * So "will it reach the peak" is answered before the evening, not found in
- * the trace after it: the coming peak is shaded red, the hours kept for it
- * orange. Empty without a forecast - an older integration, or the packs'
- * size not yet measured.
- */
-function socLine(forecast) {
-  const rows = (forecast && forecast.soc) || [];
-  if (rows.length < 2) return "";
-  const t = rows.map((r) => Date.parse(r.start));
-  const t0 = t[0];
-  const span = t[t.length - 1] - t0 || 1;
-  const x = (ms) => Math.max(0, Math.min(100, ((ms - t0) / span) * 100));
-  const band = (from, to, cls) => {
-    const a = x(Date.parse(from));
-    const b = x(Date.parse(to));
-    return b > a ? `<rect class="${cls}" x="${a}" y="0" width="${b - a}" height="100"/>` : "";
-  };
-  const peak = forecast.peak ? band(forecast.peak.start, forecast.peak.end, "peak") : "";
-  const holds = (forecast.hold_hours || []).map((h) => band(h.start, h.end, "hold")).join("");
-  const points = rows
-    .map((r, i) => x(t[i]).toFixed(2) + "," + (100 - Math.max(0, Math.min(100, r.soc))).toFixed(1))
-    .join(" ");
-  return '<div class="soc"><svg viewBox="0 0 100 100" preserveAspectRatio="none">' +
-    peak + holds + `<polyline class="line" points="${points}"/></svg>` +
-    `<div class="axis muted"><span>${hhmm(rows[0].start)} · ${Math.round(rows[0].soc)} %</span>` +
-    `<span>${hhmm(rows[rows.length - 1].start)} · ${Math.round(rows[rows.length - 1].soc)} %</span></div></div>`;
-}
-
-/**
  * What the forecast means, in a sentence: what is kept for the peak, or when
  * the packs run dry, or how low they get.
  */
@@ -2366,12 +2335,7 @@ class BatteryManagementPlanCard extends HTMLElement {
           .tag.later { border:1px solid var(--info-color,#039be5);
                        color:var(--info-color,#039be5); }
           .note { font-size:.86em; margin:4px 0 0; }
-          .soc svg { width:100%; height:64px; display:block; }
-          .soc .line { fill:none; stroke:var(--info-color,#039be5); stroke-width:2;
-                       vector-effect:non-scaling-stroke; }
-          .soc .peak { fill:var(--error-color,#db4437); opacity:.12; }
-          .soc .hold { fill:var(--warning-color,#ffa600); opacity:.25; }
-          .soc .axis { display:flex; justify-content:space-between; font-size:.75em; }
+          ${SOC_STYLE}
         </style>
         <div class="plc">
           <div class="row"><b id="plnow">—</b><span class="muted" id="plmode"></span></div>
@@ -2477,7 +2441,7 @@ class BatteryManagementPlanCard extends HTMLElement {
     el("plsell").innerHTML = planState ? sellNotes(plan, sellRows) : "";
 
     // ---- how full, the next 24 hours ----
-    el("plsoc").innerHTML = socLine(plan.forecast);
+    mountSocChart(this, el("plsoc"), plan, 90);
     el("plhold").textContent = holdSays(plan.forecast);
 
     const ahead = rows.filter((h) => !h.past);
@@ -2502,6 +2466,456 @@ defineCard("battery-management-plan-card", BatteryManagementPlanCard, {
   name: "Battery Management Plan",
   description:
     "What it intends today: how much from the sun, how much from the grid, and when.",
+  preview: false,
+});
+
+/**
+ * The charge as Home Assistant's own graphs show a sensor (3 November): what
+ * already happened from the recorder, solid, and what is expected, dashed,
+ * with "now" between them. Zoom with the buttons, the wheel or two fingers,
+ * drag to look back or ahead, and hover or tap for the figure at that time.
+ *
+ * Asked for after the forecast got a card of its own: "kan je de plankaart
+ * ook meer interactief maken met inzoomen en history zien zoals
+ * homeassistant werkt". The pure parts are functions so they can be tested
+ * without a browser; `wireSocChart` only connects them to the pointer.
+ */
+const SOC_SPANS = [["6u", 6], ["12u", 12], ["24u", 24], ["48u", 48]];
+const SOC_STEP = 15 * 60e3;
+const SOC_MIN_SPAN = 60 * 60e3;
+
+/** The packs' combined charge from the recorder, every quarter, weighted by size. */
+function socHistory(answer, entities, from, to) {
+  const series = (entities || []).map((e) => ({
+    kwh: Number(e.kwh) || 1,
+    pts: ((answer && answer[e.entity]) || [])
+      .map((r) => ({
+        t: r.lu != null ? Number(r.lu) * 1000 : Date.parse(r.last_updated || r.last_changed),
+        v: parseFloat(r.s !== undefined ? r.s : r.state),
+      }))
+      .filter((p) => !isNaN(p.t) && !isNaN(p.v))
+      .sort((p, q) => p.t - q.t),
+  }));
+  if (!series.length || series.some((s) => !s.pts.length)) return [];
+  const out = [];
+  const idx = series.map(() => -1);
+  for (let t = from; t <= to; t += SOC_STEP) {
+    let sum = 0;
+    let size = 0;
+    let known = true;
+    series.forEach((s, n) => {
+      while (idx[n] + 1 < s.pts.length && s.pts[idx[n] + 1].t <= t) idx[n] += 1;
+      if (idx[n] < 0) known = false;
+      else {
+        sum += s.pts[idx[n]].v * s.kwh;
+        size += s.kwh;
+      }
+    });
+    if (known && size) out.push({ t, soc: sum / size });
+  }
+  return out;
+}
+
+/** The forecast as points in time. */
+function socAhead(forecast) {
+  return ((forecast && forecast.soc) || [])
+    .map((r) => ({ t: Date.parse(r.start), soc: Number(r.soc) }))
+    .filter((p) => !isNaN(p.t) && !isNaN(p.soc));
+}
+
+/** How far it can be zoomed out or panned: the history and the forecast together. */
+function socBounds(past, ahead, now) {
+  const all = past.concat(ahead);
+  const lo = all.length ? Math.min(now, ...all.map((p) => p.t)) : now - 12 * 3600e3;
+  const hi = all.length ? Math.max(now, ...all.map((p) => p.t)) : now + 24 * 3600e3;
+  return { lo, hi };
+}
+
+/** A span of `hours` around now: a quarter behind, the rest ahead - as HA opens a graph. */
+function socSpan(hours, now, bounds) {
+  const span = hours * 3600e3;
+  return socClamp({ from: now - span / 4, to: now + (span * 3) / 4 }, bounds);
+}
+
+function socClamp(view, bounds) {
+  let span = Math.max(view.to - view.from, SOC_MIN_SPAN);
+  span = Math.min(span, bounds.hi - bounds.lo || span);
+  let from = Math.max(bounds.lo, Math.min(view.from, bounds.hi - span));
+  return { from, to: from + span };
+}
+
+/** Zoom by `factor` (<1 in) about `anchor`, 0..1 across the view. */
+function socZoom(view, factor, anchor, bounds) {
+  const span = view.to - view.from;
+  const next = Math.max(span * factor, SOC_MIN_SPAN);
+  const at = view.from + span * anchor;
+  return socClamp({ from: at - next * anchor, to: at - next * anchor + next }, bounds);
+}
+
+/** Move by `fraction` of the view; positive is later. */
+function socPan(view, fraction, bounds) {
+  const shift = (view.to - view.from) * fraction;
+  return socClamp({ from: view.from + shift, to: view.to + shift }, bounds);
+}
+
+/** The charge at `t`, from whichever line covers it, and whether it is expected. */
+function socAt(past, ahead, t, now) {
+  const line = t <= now && past.length ? past : ahead;
+  if (!line.length) return null;
+  let best = line[0];
+  for (const p of line) if (Math.abs(p.t - t) < Math.abs(best.t - t)) best = p;
+  return { t: best.t, soc: best.soc, expected: line === ahead && best.t >= now - SOC_STEP };
+}
+
+function socSvg(view, past, ahead, extras, now) {
+  const span = view.to - view.from || 1;
+  const x = (t) => ((t - view.from) / span) * 100;
+  const y = (soc) => 100 - Math.max(0, Math.min(100, soc));
+  const inView = (p) => p.t >= view.from - SOC_STEP * 4 && p.t <= view.to + SOC_STEP * 4;
+  const pts = (line) => line.filter(inView).map((p) => x(p.t).toFixed(2) + "," + y(p.soc).toFixed(1)).join(" ");
+  const band = (from, to, cls) => {
+    const a = Math.max(0, x(Date.parse(from)));
+    const b = Math.min(100, x(Date.parse(to)));
+    return b > a ? `<rect class="${cls}" x="${a}" y="0" width="${b - a}" height="100"/>` : "";
+  };
+  const grid = [25, 50, 75].map((v) => `<line class="grid" x1="0" x2="100" y1="${y(v)}" y2="${y(v)}"/>`).join("");
+  const peak = extras.peak ? band(extras.peak.start, extras.peak.end, "peak") : "";
+  const holds = (extras.holds || []).map((h) => band(h.start, h.end, "hold")).join("");
+  const floor = extras.minimum > 0
+    ? `<line class="minimum" x1="0" x2="100" y1="${y(extras.minimum)}" y2="${y(extras.minimum)}"/>` : "";
+  const nowX = x(now);
+  const nowLine = nowX >= 0 && nowX <= 100 ? `<line class="nowline" x1="${nowX}" x2="${nowX}" y1="0" y2="100"/>` : "";
+  const past_ = pts(past);
+  const ahead_ = pts(ahead);
+  const empty = extras.empty && x(Date.parse(extras.empty)) >= 0 && x(Date.parse(extras.empty)) <= 100
+    ? `<circle class="empty" cx="${x(Date.parse(extras.empty)).toFixed(2)}" cy="98" r="2.2"/>` : "";
+  return '<svg viewBox="0 0 100 100" preserveAspectRatio="none">' + grid + peak + holds + floor + nowLine +
+    (past_ ? `<polyline class="past" points="${past_}"/>` : "") +
+    (ahead_ ? `<polyline class="line" points="${ahead_}"/>` : "") + empty + "</svg>";
+}
+
+/** Labels along the bottom: every hour zoomed in, every three or six out. */
+function socTicks(view) {
+  const span = view.to - view.from;
+  const every = span <= 8 * 3600e3 ? 1 : span <= 26 * 3600e3 ? 3 : 6;
+  const out = [];
+  const first = new Date(view.from);
+  first.setMinutes(0, 0, 0);
+  for (let t = first.getTime(); t <= view.to; t += 3600e3) {
+    const d = new Date(t);
+    if (t <= view.from || d.getHours() % every) continue;
+    const left = ((t - view.from) / span) * 100;
+    if (left > 97) continue;
+    out.push(`<span style="left:${left.toFixed(2)}%">${hhmm(d.toISOString())}</span>`);
+  }
+  return out.join("");
+}
+
+const SOC_STYLE = `
+  .fc .bar { display:flex; gap:4px; justify-content:flex-end; margin:6px 0 0; }
+  .fc .bar button { font:inherit; font-size:.75em; padding:2px 8px; border-radius:10px;
+    border:1px solid var(--divider-color,#ccc); background:none; color:var(--primary-text-color);
+    cursor:pointer; }
+  .fc .bar button.on { background:var(--primary-color,#03a9f4); color:#fff; border-color:transparent; }
+  .fc .plot { position:relative; margin:6px 0 0 34px; touch-action:pan-y; cursor:grab; user-select:none; }
+  .fc svg { width:100%; height:100%; display:block; overflow:visible; }
+  .fc .grid { stroke:var(--divider-color,#ddd); stroke-width:1; vector-effect:non-scaling-stroke; }
+  .fc .minimum { stroke:var(--secondary-text-color,#727272); stroke-width:1; stroke-dasharray:4 3; vector-effect:non-scaling-stroke; }
+  .fc .nowline { stroke:var(--primary-text-color,#212121); stroke-width:1; opacity:.5; vector-effect:non-scaling-stroke; }
+  .fc .past { fill:none; stroke:var(--info-color,#039be5); stroke-width:2.5; vector-effect:non-scaling-stroke; }
+  .fc .line { fill:none; stroke:var(--info-color,#039be5); stroke-width:2.5; stroke-dasharray:6 4; vector-effect:non-scaling-stroke; }
+  .fc .peak { fill:var(--error-color,#db4437); opacity:.12; }
+  .fc .hold { fill:var(--warning-color,#ffa600); opacity:.28; }
+  .fc .empty { fill:var(--error-color,#db4437); }
+  .fc .yaxis { position:absolute; left:-34px; top:0; bottom:0; width:30px; font-size:.72em; pointer-events:none; }
+  .fc .yaxis span { position:absolute; right:0; transform:translateY(-50%); }
+  .fc .xaxis { position:relative; height:1.4em; margin-left:34px; font-size:.72em; }
+  .fc .xaxis span { position:absolute; transform:translateX(-50%); top:2px; }
+  .fc .tip { position:absolute; top:0; transform:translateX(-50%); pointer-events:none; white-space:nowrap;
+    background:var(--card-background-color,#fff); border:1px solid var(--divider-color,#ccc);
+    border-radius:6px; padding:2px 6px; font-size:.75em; display:none; }
+  .fc .cursor { position:absolute; top:0; bottom:0; width:1px; background:var(--primary-text-color,#212121);
+    opacity:.35; pointer-events:none; display:none; }
+`;
+
+/** The chart's frame: span buttons, the plot, the axes. Filled by `drawSocChart`. */
+function socFrame(height, chart) {
+  const on = (h) => Math.abs(chart.view.to - chart.view.from - h * 3600e3) < 60e3 ? ' class="on"' : "";
+  return '<div class="fc"><div class="bar">' +
+    SOC_SPANS.map(([label, h]) => `<button data-hours="${h}"${on(h)}>${label}</button>`).join("") +
+    '<button data-now="1">nu</button></div>' +
+    `<div class="plot" style="height:${height}px">` +
+    '<div class="yaxis muted"><span style="top:25%">75 %</span><span style="top:50%">50 %</span>' +
+    '<span style="top:75%">25 %</span></div>' +
+    `<div class="svg">${socSvg(chart.view, chart.past, chart.ahead, chart.extras, chart.now)}</div>` +
+    '<div class="cursor"></div><div class="tip"></div></div>' +
+    `<div class="xaxis muted">${socTicks(chart.view)}</div></div>`;
+}
+
+/** Draw the current view into a frame made by `socFrame`. */
+function drawSocChart(root, chart) {
+  if (!root || typeof root.querySelector !== "function") return;
+  const svg = root.querySelector(".svg");
+  const xaxis = root.querySelector(".xaxis");
+  if (svg) svg.innerHTML = socSvg(chart.view, chart.past, chart.ahead, chart.extras, chart.now);
+  if (xaxis) xaxis.innerHTML = socTicks(chart.view);
+  for (const b of root.querySelectorAll ? root.querySelectorAll("button[data-hours]") : []) {
+    const hours = Number(b.dataset ? b.dataset.hours : b.getAttribute("data-hours"));
+    const on = Math.abs(chart.view.to - chart.view.from - hours * 3600e3) < 60e3;
+    if (b.classList) b.classList.toggle("on", on);
+  }
+}
+
+/** Buttons, wheel, drag, two fingers and the hover read-out. Once per frame. */
+function wireSocChart(root, chart) {
+  if (!root || typeof root.querySelector !== "function") return;
+  const plot = root.querySelector(".plot");
+  if (!plot || typeof plot.addEventListener !== "function" || plot._wired) return;
+  plot._wired = true;
+  const tip = root.querySelector(".tip");
+  const cursor = root.querySelector(".cursor");
+  const redraw = () => drawSocChart(root, chart);
+  const fraction = (clientX) => {
+    const box = plot.getBoundingClientRect();
+    return Math.min(1, Math.max(0, (clientX - box.left) / (box.width || 1)));
+  };
+  const show = (clientX) => {
+    const f = fraction(clientX);
+    const t = chart.view.from + (chart.view.to - chart.view.from) * f;
+    const p = socAt(chart.past, chart.ahead, t, chart.now);
+    if (!p || !tip) return;
+    tip.style.display = cursor.style.display = "block";
+    tip.style.left = cursor.style.left = (f * 100).toFixed(2) + "%";
+    // kept inside the card at either edge
+    tip.style.transform = f > 0.75 ? "translateX(-100%)" : f < 0.25 ? "translateX(0)" : "translateX(-50%)";
+    tip.textContent = hhmm(new Date(p.t).toISOString()) + " · " + Math.round(p.soc) + " %" +
+      (p.expected ? " (verwacht)" : "");
+  };
+  const hide = () => {
+    if (tip) tip.style.display = "none";
+    if (cursor) cursor.style.display = "none";
+  };
+  for (const b of root.querySelectorAll("button")) {
+    b.addEventListener("click", () => {
+      chart.touched = true;
+      hide();     // the read-out was for the old view
+      const hours = b.getAttribute("data-hours");
+      chart.view = hours
+        ? socSpan(Number(hours), chart.now, chart.bounds)
+        : socSpan((chart.view.to - chart.view.from) / 3600e3, chart.now, chart.bounds);
+      redraw();
+    });
+  }
+  plot.addEventListener("wheel", (e) => {
+    e.preventDefault();
+    chart.touched = true;
+    chart.view = socZoom(chart.view, e.deltaY > 0 ? 1.25 : 0.8, fraction(e.clientX), chart.bounds);
+    redraw();
+    show(e.clientX);
+  }, { passive: false });
+  const pointers = new Map();
+  let last = null;
+  let pinch = null;
+  plot.addEventListener("pointerdown", (e) => {
+    chart.touched = true;
+    pointers.set(e.pointerId, e.clientX);
+    if (plot.setPointerCapture) plot.setPointerCapture(e.pointerId);
+    last = e.clientX;
+    if (pointers.size === 2) {
+      const [a, b] = [...pointers.values()];
+      pinch = { gap: Math.abs(a - b) || 1, view: chart.view, anchor: fraction((a + b) / 2) };
+    }
+    show(e.clientX);
+  });
+  plot.addEventListener("pointermove", (e) => {
+    if (!pointers.has(e.pointerId)) {
+      if (e.pointerType === "mouse") show(e.clientX);
+      return;
+    }
+    pointers.set(e.pointerId, e.clientX);
+    if (pointers.size === 2 && pinch) {
+      const [a, b] = [...pointers.values()];
+      chart.view = socZoom(pinch.view, pinch.gap / (Math.abs(a - b) || 1), pinch.anchor, chart.bounds);
+      redraw();
+      return;
+    }
+    const box = plot.getBoundingClientRect();
+    const moved = (last - e.clientX) / (box.width || 1);
+    last = e.clientX;
+    if (Math.abs(moved) > 0) {
+      chart.view = socPan(chart.view, moved, chart.bounds);
+      redraw();
+    }
+    show(e.clientX);
+  });
+  const up = (e) => {
+    pointers.delete(e.pointerId);
+    if (pointers.size < 2) pinch = null;
+    if (e.pointerType === "mouse" && e.type === "pointerleave") hide();
+  };
+  plot.addEventListener("pointerup", up);
+  plot.addEventListener("pointercancel", up);
+  plot.addEventListener("pointerleave", (e) => { up(e); hide(); });
+}
+
+/**
+ * What a card keeps for its chart, and the recorder fetch behind it. The
+ * history is asked for once every five minutes, not on every state change.
+ */
+function socChartState(card, plan, now = Date.now()) {
+  const forecast = plan.forecast || {};
+  const chart = card._socChart || (card._socChart = { past: [], fetched: 0 });
+  chart.now = now;
+  chart.ahead = socAhead(forecast);
+  chart.extras = {
+    peak: forecast.peak, holds: forecast.hold_hours || [],
+    minimum: Number(plan.buy_ceiling_min) || 0, empty: forecast.empty_at,
+  };
+  chart.bounds = socBounds(chart.past, chart.ahead, now);
+  chart.view = chart.view ? socClamp(chart.view, chart.bounds) : socSpan(24, now, chart.bounds);
+  const entities = forecast.soc_entities || [];
+  const hass = card._hass;
+  if (entities.length && hass && typeof hass.callWS === "function" &&
+      now - chart.fetched > 5 * 60e3 && !chart.fetching) {
+    chart.fetching = true;
+    const from = now - 48 * 3600e3;
+    hass.callWS({
+      type: "history/history_during_period",
+      start_time: new Date(from).toISOString(),
+      end_time: new Date(now).toISOString(),
+      entity_ids: entities.map((e) => e.entity),
+      minimal_response: true,
+      no_attributes: true,
+    }).then((answer) => {
+      chart.past = socHistory(answer, entities, from, now);
+      chart.bounds = socBounds(chart.past, chart.ahead, chart.now);
+      // opened before the history was in: show some of it, unless the owner
+      // has already zoomed or dragged
+      if (!chart.touched) chart.view = socSpan(24, chart.now, chart.bounds);
+      if (card._socRoot) drawSocChart(card._socRoot, chart);
+    }).catch(() => {}).finally(() => {
+      chart.fetched = Date.now();
+      chart.fetching = false;
+    });
+  }
+  return chart;
+}
+
+/** Put the interactive chart into `el`, building its frame the first time. */
+function mountSocChart(card, el, plan, height) {
+  if (!el) return;
+  if (!(plan.forecast && (plan.forecast.soc || []).length > 1)) {
+    el.innerHTML = "";
+    card._socRoot = null;
+    return;
+  }
+  const chart = socChartState(card, plan);
+  if (!card._socRoot || card._socRoot !== el || !el._framed) {
+    el.innerHTML = socFrame(height, chart);
+    el._framed = true;
+    card._socRoot = el;
+  }
+  drawSocChart(el, chart);
+  wireSocChart(el, chart);
+}
+
+class BatteryManagementForecastCard extends HTMLElement {
+  setConfig(config) {
+    if (!config) throw new Error("Invalid configuration");
+    this._config = config;
+    this._built = false;
+  }
+
+  set hass(hass) {
+    this._hass = hass;
+    if (!this._built) this._build();
+    this._update();
+  }
+
+  static getStubConfig(hass, entities) {
+    const all = knownEntities(hass, entities);
+    const plan = all.find((id) => id.startsWith("sensor.") && id.endsWith("_plan"));
+    const config = { type: "custom:battery-management-forecast-card" };
+    if (plan) config.plan = plan;
+    return config;
+  }
+
+  getCardSize() {
+    return 4;
+  }
+
+  _build() {
+    const c = this._config;
+    this.innerHTML =
+      '<ha-card header="' + esc(c.title || "Verwacht accuniveau") + '">' +
+      `<style>
+          .fcc { padding: 4px 16px 16px; }
+          .fcc .muted { color: var(--secondary-text-color); }
+          .fcc .now { display:flex; justify-content:space-between; align-items:baseline; }
+          .fcc .big { font-size:2em; font-weight:600; line-height:1.1; }
+          .fcc .note { font-size:.9em; margin:8px 0 0; }
+          ${SOC_STYLE}
+          .fcc .legend { font-size:.75em; margin-top:4px; }
+        </style>
+        <div class="fcc">
+          <div class="now"><span class="big" id="fcnow">—</span>
+            <span class="muted" id="fclow"></span></div>
+          <div id="fcchart"></div>
+          <div class="muted legend" id="fclegend"></div>
+          <div class="note" id="fcsays"></div>
+        </div>
+      </ha-card>`;
+    this._built = true;
+  }
+
+  _update() {
+    const el = (id) => this.querySelector("#" + id);
+    const id = this._config.plan;
+    const state = id && this._hass && this._hass.states[id];
+    const plan = (state && state.attributes) || {};
+    const forecast = plan.forecast;
+    const rows = (forecast && forecast.soc) || [];
+    if (!state) {
+      this._socRoot = null;
+      el("fcnow").textContent = "—";
+      el("fclow").textContent = "";
+      el("fcchart").innerHTML = "";
+      el("fclegend").textContent = "";
+      el("fcsays").textContent = "Plan-sensor niet ingesteld op deze kaart.";
+      return;
+    }
+    if (rows.length < 2) {
+      this._socRoot = null;
+      el("fcnow").textContent = "—";
+      el("fclow").textContent = "";
+      el("fcchart").innerHTML = "";
+      el("fclegend").textContent = "";
+      el("fcsays").textContent =
+        "Nog geen verwachting: die komt zodra er prijzen zijn en de tijd van leeg tot vol gemeten is.";
+      return;
+    }
+    el("fcnow").textContent = Math.round(rows[0].soc) + " %";
+    el("fclow").textContent = forecast.lowest
+      ? "laagste " + Math.round(forecast.lowest.soc) + " % om " + hhmm(forecast.lowest.start)
+      : "";
+    const minimum = Number(plan.buy_ceiling_min) || 0;
+    mountSocChart(this, el("fcchart"), plan, Number(this._config.height) || 160);
+    const legend = [];
+    if (forecast.peak) legend.push("rood: piek");
+    if ((forecast.hold_hours || []).length) legend.push("oranje: bewaart voor de piek");
+    if (minimum > 0) legend.push("stippellijn: minimum " + Math.round(minimum) + " %");
+    legend.push("doorgetrokken: gemeten, gestreept: verwacht");
+    if (forecast.empty_at) legend.push("rode stip: leeg");
+    el("fclegend").textContent = legend.join(" · ");
+    el("fcsays").textContent = holdSays(forecast);
+  }
+}
+
+defineCard("battery-management-forecast-card", BatteryManagementForecastCard, {
+  type: "battery-management-forecast-card",
+  name: "Battery Management Verwachting",
+  description:
+    "How full the packs are expected to be over the next 24 hours, with the peak and what is kept for it.",
   preview: false,
 });
 
