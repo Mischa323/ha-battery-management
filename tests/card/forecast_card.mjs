@@ -207,5 +207,18 @@ const t0 = Date.parse("2026-11-03T00:00:00+01:00");
     !older.chart.includes("data-more") && (nodes.get("fcvs") || {}).textContent === "", older.chart.length);
 }
 
+// --- its own class names (10 November) ---------------------------------------
+{
+  // every card is drawn in the page's light DOM, so a class another card
+  // styles reaches this one: the main card's ".bar" cut the buttons in half
+  const out = render({ forecast: { soc, hold_hours: [] } });
+  check("no class another card styles",
+    !/class="(bar|plot|legend)[ "]/.test(out.chart) && !/class="muted legend"/.test(out.html),
+    out.chart.slice(0, 200));
+  check("the button row is its own, and reset against a progress bar",
+    out.chart.includes('class="socbar"') &&
+    /\.fc \.socbar \{[^}]*height:auto;[^}]*overflow:visible/.test(out.html), "");
+}
+
 console.log(fails ? `\n${fails} FAILED` : "\nforecast card checks pass");
 process.exit(fails ? 1 : 0);

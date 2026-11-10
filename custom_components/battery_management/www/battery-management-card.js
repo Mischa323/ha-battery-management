@@ -2635,13 +2635,19 @@ function socTicks(view) {
 }
 
 const SOC_STYLE = `
-  .fc .bar { display:flex; flex-wrap:wrap; gap:4px; justify-content:flex-end; margin:6px 0 0; }
-  .fc .bar button { -webkit-appearance:none; appearance:none; flex:0 0 auto; line-height:1.4;
+  /* Own names, and reset: every card here is drawn in the page's light DOM,
+     so the main card's ".bar" - a 10 px progress bar with its overflow hidden
+     - reached this row and cut the buttons in half (10 November), and the
+     price card's ".plot" and ".legend" would reach the rest. */
+  .fc .socbar { display:flex; flex-wrap:wrap; gap:4px; justify-content:flex-end; margin:6px 0 0;
+    height:auto; overflow:visible; background:none; border-radius:0; }
+  .fc .socbar button { -webkit-appearance:none; appearance:none; flex:0 0 auto; line-height:1.4;
     font:inherit; font-size:.75em; padding:2px 8px; border-radius:10px;
     border:1px solid var(--divider-color,#ccc); background:none; color:var(--primary-text-color);
     cursor:pointer; }
-  .fc .bar button.on { background:var(--primary-color,#03a9f4); color:#fff; border-color:transparent; }
-  .fc .plot { position:relative; margin:6px 0 0 34px; touch-action:pan-y; cursor:grab; user-select:none; }
+  .fc .socbar button.on { background:var(--primary-color,#03a9f4); color:#fff; border-color:transparent; }
+  .fc .socplot { display:block; position:relative; margin:6px 0 0 34px; touch-action:pan-y; cursor:grab;
+    user-select:none; gap:0; }
   .fc .svg { position:absolute; left:0; right:0; top:0; bottom:0; overflow:hidden; }
   .fc svg { position:absolute; left:0; top:0; width:100%; height:100%; display:block; }
   .fc .grid { stroke:var(--divider-color,#ddd); stroke-width:1; vector-effect:non-scaling-stroke; }
@@ -2667,12 +2673,12 @@ const SOC_STYLE = `
 /** The chart's frame: span buttons, the plot, the axes. Filled by `drawSocChart`. */
 function socFrame(height, chart) {
   const on = (h) => Math.abs(chart.view.to - chart.view.from - h * 3600e3) < 60e3 ? ' class="on"' : "";
-  return '<div class="fc"><div class="bar">' +
+  return '<div class="fc"><div class="socbar">' +
     SOC_SPANS.map(([label, h]) => `<button data-hours="${h}"${on(h)}>${label}</button>`).join("") +
     '<button data-now="1">nu</button>' +
     (chart.more ? '<button data-more="1" title="Geschiedenis openen, zoals elke entiteit">⤢</button>' : "") +
     "</div>" +
-    `<div class="plot" style="height:${height}px">` +
+    `<div class="socplot" style="height:${height}px">` +
     '<div class="yaxis muted"><span style="top:25%">75 %</span><span style="top:50%">50 %</span>' +
     '<span style="top:75%">25 %</span></div>' +
     `<div class="svg">${socSvg(chart.view, chart.past, chart.ahead, chart.extras, chart.now)}</div>` +
@@ -2697,7 +2703,7 @@ function drawSocChart(root, chart) {
 /** Buttons, wheel, drag, two fingers and the hover read-out. Once per frame. */
 function wireSocChart(root, chart) {
   if (!root || typeof root.querySelector !== "function") return;
-  const plot = root.querySelector(".plot");
+  const plot = root.querySelector(".socplot");
   if (!plot || typeof plot.addEventListener !== "function" || plot._wired) return;
   plot._wired = true;
   const tip = root.querySelector(".tip");
@@ -2905,7 +2911,7 @@ class BatteryManagementForecastCard extends HTMLElement {
           .fcc .big { font-size:2em; font-weight:600; line-height:1.1; }
           .fcc .note { font-size:.9em; margin:8px 0 0; }
           ${SOC_STYLE}
-          .fcc .legend { font-size:.75em; margin-top:4px; }
+          .fcc .fclegend { display:block; font-size:.75em; margin-top:4px; }
           .fcc .vs { font-size:.85em; }
           .fcc .big.link { cursor:pointer; }
         </style>
@@ -2914,7 +2920,7 @@ class BatteryManagementForecastCard extends HTMLElement {
             <span class="muted" id="fclow"></span></div>
           <div class="muted vs" id="fcvs"></div>
           <div id="fcchart"></div>
-          <div class="muted legend" id="fclegend"></div>
+          <div class="muted fclegend" id="fclegend"></div>
           <div class="note" id="fcsays"></div>
         </div>
       </ha-card>`;
