@@ -2181,8 +2181,10 @@ function goalSays(goal) {
  */
 function fillSays(trade) {
   if (!trade || trade.fill_to == null) return "";
+  // the peak it is for: on 10 November that was the morning, not "vanavond"
+  const peak = trade.fill_for ? "in de piek van " + hhmm(trade.fill_for) : "in de piek";
   return " Laadt bij tot " + Math.round(trade.fill_to) +
-    " % om vanavond te verkopen: de avond levert meer op dan het inkopen kost.";
+    " % om " + peak + " te verkopen: de piek levert meer op dan het inkopen kost.";
 }
 
 /**

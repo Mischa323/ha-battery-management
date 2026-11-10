@@ -138,7 +138,7 @@ What each row carries:
 | `price_eur_kwh`, `price_role` | what this hour cost, and whether it was ranked `cheap` · `dear` · `normal` — so a trace can be read against the tariff without cross-checking the price chart by hand |
 | `market_price_eur_kwh` | the exchange price of the same slot, which is what export is settled against — what a kWh sent back was worth while a bought one cost `price_eur_kwh`. Direct supplier route only |
 | `house_w`, `house_draw_w` | the house less the sun (meter plus packs) this tick, and the hour-long average that buying works from |
-| `buy_now`, `buy_why` | Dynamic mode only: whether it bought this tick, and why or why not. The reasons for buying are `pays` (the margin says it pays), `minimum` (up to *Minimum charge*), `day_goal` (for the *Day goal*; both whether or not it pays) and `trade_fill` (to sell tonight). The reasons for not buying are `not_a_buy_slot`, `goal_done` (the goal's slot, but its amount is already in), `sun_enough`, `no_ceiling` (see `buy_ceiling_why`), `topped_up` (done for this slot), `at_ceiling` and `no_prices`. A purchase keeps the reason it started with until the end of its slot |
+| `buy_now`, `buy_why` | Dynamic mode only: whether it bought this tick, and why or why not. The reasons for buying are `pays` (the margin says it pays), `minimum` (up to *Minimum charge*), `day_goal` (for the *Day goal*; both whether or not it pays) and `trade_fill` (to sell in the coming peak). The reasons for not buying are `not_a_buy_slot`, `goal_done` (the goal's slot, but its amount is already in), `sun_enough`, `no_ceiling` (see `buy_ceiling_why`), `topped_up` (done for this slot), `at_ceiling` and `no_prices`. A purchase keeps the reason it started with until the end of its slot |
 | `buy_slot` | why this slot is a buying slot: `margin`, `floor` (*Minimum charge*), `goal` (*Day goal*), `trade_fill`, or `latched` (a purchase already under way) |
 | `buy_ceiling_pct`, `buy_ceiling_why` | how full buying may make the packs, and what set that limit (`solar_headroom`, `cheaper_later`, `cheaper_tomorrow`, `trade_fill`, ...) |
 | `buy_cost_eur_kwh`, `price_margin_eur_kwh` | what a kWh bought now costs once it is back out of the packs (the round trip plus wear), and the margin it must leave |
@@ -871,7 +871,7 @@ capped — that would be throwing sun away.
 | Not buying, the sun still fits | What is coming free would not fit if it bought now |
 | Dynamic, but no prices available | The mode is on but the price sensor is mute |
 | Selling to the grid, it pays | Smart trading is On and this slot earns more than the refill and the wear |
-| Filling up to sell tonight, it pays | Smart trading is On and tonight's sale earns more than buying now costs; buying goes past the house's own ceiling, up to **Buy up to: at most** |
+| Filling up to sell in the peak, it pays | Smart trading is On and the coming peak's sale earns more than buying now costs; buying goes past the house's own ceiling, up to **Buy up to: at most** |
 | Following an external plan | EMHASS or similar is driving |
 | External plan went quiet | It stopped arriving; back to following the meter |
 | Fast charging / Charged, keeping full | The override is running |
@@ -1098,6 +1098,12 @@ slots at least the price margin below the peak's average qualify. In such a
 slot the packs give the house nothing, and surplus sun still goes in. The
 charge is not lost: it goes out in the peak instead. The status is *Keeping
 the charge for the coming peak*.
+
+Inside a peak the plan buys nothing until the peak is over. So the walk
+counts the purchases the night after it will make: the same cheap slots and
+margin, up to the next peak, as full as buying may go. On 8 November, without
+them, it saw the packs empty in the next morning's peak. It kept charge back
+in the evening at EUR 0.50, which the night then bought anyway at 0.39.
 
 The walk leaves out sun beyond the usual, so on a bright day the packs end up
 fuller than it says. The *Verwachting* card draws the walk beside the
@@ -1433,8 +1439,20 @@ to, with today's purchase in place of tomorrow's refill:
   arithmetic alone would buy at 18:00 for 0.40 to sell at 21:00 for 0.60.
 - **Holds do not stop it:** "cheaper tomorrow" and "cheaper later today" are
   about the house's energy, so they do not hold this back. The policy reads
-  *Filling up to sell tonight, it pays*, and the plan card says how full and
-  why. The Plan sensor carries it as `trade.fill_to`.
+  *Filling up to sell in the peak, it pays*, and the plan card says how full,
+  for which peak, and why. The Plan sensor carries it as `trade.fill_to` and
+  `trade.fill_for` (when that peak starts). The trace names the peak too:
+  *koopt 7000 W bij om in de piek van 07:15 te verkopen*.
+- **Sold at what it cost:** reported on 10 November, the fill bought 12 kWh
+  at EUR 0.40 in the night for the morning peak. In the morning the sale
+  weighed each kWh against the refill after it, 0.47, and sold nothing. A kWh
+  bought for a sale needs no refill after it, because the purchase was the
+  refill. So until those kWh are sold, a sale weighs them against what they
+  cost, the same test that bought them. This holds until noon, when the sale
+  window closes, and for no more kWh than are still above the sell line. What
+  the fill still means to buy counts the same way, so the plan shows the sale
+  the purchase is for. The trace's `refill_eur_kwh` then shows the purchase
+  price.
 
 The plan also no longer lists a sale the tick would not start. A sale only
 starts with more than two points above the line, so packs resting just above

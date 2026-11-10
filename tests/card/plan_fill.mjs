@@ -55,13 +55,16 @@ const plan = (trade) => ({
 });
 
 check("filling for the sale says so, and how full",
-  why(plan({ ...TRADE, fill_to: 100 })).includes("Laadt bij tot 100 % om vanavond te verkopen"),
+  why(plan({ ...TRADE, fill_to: 100 })).includes("Laadt bij tot 100 % om in de piek te verkopen"),
   why(plan({ ...TRADE, fill_to: 100 })));
 check("nothing extra when it is not filling for a sale",
   !why(plan({ ...TRADE, fill_to: null })).includes("verkopen"),
   why(plan({ ...TRADE, fill_to: null })));
 check("nor from an older integration without the field",
   fillSays(TRADE) === "" && fillSays(null) === "", [fillSays(TRADE), fillSays(null)]);
+check("names the peak it is for (10 November: the morning, not tonight)",
+  fillSays({ fill_to: 96, fill_for: "2026-11-10T07:15:00+01:00" }).includes("om in de piek van 07:15 te verkopen"),
+  fillSays({ fill_to: 96, fill_for: "2026-11-10T07:15:00+01:00" }));
 check("rounds the percentage", fillSays({ fill_to: 94.6 }).includes("tot 95 %"), fillSays({ fill_to: 94.6 }));
 
 if (fails) { console.log(fails + " failed"); process.exit(1); }
