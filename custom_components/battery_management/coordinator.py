@@ -3846,15 +3846,87 @@ class BatteryCoordinator:
         needed = self._hours_to_sell(slots)
         if needed is None:
             return {_slot_key(s): margins[_slot_key(s)] for s in candidates}
-        chosen: dict[str, float] = {}
-        covered = 0.0
-        for slot in sorted(candidates, key=lambda s: (-margins[_slot_key(s)], s.start)):
-            if covered >= needed - 1e-9:
+        power = self._charge_kw()
+        claims = self._house_claims(slots, now, until, exclude)
+        if not claims or power <= 0:
+            chosen: dict[str, float] = {}
+            covered = 0.0
+            for slot in sorted(candidates, key=lambda s: (-margins[_slot_key(s)], s.start)):
+                if covered >= needed - 1e-9:
+                    break
+                key = _slot_key(slot)
+                chosen[key] = margins[key]
+                covered += (slot.end - max(slot.start, now)).total_seconds() / 3600.0
+            return chosen
+        # 10 November: "is het dan niet handiger dat hij het vasthoudt zodat we
+        # hem langzaam door de avond leeg trekken?" A kWh sold earns its export
+        # value; kept, it spares the house that hour's whole price. So the
+        # sale and the house's own evening are ranked together, best first:
+        # the house's hours draw on what sits under the sell line first, and
+        # only what they need beyond it is taken from the sale.
+        ctx = {
+            "market": self._component_by_slot("market_prices"),
+            "untaxed": self._component_by_slot("untaxed_prices"),
+        }
+        offers = []
+        for slot in candidates:
+            value = self._export_value_at(slot, ctx)
+            hours = (slot.end - max(slot.start, now)).total_seconds() / 3600.0
+            if value is not None:
+                offers.append((value, 0, slot.start, hours * power, slot))
+        offers += [(value, 1, start, kwh, None) for value, start, kwh in claims]
+        above = needed * power
+        below = self._energy_under_sell_line()
+        chosen = {}
+        for value, house, _start, kwh, slot in sorted(offers, key=lambda o: (-o[0], o[1], o[2])):
+            if above <= 1e-6:
                 break
+            if house:
+                from_below = min(kwh, below)
+                below -= from_below
+                above -= kwh - from_below
+                continue
             key = _slot_key(slot)
             chosen[key] = margins[key]
-            covered += (slot.end - max(slot.start, now)).total_seconds() / 3600.0
+            above -= kwh
         return chosen
+
+    def _house_claims(self, slots, now, until, exclude) -> list:
+        """The house's own draw until the packs are next refilled, at its price.
+
+        (price, start, kWh) per slot from now: the usual draw for that hour
+        of the day, which is already the house less its usual sun. Up to the
+        first slot the plan buys in, or the end of the sale window - after a
+        refill the evening's charge is not what covers the house.
+        """
+        refill = min(
+            (s.start for s in slots if _slot_key(s) in exclude and s.start >= now),
+            default=until,
+        )
+        out = []
+        for slot in slots:
+            if slot.end <= now or slot.start >= min(refill, until):
+                continue
+            draw = self._draw_in(slot)
+            if not draw:
+                continue
+            hours = (slot.end - max(slot.start, now)).total_seconds() / 3600.0
+            out.append((slot.price, slot.start, draw / 1000.0 * hours))
+        return out
+
+    def _energy_under_sell_line(self) -> float:
+        """kWh between the sell line and the packs' floor: the house's anyway."""
+        if self._full_charge_minutes <= 0:
+            return 0.0
+        total = 0.0
+        for cfg in self._units:
+            unit = self._unit_snapshot(cfg)
+            if not unit.online or unit.soc is None:
+                continue
+            capacity = unit.unit_max * self._full_charge_minutes / 60000.0
+            top = min(unit.soc, self._sell_line(unit))
+            total += max(top - self._discharge_floor(unit), 0.0) / 100.0 * capacity
+        return total
 
     def energy_above_sell_line(self) -> float | None:
         """kWh the packs hold above where selling stops, right now."""

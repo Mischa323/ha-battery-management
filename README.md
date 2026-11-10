@@ -1477,6 +1477,20 @@ to, with today's purchase in place of tomorrow's refill:
   the purchase is for. The trace's `refill_eur_kwh` then shows the purchase
   price.
 
+**The house's own evening first, when it is worth more.** A kWh sold earns
+its export value. A kWh kept spares the house that hour's whole price,
+markup and VAT included. So the evening's sale slots and the house's own
+hours until the next refill are ranked together, best first. The house's
+hours draw on what sits under the sell line first. Only what they need beyond
+it is taken from the sale.
+
+Under saldering the export is the price less the markup, about 3 cents. A
+quarter at 0.60 is therefore not sold when the house pays 0.58 or more later
+that evening, and the evening has more than the sell line leaves it. Asked
+for on 10 November: "is het dan niet handiger dat hij het vasthoudt zodat we
+hem langzaam door de avond leeg trekken?". Without a learned draw profile
+the sale is chosen as before.
+
 The plan also no longer lists a sale the tick would not start. A sale only
 starts with more than two points above the line, so packs resting just above
 it are not shown as about to sell.

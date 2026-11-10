@@ -199,3 +199,43 @@ def test_the_same_evening_sells_when_tomorrow_is_cheap(evening):
     system = evening({NOW: 0.45}, ordinary=0.42)
 
     assert key(NOW) in planned(system)
+
+
+# -- the house's own evening, ranked with the sale (10 November) ---------------
+
+
+def test_the_house_evening_keeps_what_it_is_worth_more_to(evening):
+    """"Is het dan niet handiger dat hij het vasthoudt zodat we hem langzaam
+    door de avond leeg trekken?" 18:00 sells at 0.60 - 0.57 back under
+    saldering - and 19:00-22:00 cost the house 0.58. Those hours draw 12 kWh;
+    the 7 under the sell line do not cover them, so 5 of the 14 above it stay
+    for the house, and the sale is the one best hour, not two."""
+    peaks = {NOW: 0.60, **{NOW + timedelta(hours=h): 0.58 for h in (1, 2, 3, 4)}}
+    system = evening(peaks)
+    system.coordinator.draw_profile = {hour: 3000.0 for hour in range(24)}
+
+    assert planned(system) == {key(NOW)}
+
+
+def test_without_a_learned_evening_the_sale_is_as_before(evening):
+    peaks = {NOW: 0.60, **{NOW + timedelta(hours=h): 0.58 for h in (1, 2, 3, 4)}}
+
+    assert planned(evening(peaks)) == {key(NOW), key(NOW + timedelta(hours=1))}
+
+
+def test_a_cheap_evening_takes_nothing_from_the_sale(evening):
+    """The house's 0.30 hours are worth less than any sale: it sells as much."""
+    system = evening({NOW: 0.60, NOW + timedelta(hours=1): 0.58})
+    system.coordinator.draw_profile = {hour: 3000.0 for hour in range(24)}
+
+    assert planned(system) == {key(NOW), key(NOW + timedelta(hours=1))}
+
+
+def test_what_is_under_the_line_covers_the_house_first(evening):
+    """Dear hours at 1 kW: the 7 kWh under the line cover them, the sale
+    keeps its two best hours."""
+    peaks = {NOW: 0.60, NOW + timedelta(hours=1): 0.58, NOW + timedelta(hours=2): 0.59}
+    system = evening(peaks)
+    system.coordinator.draw_profile = {hour: 1000.0 for hour in range(24)}
+
+    assert planned(system) == {key(NOW), key(NOW + timedelta(hours=2))}
