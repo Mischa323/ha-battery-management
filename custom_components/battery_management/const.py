@@ -655,6 +655,13 @@ SINGLE_PACK_BELOW_W = 1500
 #: the day goal counts as in once this little of its amount is left -
 #: the meter's last few watt-hours are not worth a purchase of their own
 GOAL_DONE_KWH = 0.05
+
+#: How far ahead an expectation is taken down to compare with what came: each
+#: slot's charge as the forecast saw it this many hours before (10 November:
+#: "zodat we kunnen zien of het onder of boven de verwachting zit"), and how
+#: long those are kept.
+EXPECTED_LEAD_HOURS = 3
+EXPECTED_KEEP_HOURS = 48
 #: the pack carrying it keeps doing so until the other is this many SoC points
 #: fuller - the swap is a ramp down and a ramp up, not worth a single point
 SINGLE_PACK_SWAP_POINTS = 5

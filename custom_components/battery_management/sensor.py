@@ -17,6 +17,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import (
     DOMAIN,
+    EXPECTED_LEAD_HOURS,
     PERIOD_DAY,
     PERIOD_MONTH,
     PERIOD_WEEK,
@@ -40,6 +41,7 @@ async def async_setup_entry(
             SolarRemainingSensor(coordinator, entry),
             ChargeCeilingSensor(coordinator, entry),
             PlanSensor(coordinator, entry),
+            ExpectedSocSensor(coordinator, entry),
             CurrentPriceSensor(coordinator, entry),
             MarketPriceSensor(coordinator, entry),
             UntaxedPriceSensor(coordinator, entry),
@@ -366,6 +368,47 @@ class PlanSensor(_BaseSensor):
     @property
     def extra_state_attributes(self) -> dict:
         return self.coordinator.plan()
+
+
+class ExpectedSocSensor(_BaseSensor):
+    """The charge the forecast expected for now, a few hours before.
+
+    Asked for on 10 November: "waarom kan ik net als een entiteit in HA niet
+    de grafiek van de verwacht accu niveau openen". As a sensor its history is
+    the expected line, which Home Assistant draws and keeps like any other -
+    beside the packs' own charge it shows whether they run above or below
+    what was expected.
+    """
+
+    _attr_translation_key = "expected_soc"
+    _attr_native_unit_of_measurement = PERCENTAGE
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_icon = "mdi:battery-clock"
+    _attr_suggested_display_precision = 0
+
+    def __init__(self, coordinator, entry) -> None:
+        super().__init__(coordinator, entry)
+        self._attr_unique_id = f"{entry.entry_id}_expected_soc"
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        self.coordinator.expected_entity_id = self.entity_id
+
+    @property
+    def native_value(self):
+        return self.coordinator.expected_now()
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        expected = self.coordinator.expected_now()
+        actual = self.coordinator.actual_soc()
+        return {
+            "actual_soc": actual,
+            "deviation": (
+                None if expected is None or actual is None else round(actual - expected, 1)
+            ),
+            "lead_hours": EXPECTED_LEAD_HOURS,
+        }
 
 
 class CurrentPriceSensor(_BaseSensor):
