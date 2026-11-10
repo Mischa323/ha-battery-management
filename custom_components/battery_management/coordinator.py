@@ -4983,6 +4983,11 @@ class BatteryCoordinator:
             "saved_eur" if self.saldering_active() else "saved_after_eur"
         ]
         figures["counted_h"] = hours
+        # the Anker app's way: every kWh out of the packs at the price of the
+        # moment, the cost of charging them left out (10 November)
+        given = max(packs, 0.0) * hours / 1000.0
+        figures["discharged_kwh"] = given
+        figures["gross_eur"] = given * price
         margin = (self.last_trade_verdict or {}).get("margin")
         live = self.enabled and not self.dry_run
         if margin is not None and selling and live:

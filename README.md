@@ -223,7 +223,7 @@ no manual resource step:
 | **Battery Management Prices** | Only the prices — current price large, today's bars, and the cheapest and dearest hour with their times. |
 | **Battery Management Verwachting** | How full the packs are, and are expected to be: the recorder's history solid, the forecast dashed, with the coming peak shaded red, the hours kept for it orange and the minimum dashed. Zoom with 6u/12u/24u/48u, the mouse wheel or two fingers, drag to look back or ahead, and hover or tap for the figure at that time. *nu* goes back to now. The chart is on this card only; the plan card keeps the sentence about what is kept for the peak. |
 | **Battery Management Trading** | Selling to the grid: Off / Shadow / On, whether it pays right now with the sum written out, and what it sold (or would have, in shadow) today. Belongs beside the controls. See [Selling to the grid](#selling-to-the-grid). |
-| **Battery Management Savings** | What the packs saved today, this month and since the start — green when they saved, red when they lost — and the payback time. Made for a dashboard of its own. |
+| **Battery Management Savings** | What the packs saved today, this month and since the start — green when they saved, red when they lost — and the payback time. Under the tiles, the same periods as the Anker app counts them (discharged × price, charging not taken off). Made for a dashboard of its own. |
 
 ### Adding one
 
@@ -1507,6 +1507,15 @@ battery power sensor where one is configured, the command read back otherwise.
 Both footings are kept — with saldering and without — so a payback time can be
 read on the one that will actually apply. A day can come out negative: sun
 stored costs the export it replaced, and is only repaid when it is used.
+
+**Beside the Anker app.** The app's *Inkomsten* counts something else. It
+takes every kWh out of the packs at the price of the moment, and takes
+nothing off for what charging them cost, for the round trip, or for the
+export that stored sun replaced. Over 8–10 November that came to EUR 27,
+against a real saving of about 5. So the savings sensors also carry
+`discharged_kwh` and `gross_eur`, counted the app's way. The savings card
+shows them under the tiles, marked as the app's figure, so the two can be
+compared. The payback time stays on the real saving.
 
 Every tick's verdict is in the trace (`export_value_eur_kwh`,
 `refill_eur_kwh`, `sell_margin_eur_kwh`, `trade_why`) and in the diagnostics

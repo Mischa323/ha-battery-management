@@ -113,6 +113,29 @@ async def test_a_partial_cover_counts_only_the_import_it_replaced(house, clock):
     assert money["saved_after_eur"] == pytest.approx(1.0 * PRICE + 0.5 * MARKET, rel=0.01)
 
 
+async def test_the_anker_figure_counts_what_came_out_at_its_price(house, clock):
+    """10 November: the Anker app's "Inkomsten" - every kWh out of the packs
+    at the price of the moment - is kept beside the saving to compare."""
+    system = house(grid=-500, packs=1500, enabled=False)
+
+    await hour(system, clock)
+
+    money = system.coordinator.money
+    assert money["discharged_kwh"] == pytest.approx(1.5, rel=0.01)
+    assert money["gross_eur"] == pytest.approx(1.5 * PRICE, rel=0.01)
+
+
+async def test_charging_takes_nothing_off_it(house, clock):
+    """Which is where it parts from the saving: charging costs there, not here."""
+    system = house(grid=0, packs=-1000, enabled=False)
+
+    await hour(system, clock)
+
+    money = system.coordinator.money
+    assert money["gross_eur"] == 0.0
+    assert money["saved_after_eur"] < 0
+
+
 async def test_nothing_is_counted_without_a_meter(house, clock):
     system = house(grid=0, packs=1000, enabled=False)
     system.hass.states.set(GRID_SENSOR, "unavailable")

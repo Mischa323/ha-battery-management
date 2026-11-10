@@ -587,6 +587,11 @@ MONEY_FIELDS = (
     "traded_eur",
     "shadow_kwh",
     "shadow_eur",
+    # what the packs gave out, at the all-in price of its slot, with nothing
+    # taken off for what charging them cost: the figure the Anker app shows
+    # as "Inkomsten" (10 November), kept beside the real saving to compare
+    "discharged_kwh",
+    "gross_eur",
     "counted_h",
 )
 
