@@ -834,6 +834,7 @@ capped — that would be throwing sun away.
 | **Payback time** | In how many years the packs pay for themselves on a dynamic contract **without** saldering: purchase price ÷ the yearly saving on that footing. The attributes add the same with saldering, `years_to_go` from today (saldering at its rate until it ends, then without, less what is already saved), the yearly savings and `counted_days`. `reliable` turns true after 30 counted days. Shows no value (unknown) until there is a purchase price and a day counted; the attributes stay, so the card can say which of the two it is waiting for. | never |
 | **Standby load** | What the house draws while everyone sleeps, in W: last night's lowest five minutes between 01:00 and 05:00, meter plus packs. The attributes add when that was (`lowest_at`), the `night_average_w`, the `average_7_nights_w`, what it comes to in a year (`per_year_kwh`), `tonight_lowest_w` while the night is being measured, and the last 30 nights in `history`. See [Standby load](#standby-load-sluipverbruik). | never (unknown until the first night) |
 | **Smart trading status** | `selling`, `would_sell` (shadow), `waiting`, `off` or `not_dynamic`. The attributes carry the three prices it weighed — `export_value_eur_kwh`, `refill_eur_kwh`, `wear_eur_kwh` — the `margin_eur_kwh` they come to, and `why` it is not selling. | never |
+| **Expected charge** | The charge the forecast expected for now, three hours before — its history is the expected line, to set beside the packs' own charge. Attributes: `actual_soc`, `deviation` (points above or below), `lead_hours`. | nothing taken down for now yet (unknown) |
 | **Plan** | Today's cheap and dear hours with their prices, plus the numbers the ceiling was computed from, all in attributes. Its `hours` attribute is the whole series, each slot carrying the `role` it belongs to — `cheap`, `dear` or `normal` — which is what the card's chart is drawn from. | never |
 | **Fuse headroom** | Amps still available on **the busiest single leg** — not a total, and not per leg. It is the one that would trip first; `tightest_phase` in the attributes says which. Measured against the usable limit (the fuse less your margin), so the margin is still there underneath. Per-leg detail — `amps` through the fuse, `amps_without_us`, headroom, and which packs sit on it — is in the attributes. | no per-phase sensors configured |
 | **Phase detection** | Whether it knows which pack is on which leg, and how it found out. The `probes` attribute holds the measurements behind each placement. | never |
@@ -1113,6 +1114,28 @@ shaded red and the kept hours orange. The plan card has no chart; it says in
 a sentence what is kept, or when the packs run dry, or how low they get. The Plan sensor carries it as `forecast` (`soc`,
 `empty_at`, `short_kwh`, `lowest`, `peak`, `hold_hours`, and `soc_entities`
 for the history), and each hour has `hold`.
+
+**Above or below what was expected.** Asked for on 10 November: open the
+expected charge like any entity, and see whether the packs run above or
+below it. Each slot's charge is taken down once, the first time it is within
+three hours. It is never overwritten: a forecast made a minute before would
+always be right. These are kept for two days.
+
+- **The sensor:** *Expected charge* (*Verwacht accuniveau*) carries the one
+  for now. Home Assistant keeps its history like any other sensor, so it
+  opens with its own graph and fits in a history card beside the packs' own
+  charge. Its attributes add `actual_soc`, `deviation` (actual minus
+  expected, in points) and `lead_hours`.
+- **The card:** the *Verwachting* card draws those expectations as a grey
+  dotted line under the measured one. The read-out gives both. Under the
+  big figure, which is now the packs' own charge, a line says "Verwacht was
+  81 % (3 uur eerder): 3 punten onder de verwachting". The ⤢ button and the
+  big figure open the sensor.
+- **On the Plan sensor:** `forecast` gains `expected`, `expected_now`,
+  `actual_soc`, `expected_lead_hours` and `expected_entity`.
+
+The line starts when the update is installed. Right after a restart the
+next three hours are taken down with less lead.
 
 The margin is measured against the dear hours of the next 24 hours. Once
 tomorrow's prices are published, a dear morning tomorrow lets today's cheap

@@ -2558,13 +2558,34 @@ function socPan(view, fraction, bounds) {
   return socClamp({ from: view.from + shift, to: view.to + shift }, bounds);
 }
 
-/** The charge at `t`, from whichever line covers it, and whether it is expected. */
-function socAt(past, ahead, t, now) {
+/**
+ * The charge at `t`, from whichever line covers it, and whether it is
+ * expected - and, in the past, what was expected for that time beforehand.
+ */
+function socAt(past, ahead, t, now, was = []) {
   const line = t <= now && past.length ? past : ahead;
   if (!line.length) return null;
-  let best = line[0];
-  for (const p of line) if (Math.abs(p.t - t) < Math.abs(best.t - t)) best = p;
-  return { t: best.t, soc: best.soc, expected: line === ahead && best.t >= now - SOC_STEP };
+  const near = (pts) => {
+    let best = pts[0];
+    for (const p of pts) if (Math.abs(p.t - t) < Math.abs(best.t - t)) best = p;
+    return best;
+  };
+  const best = near(line);
+  const out = { t: best.t, soc: best.soc, expected: line === ahead && best.t >= now - SOC_STEP };
+  if (line === past && was.length) {
+    const then = near(was);
+    if (Math.abs(then.t - best.t) <= SOC_STEP) out.was = then.soc;
+  }
+  return out;
+}
+
+/** "3 punten onder de verwachting", or on it - from the charge and what was expected. */
+function socVersus(actual, expected) {
+  if (actual == null || expected == null || isNaN(actual) || isNaN(expected)) return "";
+  const gap = Math.round(actual - expected);
+  if (Math.abs(gap) < 1) return "precies op de verwachting";
+  const n = Math.abs(gap) + (Math.abs(gap) === 1 ? " punt " : " punten ");
+  return n + (gap < 0 ? "onder" : "boven") + " de verwachting";
 }
 
 function socSvg(view, past, ahead, extras, now) {
@@ -2587,9 +2608,11 @@ function socSvg(view, past, ahead, extras, now) {
   const nowLine = nowX >= 0 && nowX <= 100 ? `<line class="nowline" x1="${nowX}" x2="${nowX}" y1="0" y2="100"/>` : "";
   const past_ = pts(past);
   const ahead_ = pts(ahead);
+  const was_ = pts(extras.was || []);
   const empty = extras.empty && x(Date.parse(extras.empty)) >= 0 && x(Date.parse(extras.empty)) <= 100
     ? `<circle class="empty" cx="${x(Date.parse(extras.empty)).toFixed(2)}" cy="98" r="2.2"/>` : "";
   return '<svg viewBox="0 0 100 100" preserveAspectRatio="none">' + grid + peak + holds + floor + nowLine +
+    (was_ ? `<polyline class="was" points="${was_}"/>` : "") +
     (past_ ? `<polyline class="past" points="${past_}"/>` : "") +
     (ahead_ ? `<polyline class="line" points="${ahead_}"/>` : "") + empty + "</svg>";
 }
@@ -2625,6 +2648,7 @@ const SOC_STYLE = `
   .fc .minimum { stroke:var(--secondary-text-color,#727272); stroke-width:1; stroke-dasharray:4 3; vector-effect:non-scaling-stroke; }
   .fc .nowline { stroke:var(--primary-text-color,#212121); stroke-width:1; opacity:.5; vector-effect:non-scaling-stroke; }
   .fc .past { fill:none; stroke:var(--info-color,#039be5); stroke-width:2.5; vector-effect:non-scaling-stroke; }
+  .fc .was { fill:none; stroke:var(--secondary-text-color,#727272); stroke-width:1.5; stroke-dasharray:2 3; opacity:.8; vector-effect:non-scaling-stroke; }
   .fc .line { fill:none; stroke:var(--info-color,#039be5); stroke-width:2.5; stroke-dasharray:6 4; vector-effect:non-scaling-stroke; }
   .fc .peak { fill:var(--error-color,#db4437); opacity:.12; }
   .fc .hold { fill:var(--warning-color,#ffa600); opacity:.28; }
@@ -2645,7 +2669,9 @@ function socFrame(height, chart) {
   const on = (h) => Math.abs(chart.view.to - chart.view.from - h * 3600e3) < 60e3 ? ' class="on"' : "";
   return '<div class="fc"><div class="bar">' +
     SOC_SPANS.map(([label, h]) => `<button data-hours="${h}"${on(h)}>${label}</button>`).join("") +
-    '<button data-now="1">nu</button></div>' +
+    '<button data-now="1">nu</button>' +
+    (chart.more ? '<button data-more="1" title="Geschiedenis openen, zoals elke entiteit">⤢</button>' : "") +
+    "</div>" +
     `<div class="plot" style="height:${height}px">` +
     '<div class="yaxis muted"><span style="top:25%">75 %</span><span style="top:50%">50 %</span>' +
     '<span style="top:75%">25 %</span></div>' +
@@ -2684,14 +2710,15 @@ function wireSocChart(root, chart) {
   const show = (clientX) => {
     const f = fraction(clientX);
     const t = chart.view.from + (chart.view.to - chart.view.from) * f;
-    const p = socAt(chart.past, chart.ahead, t, chart.now);
+    const p = socAt(chart.past, chart.ahead, t, chart.now, chart.extras.was || []);
     if (!p || !tip) return;
     tip.style.display = cursor.style.display = "block";
     tip.style.left = cursor.style.left = (f * 100).toFixed(2) + "%";
     // kept inside the card at either edge
     tip.style.transform = f > 0.75 ? "translateX(-100%)" : f < 0.25 ? "translateX(0)" : "translateX(-50%)";
     tip.textContent = hhmm(new Date(p.t).toISOString()) + " · " + Math.round(p.soc) + " %" +
-      (p.expected ? " (verwacht)" : "");
+      (p.expected ? " (verwacht)" : "") +
+      (p.was != null ? " (verwacht was " + Math.round(p.was) + " %)" : "");
   };
   const hide = () => {
     if (tip) tip.style.display = "none";
@@ -2699,6 +2726,10 @@ function wireSocChart(root, chart) {
   };
   for (const b of root.querySelectorAll("button")) {
     b.addEventListener("click", () => {
+      if (b.getAttribute("data-more")) {
+        socMoreInfo(chart.card, chart.more);
+        return;
+      }
       chart.touched = true;
       hide();     // the read-out was for the old view
       const hours = b.getAttribute("data-hours");
@@ -2761,6 +2792,19 @@ function wireSocChart(root, chart) {
 }
 
 /**
+ * Open an entity the way Home Assistant does when one is tapped: its own
+ * dialog, with its history (10 November: "waarom kan ik net als een entiteit
+ * in HA niet de grafiek van de verwacht accu niveau openen").
+ */
+function socMoreInfo(card, entityId) {
+  if (!card || !entityId || typeof card.dispatchEvent !== "function") return false;
+  card.dispatchEvent(new CustomEvent("hass-more-info", {
+    detail: { entityId }, bubbles: true, composed: true,
+  }));
+  return true;
+}
+
+/**
  * What a card keeps for its chart, and the recorder fetch behind it. The
  * history is asked for once every five minutes, not on every state change.
  */
@@ -2768,10 +2812,14 @@ function socChartState(card, plan, now = Date.now()) {
   const forecast = plan.forecast || {};
   const chart = card._socChart || (card._socChart = { past: [], fetched: 0 });
   chart.now = now;
+  chart.card = card;
+  chart.more = forecast.expected_entity || null;
   chart.ahead = socAhead(forecast);
   chart.extras = {
     peak: forecast.peak, holds: forecast.hold_hours || [],
     minimum: Number(plan.buy_ceiling_min) || 0, empty: forecast.empty_at,
+    // what was expected for the hours gone by, a few hours before each
+    was: socAhead({ soc: forecast.expected }),
   };
   chart.bounds = socBounds(chart.past, chart.ahead, now);
   chart.view = chart.view ? socClamp(chart.view, chart.bounds) : socSpan(24, now, chart.bounds);
@@ -2858,10 +2906,13 @@ class BatteryManagementForecastCard extends HTMLElement {
           .fcc .note { font-size:.9em; margin:8px 0 0; }
           ${SOC_STYLE}
           .fcc .legend { font-size:.75em; margin-top:4px; }
+          .fcc .vs { font-size:.85em; }
+          .fcc .big.link { cursor:pointer; }
         </style>
         <div class="fcc">
           <div class="now"><span class="big" id="fcnow">—</span>
             <span class="muted" id="fclow"></span></div>
+          <div class="muted vs" id="fcvs"></div>
           <div id="fcchart"></div>
           <div class="muted legend" id="fclegend"></div>
           <div class="note" id="fcsays"></div>
@@ -2877,6 +2928,7 @@ class BatteryManagementForecastCard extends HTMLElement {
     const plan = (state && state.attributes) || {};
     const forecast = plan.forecast;
     const rows = (forecast && forecast.soc) || [];
+    if (el("fcvs")) el("fcvs").textContent = "";
     if (!state) {
       this._socRoot = null;
       el("fcnow").textContent = "—";
@@ -2896,7 +2948,18 @@ class BatteryManagementForecastCard extends HTMLElement {
         "Nog geen verwachting: die komt zodra er prijzen zijn en de tijd van leeg tot vol gemeten is.";
       return;
     }
-    el("fcnow").textContent = Math.round(rows[0].soc) + " %";
+    // the packs as they are, when the integration says so; the first slot
+    // of the forecast from one that does not
+    const actual = forecast.actual_soc != null ? forecast.actual_soc : rows[0].soc;
+    el("fcnow").textContent = Math.round(actual) + " %";
+    const more = forecast.expected_entity;
+    el("fcnow").className = "big" + (more ? " link" : "");
+    el("fcnow").onclick = more ? () => socMoreInfo(this, more) : null;
+    const versus = socVersus(forecast.actual_soc, forecast.expected_now);
+    el("fcvs").textContent = versus
+      ? "Verwacht was " + Math.round(forecast.expected_now) + " % (" +
+        (forecast.expected_lead_hours || 3) + " uur eerder): " + versus + "."
+      : "";
     el("fclow").textContent = forecast.lowest
       ? "laagste " + Math.round(forecast.lowest.soc) + " % om " + hhmm(forecast.lowest.start)
       : "";
@@ -2907,6 +2970,9 @@ class BatteryManagementForecastCard extends HTMLElement {
     if ((forecast.hold_hours || []).length) legend.push("oranje: bewaart voor de piek");
     if (minimum > 0) legend.push("stippellijn: minimum " + Math.round(minimum) + " %");
     legend.push("doorgetrokken: gemeten, gestreept: verwacht");
+    if ((forecast.expected || []).length) {
+      legend.push("grijs gestippeld: " + (forecast.expected_lead_hours || 3) + " uur eerder verwacht");
+    }
     if (forecast.empty_at) legend.push("rode stip: leeg");
     el("fclegend").textContent = legend.join(" · ");
     el("fcsays").textContent = holdSays(forecast);

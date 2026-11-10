@@ -358,6 +358,9 @@
       "plan": {
         "name": "Plan"
       },
+      "expected_soc": {
+        "name": "Verwacht accuniveau"
+      },
       "grid_observed": {
         "name": "Netvermogen (zoals uitgelezen)"
       },

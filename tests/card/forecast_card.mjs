@@ -114,7 +114,7 @@ const soc = Array.from({ length: 24 }, (_, i) => ({ start: at(14 + i).replace("1
 }
 
 // -- the parts the pointer drives -------------------------------------------
-const helpers = new Function(src + ";return {socHistory, socZoom, socPan, socSpan, socAt, socBounds, socTicks};")();
+const helpers = new Function(src + ";return {socHistory, socZoom, socPan, socSpan, socAt, socBounds, socTicks, socVersus, socMoreInfo, socSvg};")();
 const H = 3600e3;
 const t0 = Date.parse("2026-11-03T00:00:00+01:00");
 {
@@ -158,6 +158,53 @@ const t0 = Date.parse("2026-11-03T00:00:00+01:00");
   const after = helpers.socAt(past, ahead, t0 + 2 * H, t0 + H);
   check("the read-out: measured behind now", before.soc === 50 && !before.expected, before);
   check("and expected ahead of it", after.soc === 30 && after.expected, after);
+}
+
+// --- what was expected, beside what came (10 November) ----------------------
+{
+  check("below, above, on",
+    helpers.socVersus(74, 77.4) === "3 punten onder de verwachting" &&
+    helpers.socVersus(80, 79) === "1 punt boven de verwachting" &&
+    helpers.socVersus(78.2, 78) === "precies op de verwachting" &&
+    helpers.socVersus(null, 78) === "",
+    [helpers.socVersus(74, 77.4), helpers.socVersus(80, 79), helpers.socVersus(78.2, 78)]);
+  const past = [{ t: t0, soc: 50 }, { t: t0 + H, soc: 45 }];
+  const was = [{ t: t0, soc: 54 }];
+  const p = helpers.socAt(past, [], t0 + 5 * 60e3, t0 + H, was);
+  check("the read-out says what was expected for that time", p.soc === 50 && p.was === 54, p);
+  check("not for a time nothing was taken down for",
+    helpers.socAt(past, [], t0 + H, t0 + H, was).was === undefined, "");
+  const svg = helpers.socSvg({ from: t0 - H, to: t0 + 2 * H }, past, [], { was }, t0 + H);
+  check("drawn as its own line", svg.includes('<polyline class="was"'), svg);
+
+  const sent = [];
+  globalThis.CustomEvent = class { constructor(type, init) { this.type = type; Object.assign(this, init); } };
+  const opened = helpers.socMoreInfo({ dispatchEvent: (e) => sent.push(e) }, "sensor.bm_verwacht_accuniveau");
+  check("opens the entity as Home Assistant does",
+    opened && sent[0].type === "hass-more-info" && sent[0].detail.entityId === "sensor.bm_verwacht_accuniveau" &&
+    sent[0].bubbles && sent[0].composed, sent);
+  check("and does nothing without one", helpers.socMoreInfo({ dispatchEvent: () => {} }, null) === false, "");
+
+  const out = render({
+    buy_ceiling_min: 25,
+    forecast: {
+      soc, empty_at: null, short_kwh: 0, lowest: null, peak: null, hold_hours: [],
+      expected: [{ start: at(13), soc: 74 }, { start: at(14), soc: 81 }],
+      expected_lead_hours: 3, expected_now: 81, actual_soc: 78.4,
+      expected_entity: "sensor.bm_verwacht_accuniveau",
+    },
+  });
+  check("the charge now is the packs' own", out.now === "78 %", out.now);
+  check("beside what was expected for it",
+    (nodes.get("fcvs") || {}).textContent === "Verwacht was 81 % (3 uur eerder): 3 punten onder de verwachting.",
+    (nodes.get("fcvs") || {}).textContent);
+  check("a button to open its history", out.chart.includes('data-more="1"'), out.chart);
+  check("the legend says what the grey line is", out.legend.includes("3 uur eerder verwacht"), out.legend);
+  check("the big figure opens it too", typeof (nodes.get("fcnow") || {}).onclick === "function", "");
+
+  const older = render({ forecast: { soc, hold_hours: [] } });
+  check("from an older integration: no button, no comparison",
+    !older.chart.includes("data-more") && (nodes.get("fcvs") || {}).textContent === "", older.chart.length);
 }
 
 console.log(fails ? `\n${fails} FAILED` : "\nforecast card checks pass");

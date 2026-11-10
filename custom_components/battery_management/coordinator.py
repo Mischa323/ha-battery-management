@@ -203,6 +203,8 @@ from .const import (
     BASE_LOAD_MIN_BUCKETS,
     BASE_LOAD_STEADY_W,
     BUY_CEILING_BAND,
+    EXPECTED_KEEP_HOURS,
+    EXPECTED_LEAD_HOURS,
     GOAL_DONE_KWH,
     PACK_DRAIN_MIN_KWH,
     ALERT_NO_GRID_S,
@@ -782,6 +784,12 @@ class BatteryCoordinator:
         #: what the fill bought for the coming sale: {until, kwh, eur, sold}.
         #: A sale weighs these kWh against what they cost (`fill_lot`).
         self._fill_lot: dict = {}
+        #: per slot, the charge the forecast expected for it EXPECTED_LEAD_HOURS
+        #: before - kept to set beside what the packs then held
+        self.expected_log: dict[str, float] = {}
+        #: the Expected charge sensor's entity id, once it is added, so the
+        #: card can open it as Home Assistant opens any entity
+        self.expected_entity_id: str | None = None
         #: whether the packs are currently above the min-output floor. Starts
         #: idle, so a restart never opens with a command too small to hold.
         self._above_min_output: bool = False
@@ -930,6 +938,7 @@ class BatteryCoordinator:
             "goal_day": dict(self._goal_day),
             "day_goal_kwh": self.day_goal_kwh,
             "fill_lot": dict(self._fill_lot),
+            "expected_log": dict(self.expected_log),
             "saved_at": time.time(),
         }
 
@@ -3477,6 +3486,7 @@ class BatteryCoordinator:
         if forecast is None:
             return None
         rows = forecast["slots"]
+        self._remember_expected(rows, now)
         peak = self._peak_run(slots, now)
         empty = next((r for r in rows if r["short"] > GOAL_DONE_KWH), None)
         low = min(rows, key=lambda r: r["soc"]) if rows else None
@@ -3504,8 +3514,54 @@ class BatteryCoordinator:
                 for cfg in self._units
                 if (snap := self._unit_snapshot(cfg)).online and cfg.soc_sensor
             ],
+            # what was expected for the hours gone by, EXPECTED_LEAD_HOURS
+            # before each, and the charge now beside what was expected for it
+            "expected": [
+                {"start": key, "soc": soc}
+                for key, soc in sorted(self.expected_log.items())
+                if key <= _slot_key(slot_at(slots, now) or rows[0]["slot"])
+            ],
+            "expected_lead_hours": EXPECTED_LEAD_HOURS,
+            "expected_now": self.expected_now(slots, now),
+            "actual_soc": self.actual_soc(),
+            "expected_entity": self.expected_entity_id,
             "_holds": holds,
         }
+
+    def _remember_expected(self, rows, now) -> None:
+        """Take down each slot's expected charge once, when it comes in range.
+
+        The first time a slot is within EXPECTED_LEAD_HOURS its forecast is
+        kept, and never overwritten: what was expected three hours before,
+        not what is expected a minute before - which would always be right.
+        Kept for EXPECTED_KEEP_HOURS.
+        """
+        horizon = now + timedelta(hours=EXPECTED_LEAD_HOURS)
+        for row in rows:
+            if row["slot"].start > horizon:
+                break
+            self.expected_log.setdefault(_slot_key(row["slot"]), row["soc"])
+        oldest = (now - timedelta(hours=EXPECTED_KEEP_HOURS)).astimezone(timezone.utc).isoformat()
+        for key in [k for k in self.expected_log if k < oldest]:
+            del self.expected_log[key]
+
+    def expected_now(self, slots=None, now=None) -> float | None:
+        """The charge expected for the slot we are in, EXPECTED_LEAD_HOURS before."""
+        slots = slots if slots is not None else self._price_forecast()
+        now = now or dt_util.utcnow()
+        current = slot_at(slots, now) if slots else None
+        return None if current is None else self.expected_log.get(_slot_key(current))
+
+    def actual_soc(self) -> float | None:
+        """The packs' charge now, weighted by their size."""
+        held = [
+            (snap.soc, snap.unit_max) for cfg in self._units
+            if (snap := self._unit_snapshot(cfg)).online and snap.soc is not None
+            and snap.unit_max > 0
+        ]
+        if not held:
+            return None
+        return round(sum(s * w for s, w in held) / sum(w for _, w in held), 1)
 
     def _peak_run(self, slots, now) -> list:
         """The slots of the coming peak: the dear stretch `_next_peak_start` finds."""
@@ -5208,6 +5264,9 @@ class BatteryCoordinator:
             }
         if stored.get("day_goal_kwh") is not None:
             self.day_goal_kwh = max(0.0, float(stored["day_goal_kwh"]))
+        for key, soc in (stored.get("expected_log") or {}).items():
+            if soc is not None:
+                self.expected_log[str(key)] = float(soc)
         lot = stored.get("fill_lot")
         if isinstance(lot, dict) and lot.get("until"):
             self._fill_lot = {
