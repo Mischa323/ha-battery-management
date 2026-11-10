@@ -25,8 +25,8 @@ const check = (name, cond, got) => {
   else console.log("ok  ", name);
 };
 
-const { moneyTone, paybackSays } = new Function(
-  src + ";return {moneyTone, paybackSays};"
+const { moneyTone, paybackSays, grossSays } = new Function(
+  src + ";return {moneyTone, paybackSays, grossSays};"
 )();
 const Savings = _defined.get("battery-management-savings-card");
 check("the card is registered", !!Savings, [..._defined.keys()]);
@@ -110,6 +110,21 @@ function render(opts) {
     /\.gain \{ color: var\(--success-color/.test(card.innerHTML) &&
     /\.loss \{ color: var\(--error-color/.test(card.innerHTML),
     card.innerHTML.length);
+}
+
+// --- the Anker app's figure beside it (10 November) -------------------------
+{
+  render();
+  check("from an older integration, nothing", node("svgross").textContent === "",
+    node("svgross").textContent);
+  check("all three periods, and what it leaves out",
+    grossSays({ gross_eur: 4.64 }, { gross_eur: 26.87 }, { gross_eur: 89.5 }) ===
+      "Zoals de Anker-app telt (ontladen × stroomprijs, inkoop niet afgetrokken): " +
+      "vandaag €4,64, deze maand €26,87, sinds start €89,50.",
+    grossSays({ gross_eur: 4.64 }, { gross_eur: 26.87 }, { gross_eur: 89.5 }));
+  check("a period it has no figure for is a dash",
+    grossSays({ gross_eur: 1 }, null, {}).includes("deze maand —"),
+    grossSays({ gross_eur: 1 }, null, {}));
 }
 
 // --- which footing ----------------------------------------------------------

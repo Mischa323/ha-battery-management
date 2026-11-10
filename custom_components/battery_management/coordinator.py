@@ -340,6 +340,15 @@ def _local_time(start: str) -> str:
     return (f"{moment:%d-%m} " if moment.date() != today else "") + f"{moment:%H:%M}"
 
 
+def _lot_end(lot: dict) -> datetime | None:
+    """When a fill lot's sale window closes, or None for no (readable) lot."""
+    try:
+        end = datetime.fromisoformat(lot["until"]) if lot.get("until") else None
+    except (TypeError, ValueError):
+        return None
+    return end if end is None or end.tzinfo else end.replace(tzinfo=timezone.utc)
+
+
 def _slot_key_of(start: str) -> str:
     """`_slot_key` for a slot start already written out, as the plan does."""
     return datetime.fromisoformat(start).astimezone(timezone.utc).isoformat()
@@ -770,6 +779,9 @@ class BatteryCoordinator:
         #: tick together; nothing it reads moves inside one.
         self._fill_memo_on: bool = False
         self._fill_memo: tuple | None = None
+        #: what the fill bought for the coming sale: {until, kwh, eur, sold}.
+        #: A sale weighs these kWh against what they cost (`fill_lot`).
+        self._fill_lot: dict = {}
         #: whether the packs are currently above the min-output floor. Starts
         #: idle, so a restart never opens with a command too small to hold.
         self._above_min_output: bool = False
@@ -917,6 +929,7 @@ class BatteryCoordinator:
             "round_trip_history": dict(self.round_trip_history),
             "goal_day": dict(self._goal_day),
             "day_goal_kwh": self.day_goal_kwh,
+            "fill_lot": dict(self._fill_lot),
             "saved_at": time.time(),
         }
 
@@ -1897,6 +1910,10 @@ class BatteryCoordinator:
                 "above_floor_kwh": self.energy_above_sell_line(),
                 # how full it buys for tonight's sale, when that pays
                 "fill_to": self.trade_fill_ceiling(),
+                "fill_for": (
+                    self._buy_before().isoformat()
+                    if self.trade_fill_ceiling() is not None and self._buy_before() else None
+                ),
                 "sell_hours": describe(
                     s for s in sorted(slots or [], key=lambda s: s.start)
                     if _slot_key(s) in sell_at
@@ -2351,6 +2368,88 @@ class BatteryCoordinator:
         if self._fill_memo_on:
             self._fill_memo = value
         return value
+
+    def fill_lot(self, slots=None) -> dict | None:
+        """The kWh bought - or still to buy - for the coming sale, and their price.
+
+        10 November: the fill bought 12 kWh at EUR 0.40 in the night to sell
+        in the morning peak at 0.58-0.60 - a purchase it made because the pair
+        cleared the margin. When the morning came the sale weighed each kWh
+        against the refill after it, 0.47, and sold nothing. A kWh bought for
+        a sale needs no refill after it: the purchase was the refill. So until
+        it is sold, or the sale window it was bought for closes at noon, a sale
+        weighs those kWh against what they cost - the test that bought them.
+
+        Two parts: what was bought (`_fill_lot`), never more than is still
+        above the sell line, and what the fill still means to buy in the slots
+        ahead, so the plan shows the sale the purchase is for. {kwh, price,
+        until}, or None.
+        """
+        now = dt_util.utcnow()
+        kwh = eur = 0.0
+        until = None
+        lot = self._fill_lot
+        end = _lot_end(lot)
+        if end is not None and now < end and lot.get("kwh", 0.0) > 0:
+            left = lot["kwh"] - lot.get("sold", 0.0)
+            above = self.energy_above_sell_line()
+            if above is not None:
+                left = min(left, above)
+            if left > GOAL_DONE_KWH:
+                kwh, eur, until = left, left * lot["eur"] / lot["kwh"], end
+        ceiling, keys = self._trade_fill()
+        if ceiling is not None and keys and self._full_charge_minutes > 0:
+            slots = slots if slots is not None else (self._price_forecast() or [])
+            ahead = [s for s in slots if _slot_key(s) in keys and s.end > now]
+            units = [self._unit_snapshot(cfg) for cfg in self._units]
+            room = sum(
+                max(ceiling - u.soc, 0.0) / 100.0 * u.unit_max * self._full_charge_minutes / 60000.0
+                for u in units if u.online and u.soc is not None
+            )
+            if ahead and room > GOAL_DONE_KWH:
+                kwh += room
+                eur += room * sum(s.price for s in ahead) / len(ahead)
+                window = self._sell_window_end(now)
+                until = window if until is None else max(until, window)
+        if kwh <= GOAL_DONE_KWH or until is None:
+            return None
+        return {"kwh": round(kwh, 2), "price": eur / kwh, "until": until}
+
+    def _fill_lot_price(self) -> float | None:
+        lot = self.fill_lot()
+        return round(lot["price"], 4) if lot else None
+
+    def _track_fill_lot(self, commanded_w: float, elapsed: float) -> None:
+        """Count what a purchase for the sale put in, and at what price.
+
+        Runs at the top of the tick, for the interval the previous tick's
+        command ran under - so the reason it bought is still the last one.
+        """
+        if (
+            self._last_buy_why != "trade_fill"
+            or self.active_policy != POLICY_DYNAMIC_CHARGE
+            or commanded_w <= 0
+        ):
+            return
+        current = self.current_price()
+        if current is None:
+            return
+        now = dt_util.utcnow()
+        lot = self._fill_lot
+        end = _lot_end(lot)
+        if end is None or now >= end:
+            lot = self._fill_lot = {
+                "until": self._sell_window_end(now).isoformat(),
+                "kwh": 0.0, "eur": 0.0, "sold": 0.0,
+            }
+        kwh = commanded_w * elapsed / 3_600_000.0
+        lot["kwh"] += kwh
+        lot["eur"] += kwh * current["price"]
+
+    def _fill_peak(self) -> str:
+        """Which peak a purchase for the sale is for, in words."""
+        peak = self._buy_before()
+        return f"in de piek van {dt_util.as_local(peak):%H:%M}" if peak else "in de piek"
 
     def _trade_fill_ceiling(self) -> tuple[float | None, set]:
         """How full to buy so tonight's sale pays for the purchase, or None.
@@ -3022,6 +3121,7 @@ class BatteryCoordinator:
             "untaxed": self._component_by_slot("untaxed_prices"),
             "slots": slots,
             "values": {},
+            "lot": self.fill_lot(slots),
         }
 
     def _export_value_at(self, slot, ctx) -> float | None:
@@ -3092,11 +3192,12 @@ class BatteryCoordinator:
         grid = self._grid_refill(slot, ctx["slots"])
         solar = self._solar_refill(slot, ctx)
         share = solar["share"] if solar else 0.0
-        return {
-            "refill": blended_refill(grid, solar["value"] if solar else None, share),
-            "grid": grid,
-            "solar": solar,
-        }
+        refill = blended_refill(grid, solar["value"] if solar else None, share)
+        # a kWh the fill bought for this sale was refilled before it was sold
+        lot = ctx.get("lot")
+        if lot and slot.start < lot["until"]:
+            refill = lot["price"] if refill is None else min(refill, lot["price"])
+        return {"refill": refill, "grid": grid, "solar": solar}
 
     def trade_verdict(self) -> dict:
         """Every number behind "sell now or not", for the trace and the card.
@@ -3116,6 +3217,7 @@ class BatteryCoordinator:
             "refill_grid": refill["grid"],
             "solar": refill["solar"],
             "wear": self.battery_wear(),
+            "lot": self._fill_lot_price(),
             "margin": None,
             "saldering": self.saldering_active(),
             "why": None,
@@ -3486,8 +3588,44 @@ class BatteryCoordinator:
     def _planned_flows(self, slots, now) -> tuple[set, set]:
         """The plan's buying and selling slots, as keys, for the forecast."""
         buys = {_slot_key(s) for s in self._buy_slots(slots, now)}
+        buys |= {_slot_key(s) for s in self._after_peak_buys(slots, now)}
         sells = set(self.planned_sell_slots(slots, buys)) if self.trade_mode == TRADE_ON else set()
         return buys, sells
+
+    def _after_peak_buys(self, slots, now) -> list:
+        """In a peak: the cheap slots the night after it will buy, for the forecast.
+
+        The plan's buying stops at the next dear slot, which inside a peak is
+        the next quarter of it, and the ceiling there is "cheaper later" - so
+        in the peak the plan buys nothing, rightly, and the forecast walked
+        on as if nothing would be bought before the next peak either. On 8
+        November it so saw the packs empty in the next morning's peak and kept
+        charge back in the evening at EUR 0.50, which the night then bought
+        anyway at 0.39. Here the night is ranked as it will be once the peak
+        is over: the same cheap slots and margin, up to the next peak, to as
+        full as buying may go (the sun's room and "buy at most"). An
+        expectation for the forecast only; the tick buys nothing in the peak.
+        """
+        if not slots or not self._in_peak(slots, now):
+            return []
+        until = self._next_peak_start(slots, now)
+        if until is None:
+            return []
+        ceiling = self.buy_ceiling_max
+        solar = self._solar_headroom_ceiling()
+        if solar is not None:
+            ceiling = min(ceiling, solar)
+        need = self.hours_of_charge_needed(ceiling=max(ceiling, self.buy_ceiling_min))
+        line = self._dear_line(
+            pick_dearest(slots_in_window(slots, now, PRICE_WINDOW_HOURS), self._expensive_hours)
+        )
+        return [
+            s for s in slots_to_buy(
+                slots, now, self._cheap_hours, PRICE_WINDOW_HOURS, self._price_margin,
+                need, until=until, cost=self._buy_cost(), **self._buy_energy(),
+            )
+            if s.price < line
+        ]
 
     def peak_holds(self, slots, now) -> frozenset:
         """Slots before the coming peak in which the packs give the house nothing.
@@ -4759,6 +4897,7 @@ class BatteryCoordinator:
         if self._goal_day.get("day") != day:
             self._goal_day = {"day": day, "wh": 0.0}
         self._goal_day["wh"] += commanded * elapsed / 3600.0
+        self._track_fill_lot(commanded, elapsed)
         self._track_round_trip(day, elapsed)
 
         charging = 0.0
@@ -4844,6 +4983,11 @@ class BatteryCoordinator:
             "saved_eur" if self.saldering_active() else "saved_after_eur"
         ]
         figures["counted_h"] = hours
+        # the Anker app's way: every kWh out of the packs at the price of the
+        # moment, the cost of charging them left out (10 November)
+        given = max(packs, 0.0) * hours / 1000.0
+        figures["discharged_kwh"] = given
+        figures["gross_eur"] = given * price
         margin = (self.last_trade_verdict or {}).get("margin")
         live = self.enabled and not self.dry_run
         if margin is not None and selling and live:
@@ -4852,6 +4996,8 @@ class BatteryCoordinator:
             kwh = max(-grid, 0.0) * hours / 1000.0
             figures["traded_kwh"] = kwh
             figures["traded_eur"] = kwh * margin
+            if self._fill_lot:
+                self._fill_lot["sold"] = self._fill_lot.get("sold", 0.0) + kwh
         elif margin is not None and (would_sell or selling):
             # what full output would have sent out past the house's own draw
             kwh = max(sell_w - max(without, 0.0), 0.0) * hours / 1000.0
@@ -5062,6 +5208,14 @@ class BatteryCoordinator:
             }
         if stored.get("day_goal_kwh") is not None:
             self.day_goal_kwh = max(0.0, float(stored["day_goal_kwh"]))
+        lot = stored.get("fill_lot")
+        if isinstance(lot, dict) and lot.get("until"):
+            self._fill_lot = {
+                "until": str(lot["until"]),
+                "kwh": float(lot.get("kwh") or 0.0),
+                "eur": float(lot.get("eur") or 0.0),
+                "sold": float(lot.get("sold") or 0.0),
+            }
         for key, profile in (
             ("draw_profile", self.draw_profile),
             ("draw_profile_weekend", self.draw_profile_weekend),
@@ -5571,7 +5725,7 @@ class BatteryCoordinator:
             else:
                 said = {
                     "pays": f"koopt {watts} W: goedkoop kwartier, loont",
-                    "trade_fill": f"koopt {watts} W bij om vanavond te verkopen",
+                    "trade_fill": f"koopt {watts} W bij om {self._fill_peak()} te verkopen",
                     "latched": f"koopt {watts} W: maakt dit kwartier af",
                 }.get(why, f"koopt {watts} W")
         elif policy == POLICY_TRADE_SELL:
@@ -6304,7 +6458,7 @@ class BatteryCoordinator:
                 why = {
                     "minimum": "om het minimum te halen",
                     "day_goal": "voor het dagdoel",
-                    "trade_fill": "om vanavond te verkopen",
+                    "trade_fill": f"om {self._fill_peak()} te verkopen",
                 }.get(self._last_buy_why, "")
                 await self._alert(
                     f"dear_buy:{_slot_key(current)}", "Koopt tegen piekprijs",

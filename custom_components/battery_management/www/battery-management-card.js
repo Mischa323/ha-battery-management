@@ -2181,8 +2181,10 @@ function goalSays(goal) {
  */
 function fillSays(trade) {
   if (!trade || trade.fill_to == null) return "";
+  // the peak it is for: on 10 November that was the morning, not "vanavond"
+  const peak = trade.fill_for ? "in de piek van " + hhmm(trade.fill_for) : "in de piek";
   return " Laadt bij tot " + Math.round(trade.fill_to) +
-    " % om vanavond te verkopen: de avond levert meer op dan het inkopen kost.";
+    " % om " + peak + " te verkopen: de piek levert meer op dan het inkopen kost.";
 }
 
 /**
@@ -3273,6 +3275,23 @@ const moneyTone = (value) =>
       : "loss";
 
 /**
+ * The figure the Anker app shows, beside the real saving.
+ *
+ * Asked for on 10 November: the app's "Inkomsten" stood well above the
+ * saving here. It counts every kWh out of the packs at the price of the
+ * moment and leaves out what charging them cost - over 8-10 November EUR 27
+ * against about 5. Both are worth seeing; this says which is which. Empty
+ * from an integration that does not count it yet.
+ */
+function grossSays(today, month, total) {
+  const all = [today, month, total].map((a) => (a || {}).gross_eur);
+  if (all.every((v) => v === undefined || v === null)) return "";
+  const at = (v) => (v === undefined || v === null || isNaN(v) ? "—" : euro(v));
+  return "Zoals de Anker-app telt (ontladen × stroomprijs, inkoop niet afgetrokken): vandaag " +
+    at(all[0]) + ", deze maand " + at(all[1]) + ", sinds start " + at(all[2]) + ".";
+}
+
+/**
  * What the packs have saved, and when they will have paid for themselves.
  *
  * Its own card so it can have its own dashboard: this is looked at once a
@@ -3332,6 +3351,7 @@ class BatteryManagementSavingsCard extends HTMLElement {
             <div class="tile"><div class="n" id="svtotal">—</div><div class="l muted">sinds start</div></div>
           </div>
           <div class="muted note" id="svfooting"></div>
+          <div class="muted note" id="svgross"></div>
           <h4>Terugverdientijd</h4>
           <div id="svpay">—</div>
           <div class="muted note" id="svpaynote"></div>
@@ -3371,6 +3391,12 @@ class BatteryManagementSavingsCard extends HTMLElement {
         : total.saldering
           ? "Gerekend met saldering: teruggeleverde stroom levert ook de energiebelasting op."
           : "Gerekend zonder saldering: teruggeleverde stroom levert alleen de vergoeding op.";
+
+    el("svgross").textContent = grossSays(
+      (this._state("savings_today") || {}).attributes,
+      (this._state("savings_month") || {}).attributes,
+      total,
+    );
 
     const pay = paybackSays(this._state("payback"));
     el("svpay").textContent = pay.main;

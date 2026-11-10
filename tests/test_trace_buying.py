@@ -182,7 +182,7 @@ async def test_a_goal_slot_that_pays_anyway_says_it_pays(day, monkeypatch):
 
 
 async def test_finishing_a_purchase_keeps_the_reason_it_started_for(afternoon):
-    """Bought to sell tonight, and the second tick of the slot says so too -
+    """Bought to sell in the peak, and the second tick of the slot says so too -
     not just "finishing the slot"."""
     system = afternoon()
     co = system.coordinator
@@ -194,4 +194,4 @@ async def test_finishing_a_purchase_keeps_the_reason_it_started_for(afternoon):
 
     assert row["buy_slot"] == "latched"
     assert row["buy_why"] == "trade_fill"
-    assert "om vanavond te verkopen" in row["doing"]
+    assert "om in de piek van 18:00 te verkopen" in row["doing"]

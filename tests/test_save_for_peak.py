@@ -20,6 +20,7 @@ import pytest
 
 from custom_components.battery_management import coordinator as coordinator_module
 from custom_components.battery_management.const import (
+    POLICY_DYNAMIC_CHARGE,
     POLICY_SAVE_FOR_PEAK,
     TRADE_OFF,
 )
@@ -247,3 +248,65 @@ def test_no_more_than_the_peak_is_short_of(house):
     """At 50 % the packs give 11.8 kWh: 10 for the afternoon leaves the peak
     6.2 short. Four afternoon hours kept cover it; 17:00 is not needed."""
     assert hours_of(holds(house(soc=50.0))) == [13, 14, 15, 16]
+
+
+# -- in the peak, the night's buying is in the plan -----------------------------
+
+NIGHT_AND_MORNING = dict(
+    AFTERNOON_AT_040,
+    overrides={**AFTERNOON_AT_040["overrides"],
+               **{24 + h: 0.20 for h in (2, 3, 4)}, **{24 + h: 0.60 for h in (7, 8)}},
+)
+
+
+@pytest.fixture
+def in_the_peak(house, monkeypatch):
+    """19:00 in the 0.45 evening peak; the night at 0.20, a 0.60 morning peak."""
+
+    def _build(**kwargs):
+        system = house(**{"soc": 40.0, **NIGHT_AND_MORNING, **kwargs})
+        monkeypatch.setattr(coordinator_module.dt_util, "utcnow",
+                            lambda: AFTERNOON.replace(hour=19))
+        system.hass.states.set(GRID_SENSOR, 2000)
+        return system
+
+    return _build
+
+
+def test_in_the_peak_the_forecast_buys_in_the_night_after_it(in_the_peak):
+    """8 November: in the evening peak the plan bought nothing - the next dear
+    slot was the next quarter - and the forecast walked on as if the night
+    would not buy either. The plan's own buying still waits for the peak to
+    pass; the forecast expects the night."""
+    co = in_the_peak().coordinator
+    now = coordinator_module.dt_util.utcnow()
+    slots = co._price_forecast()
+
+    expected = hours_of(co._planned_flows(slots, now)[0])
+
+    assert {2, 3, 4} <= set(expected)
+    assert not {19, 20, 21} & set(expected)
+    assert co._buy_slots(slots, now) == []
+
+
+def test_so_the_morning_is_not_short(in_the_peak):
+    rows = forecast(in_the_peak())["slots"]
+    morning = [r for r in rows if r["slot"].start.hour in (7, 8)
+               and r["slot"].start.date() > AFTERNOON.date()]
+
+    assert sum(r["short"] for r in morning) == pytest.approx(0.0)
+
+
+def test_so_the_evening_is_not_kept_for_the_morning(in_the_peak):
+    """With the night's purchase in the forecast the morning is covered: no
+    charge held back in tonight's peak at 0.45."""
+    assert holds(in_the_peak()) == frozenset()
+
+
+async def test_the_tick_still_buys_nothing_in_the_peak(in_the_peak):
+    co = in_the_peak().coordinator
+
+    await co._async_tick(None)
+
+    assert co.active_policy != POLICY_DYNAMIC_CHARGE
+    assert co.setpoint > 0
