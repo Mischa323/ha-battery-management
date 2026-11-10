@@ -1,8 +1,9 @@
-// The plan card draws the expected charge and says what is kept for the peak.
+// The plan card says what is kept for the peak; the chart is not on it.
 //
 // Asked for on 1 November, after the packs met the EUR 0.49 peak empty with
-// nothing on the card to say they would: the line answers "will it reach the
-// peak" before the evening, and the sentence says which hours are kept for it.
+// nothing on the card to say they would: the sentence says which hours are
+// kept for it. The line itself moved to its own card on 10 November - "deze
+// had gescheiden moeten worden in twee losse kaarten" - see forecast_card.mjs.
 import { readFileSync } from "node:fs";
 process.env.TZ = "Europe/Amsterdam";
 const src = readFileSync(
@@ -42,7 +43,7 @@ function render(planAttrs) {
   };
   card.setConfig({ plan: "sensor.bm_plan" });
   card.hass = { states: { "sensor.bm_plan": { state: "ok", attributes: planAttrs } } };
-  return { html: card._html, soc: nodes.get("plsoc").innerHTML, hold: nodes.get("plhold").textContent };
+  return { html: card._html, soc: (nodes.get("plsoc") || {}).innerHTML || "", hold: nodes.get("plhold").textContent };
 }
 
 const at = (h) => `2026-11-01T${String(h).padStart(2, "0")}:00:00+01:00`;
@@ -59,13 +60,11 @@ const base = { mode: "dynamic", has_prices: true, hours: [], expected: {} };
       { start: at(16), end: at(17), price: 0.41 },
     ],
   } });
-  check("a line is drawn", out.soc.includes('<polyline class="line"') && out.soc.includes("<svg"), out.soc);
-  check("the peak is shaded, and the kept hours", out.soc.includes('class="peak"') &&
-    (out.soc.match(/class="hold"/g) || []).length === 3, out.soc);
+  check("no chart on the plan card: it has its own", out.soc === "" &&
+    !out.html.includes("Verwacht accuniveau") && !out.html.includes('id="plsoc"'), out.soc);
   check("the sentence names the peak, its price and the kept hours, merged",
     out.hold.includes("Bewaart lading voor de piek van 17:00 (gem. €0,49)") &&
     out.hold.includes("ontlaadt niet 13:00–15:00, 16:00–17:00"), out.hold);
-  check("the card has the section", out.html.includes("Verwacht accuniveau"), "");
 }
 
 {
@@ -87,7 +86,7 @@ const base = { mode: "dynamic", has_prices: true, hours: [], expected: {} };
 
 {
   const out = render({ ...base });
-  check("an older integration: nothing drawn, nothing said", out.soc === "" && out.hold === "", out);
+  check("an older integration: nothing said", out.hold === "", out);
 }
 
 console.log(fails ? `\n${fails} FAILED` : "\nforecast checks pass");
