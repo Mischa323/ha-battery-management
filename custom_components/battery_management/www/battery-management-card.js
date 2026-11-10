@@ -2335,7 +2335,6 @@ class BatteryManagementPlanCard extends HTMLElement {
           .tag.later { border:1px solid var(--info-color,#039be5);
                        color:var(--info-color,#039be5); }
           .note { font-size:.86em; margin:4px 0 0; }
-          ${SOC_STYLE}
         </style>
         <div class="plc">
           <div class="row"><b id="plnow">—</b><span class="muted" id="plmode"></span></div>
@@ -2353,8 +2352,6 @@ class BatteryManagementPlanCard extends HTMLElement {
           </div>
           <div class="muted note" id="plwhy"></div>
           <div class="muted note" id="plsunshare"></div>
-          <h4>Verwacht accuniveau</h4>
-          <div id="plsoc"></div>
           <div class="muted note" id="plhold"></div>
         </div>
       </ha-card>`;
@@ -2440,8 +2437,9 @@ class BatteryManagementPlanCard extends HTMLElement {
     // ---- when it sells, if slim handelen is on ----
     el("plsell").innerHTML = planState ? sellNotes(plan, sellRows) : "";
 
-    // ---- how full, the next 24 hours ----
-    mountSocChart(this, el("plsoc"), plan, 90);
+    // what is kept for the peak, in words; the chart is the Verwachting
+    // card's (10 November: "deze had gescheiden moeten worden in twee losse
+    // kaarten")
     el("plhold").textContent = holdSays(plan.forecast);
 
     const ahead = rows.filter((h) => !h.past);
@@ -2612,13 +2610,15 @@ function socTicks(view) {
 }
 
 const SOC_STYLE = `
-  .fc .bar { display:flex; gap:4px; justify-content:flex-end; margin:6px 0 0; }
-  .fc .bar button { font:inherit; font-size:.75em; padding:2px 8px; border-radius:10px;
+  .fc .bar { display:flex; flex-wrap:wrap; gap:4px; justify-content:flex-end; margin:6px 0 0; }
+  .fc .bar button { -webkit-appearance:none; appearance:none; flex:0 0 auto; line-height:1.4;
+    font:inherit; font-size:.75em; padding:2px 8px; border-radius:10px;
     border:1px solid var(--divider-color,#ccc); background:none; color:var(--primary-text-color);
     cursor:pointer; }
   .fc .bar button.on { background:var(--primary-color,#03a9f4); color:#fff; border-color:transparent; }
   .fc .plot { position:relative; margin:6px 0 0 34px; touch-action:pan-y; cursor:grab; user-select:none; }
-  .fc svg { width:100%; height:100%; display:block; overflow:visible; }
+  .fc .svg { position:absolute; left:0; right:0; top:0; bottom:0; overflow:hidden; }
+  .fc svg { position:absolute; left:0; top:0; width:100%; height:100%; display:block; }
   .fc .grid { stroke:var(--divider-color,#ddd); stroke-width:1; vector-effect:non-scaling-stroke; }
   .fc .minimum { stroke:var(--secondary-text-color,#727272); stroke-width:1; stroke-dasharray:4 3; vector-effect:non-scaling-stroke; }
   .fc .nowline { stroke:var(--primary-text-color,#212121); stroke-width:1; opacity:.5; vector-effect:non-scaling-stroke; }

@@ -221,7 +221,7 @@ no manual resource step:
 | --- | --- |
 | **Battery Management Card** | The control panel: on/off, fast charge, state of charge per pack, and the price chart underneath. |
 | **Battery Management Prices** | Only the prices — current price large, today's bars, and the cheapest and dearest hour with their times. |
-| **Battery Management Verwachting** | How full the packs are, and are expected to be: the recorder's history solid, the forecast dashed, with the coming peak shaded red, the hours kept for it orange and the minimum dashed. Zoom with 6u/12u/24u/48u, the mouse wheel or two fingers, drag to look back or ahead, and hover or tap for the figure at that time. *nu* goes back to now. The plan card carries the same chart, smaller. |
+| **Battery Management Verwachting** | How full the packs are, and are expected to be: the recorder's history solid, the forecast dashed, with the coming peak shaded red, the hours kept for it orange and the minimum dashed. Zoom with 6u/12u/24u/48u, the mouse wheel or two fingers, drag to look back or ahead, and hover or tap for the figure at that time. *nu* goes back to now. The chart is on this card only; the plan card keeps the sentence about what is kept for the peak. |
 | **Battery Management Trading** | Selling to the grid: Off / Shadow / On, whether it pays right now with the sum written out, and what it sold (or would have, in shadow) today. Belongs beside the controls. See [Selling to the grid](#selling-to-the-grid). |
 | **Battery Management Savings** | What the packs saved today, this month and since the start — green when they saved, red when they lost — and the payback time. Made for a dashboard of its own. |
 
@@ -1100,12 +1100,11 @@ charge is not lost: it goes out in the peak instead. The status is *Keeping
 the charge for the coming peak*.
 
 The walk leaves out sun beyond the usual, so on a bright day the packs end up
-fuller than it says. The plan card, and the *Verwachting* card on its own,
-draw the walk under *Verwacht accuniveau*, beside the charge the recorder
-measured. The chart works like Home Assistant's own graphs: it zooms, drags,
-and gives a read-out under the pointer. The peak is shaded red and the kept
-hours orange. Underneath, a sentence says what is kept, or when the packs run
-dry, or how low they get. The Plan sensor carries it as `forecast` (`soc`,
+fuller than it says. The *Verwachting* card draws the walk beside the
+charge the recorder measured. The chart works like Home Assistant's own
+graphs: it zooms, drags, and gives a read-out under the pointer. The peak is
+shaded red and the kept hours orange. The plan card has no chart; it says in
+a sentence what is kept, or when the packs run dry, or how low they get. The Plan sensor carries it as `forecast` (`soc`,
 `empty_at`, `short_kwh`, `lowest`, `peak`, `hold_hours`, and `soc_entities`
 for the history), and each hour has `hold`.
 
