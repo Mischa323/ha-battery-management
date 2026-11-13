@@ -84,6 +84,12 @@ RESOLUTIONS = [RESOLUTION_PUBLISHED, RESOLUTION_HOURLY]
 DEFAULT_PRICE_RESOLUTION = RESOLUTION_PUBLISHED
 
 PRICE_REFRESH_MINUTES = 60
+#: Tomorrow's prices are published around 13:00. On the hourly refresh alone
+#: they arrived up to an hour later - "meestal pas na 13:30 of later" (13
+#: November) - and the plan is made on half a day until they do. From this
+#: hour on, while tomorrow is missing, the supplier is asked this often.
+PRICE_PUBLISH_HOUR = 13
+PRICE_CHASE_MINUTES = 5
 # Seconds. A supplier that is slow to answer must not hold up a control tick.
 PRICE_TIMEOUT = 20
 # A fetched forecast older than this is dropped rather than ranked on. In

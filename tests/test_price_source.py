@@ -11,11 +11,13 @@ inventing a price.
 from __future__ import annotations
 
 import time
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
 from homeassistant.util import dt as dt_util
+
+from custom_components.battery_management import coordinator as coordinator_module
 
 from custom_components.battery_management.const import (
     CONF_PRICE_RESOLUTION,
@@ -485,3 +487,78 @@ async def test_gas_is_never_ranked(build_system):
     await system.coordinator.async_refresh_prices()
 
     assert [s.price for s in system.coordinator._price_forecast()] == [0.23]
+
+
+# -- tomorrow's prices, as soon as they are published (13 November) --------------
+
+
+def day_of(date: str, price: float = 0.10) -> dict:
+    return frank_answer(
+        [
+            {
+                "from": f"{date}T{hour:02d}:00:00.000Z",
+                "till": f"{date}T{hour:02d}:59:59.999Z" if hour == 23 else f"{date}T{hour + 1:02d}:00:00.000Z",
+                "marketPrice": price,
+                "energyTaxPrice": 0.13,
+            }
+            for hour in range(24)
+        ]
+    )
+
+
+def at_clock(monkeypatch, hour: int, minute: int = 0):
+    moment = datetime(2026, 9, 1, hour, minute, tzinfo=timezone.utc)
+    monkeypatch.setattr(coordinator_module.dt_util, "utcnow", lambda: moment)
+    monkeypatch.setattr(coordinator_module.dt_util, "now", lambda: moment)
+
+
+async def test_after_one_it_asks_again_until_tomorrow_is_in(build_system, monkeypatch):
+    """ "Franky deelt het tarief van de volgende dag rond 13:00, maar HA heeft
+    het meestal pas na 13:30 of later door": the hourly refresh. From 13:00,
+    while tomorrow is missing, it is asked for every few minutes."""
+    at_clock(monkeypatch, 13, 5)
+    session = FakeSession(replies=[day_of("2026-09-01"), FRANK_UNPUBLISHED])
+    system = with_frank(build_system, session)
+    await system.coordinator.async_refresh_prices()
+    asked = len(session.calls)
+    assert system.coordinator.tomorrow_published() is False
+
+    await system.coordinator.async_chase_tomorrow()
+
+    assert len(session.calls) > asked
+
+
+async def test_not_before_the_hour_they_are_published(build_system, monkeypatch):
+    at_clock(monkeypatch, 12, 55)
+    session = FakeSession(replies=[day_of("2026-09-01"), FRANK_UNPUBLISHED])
+    system = with_frank(build_system, session)
+    await system.coordinator.async_refresh_prices()
+    asked = len(session.calls)
+
+    await system.coordinator.async_chase_tomorrow()
+
+    assert len(session.calls) == asked
+
+
+async def test_nor_once_tomorrow_is_there(build_system, monkeypatch):
+    at_clock(monkeypatch, 13, 10)
+    session = FakeSession(replies=[day_of("2026-09-01"), day_of("2026-09-02")])
+    system = with_frank(build_system, session)
+    await system.coordinator.async_refresh_prices()
+    asked = len(session.calls)
+    assert system.coordinator.tomorrow_published() is True
+
+    await system.coordinator.async_chase_tomorrow()
+
+    assert len(session.calls) == asked
+
+
+async def test_a_price_sensor_of_another_integration_is_not_chased(build_system, monkeypatch):
+    at_clock(monkeypatch, 14, 0)
+    session = FakeSession(day_of("2026-09-01"))
+    system = build_system(grid=0)
+    use(system, session)
+
+    await system.coordinator.async_chase_tomorrow()
+
+    assert session.calls == []

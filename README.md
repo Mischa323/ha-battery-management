@@ -464,7 +464,10 @@ document would lose today along with it, every morning. Two requests let the
 missing day fail on its own.
 
 Prices are re-fetched hourly, which is about noticing that tomorrow has been
-published rather than tracking anything. A supplier that cannot be reached is
+published rather than tracking anything. From 13:00, while tomorrow is still
+missing, the supplier is asked every five minutes instead. On the hourly
+refresh alone tomorrow arrived up to an hour after it was published, and the
+plan stood on half a day until then. A supplier that cannot be reached is
 not an error state — no forecast disables cheap-hour charging and leaves
 grid-zero regulating exactly as it does without a dynamic contract. The previous
 answer is kept, because prices do not change retroactively and old slots fall
@@ -1124,6 +1127,15 @@ day between EUR 0.30 and 0.44:
 - **The minimum is never bought at peak level:** at 07:24, under the minimum
   and inside the peak, it bought at 0.418 and gave it back to the house the
   same hour. What the slots outside a peak cannot reach is left unbought.
+
+**What the packs hold already goes first.** A purchase is weighed against
+the kWh the house would otherwise import at the dearest prices. What is in
+the packs already covers the dearest of those, so a purchase is for the kWh
+after them. Counted from nought, every tick weighed its buying as if the
+packs were empty. On 13 November at 11:15, at 47 %, it bought 12.2 kWh at
+EUR 0.322, which is 0.43 back out of the packs. The charge it had already
+covered the evening to 22:30, so the purchase went to the night after.
+*Minimum charge* and the *Day goal* are bought whatever this says.
 
 **Not kept when it comes back cheaper.** Keeping the charge pays when there
 is nothing better to do with it until the peak. When a slot still to come

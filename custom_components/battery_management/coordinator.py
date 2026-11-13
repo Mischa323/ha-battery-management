@@ -173,6 +173,8 @@ from .const import (
     DEFAULT_SHADOW_SIMULATE,
     DEFAULT_SOC_RESERVE,
     DEFAULT_SOLAR_FORECAST_MAX,
+    PRICE_CHASE_MINUTES,
+    PRICE_PUBLISH_HOUR,
     PRICE_REFRESH_MINUTES,
     RESOLUTION_HOURLY,
     PRICE_TIMEOUT,
@@ -842,6 +844,7 @@ class BatteryCoordinator:
         self._was_online: dict[str, bool] = {u.name: False for u in self._units}
         self._unsub = None
         self._unsub_prices = None
+        self._unsub_chase = None
         # what a supplier last told us, in the shape parse_forecast reads
         self._supplier_prices: dict = {}
         self.prices_fetched_at: float | None = None
@@ -884,6 +887,11 @@ class BatteryCoordinator:
                 self.hass,
                 self.async_refresh_prices,
                 timedelta(minutes=PRICE_REFRESH_MINUTES),
+            )
+            self._unsub_chase = async_track_time_interval(
+                self.hass,
+                self.async_chase_tomorrow,
+                timedelta(minutes=PRICE_CHASE_MINUTES),
             )
 
     # -- persisted state -----------------------------------------------------
@@ -1062,6 +1070,9 @@ class BatteryCoordinator:
         if self._unsub_prices:
             self._unsub_prices()
             self._unsub_prices = None
+        if self._unsub_chase:
+            self._unsub_chase()
+            self._unsub_chase = None
         # A probe left running would command a pack *after* the safe revert had
         # already let go of it, and per gotcha 1 that pack then holds power
         # indefinitely. Cancel first, revert second.
@@ -1371,6 +1382,31 @@ class BatteryCoordinator:
                 self._price_source,
             )
         self._notify()
+
+    def tomorrow_published(self) -> bool:
+        """Does the forecast reach into tomorrow yet?"""
+        tomorrow = dt_util.as_local(dt_util.utcnow()).date() + timedelta(days=1)
+        return any(
+            dt_util.as_local(slot.start).date() >= tomorrow
+            for slot in (self._price_forecast() or [])
+        )
+
+    async def async_chase_tomorrow(self, _now=None) -> None:
+        """From the publishing hour on, ask until tomorrow's prices are in.
+
+        Reported on 13 November: the supplier has them around 13:00 and Home
+        Assistant "meestal pas na 13:30 of later" - the hourly refresh, whose
+        minute is whenever the integration happened to start. Until they
+        arrive the plan stands on what is left of today. Nothing is asked
+        before the hour, nor once tomorrow is there.
+        """
+        if self._price_source not in FETCHERS:
+            return
+        if dt_util.as_local(dt_util.utcnow()).hour < PRICE_PUBLISH_HOUR:
+            return
+        if self.tomorrow_published():
+            return
+        await self.async_refresh_prices()
 
     def _price_attributes(self) -> dict | None:
         """Whatever currently passes for a published price list."""
@@ -2975,7 +3011,21 @@ class BatteryCoordinator:
             draw = self._draw_in(slot) or 0.0
             return draw / 1000.0 * (slot.end - slot.start).total_seconds() / 3600.0
 
-        return {"use": use, "charge_kw": power / 1000.0}
+        return {"use": use, "charge_kw": power / 1000.0, "stored": self._deliverable_kwh()}
+
+    def _deliverable_kwh(self) -> float:
+        """What the packs can still give the house from what they hold, in kWh:
+        above each pack's floor, through the way out."""
+        if self._full_charge_minutes <= 0:
+            return 0.0
+        held = 0.0
+        for cfg in self._units:
+            unit = self._unit_snapshot(cfg)
+            if not unit.online or unit.soc is None:
+                continue
+            capacity = unit.unit_max * self._full_charge_minutes / 60000.0
+            held += max(unit.soc - self._discharge_floor(unit), 0.0) / 100.0 * capacity
+        return held * math.sqrt(self.round_trip())
 
     def _buy_cost(self):
         """What a kWh bought at a price costs once it is back out of the packs.
