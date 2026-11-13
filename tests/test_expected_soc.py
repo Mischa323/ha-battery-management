@@ -100,3 +100,39 @@ def test_the_sensor(house):
     assert attrs["actual_soc"] == pytest.approx(30.0)
     assert attrs["deviation"] == pytest.approx(30.0 - co.expected_log[key(13)], abs=0.11)
     assert attrs["lead_hours"] == EXPECTED_LEAD_HOURS
+
+
+def test_now_is_read_off_between_the_slot_before_and_this_one(house, monkeypatch):
+    """Found on 13 November: what is taken down is the charge at a slot's
+    end. Half way through 14:00-15:00 that is half way between the two."""
+    co = house().coordinator
+    co.expected_log = {key(13): 40.0, key(14): 30.0}
+    moment = AFTERNOON.replace(hour=14, minute=30)
+    monkeypatch.setattr(coordinator_module.dt_util, "utcnow", lambda: moment)
+
+    assert co.expected_now() == pytest.approx(35.0)
+
+
+def test_the_line_says_when_each_figure_is_for(house):
+    block = house().coordinator.plan()["forecast"]
+    first = block["soc"][0]
+
+    assert first["start"][11:16] == "13:00" and first["at"][11:16] == "14:00"
+    assert block["lowest"]["at"] > block["lowest"]["start"]
+    assert all(row["at"] > row["start"] for row in block["expected"])
+
+
+def test_the_plan_series_are_kept_out_of_the_recorder(house):
+    """Found on 13 November: two days of quarters is some 50 kB of attributes
+    and the recorder takes 16. What is left to it fits with room to spare."""
+    import json
+
+    sensor = pytest.importorskip(
+        "custom_components.battery_management.sensor",
+        reason="needs a real Home Assistant for the sensor platform",
+    )
+    plan = house().coordinator.plan()
+    left = {k: v for k, v in plan.items() if k not in sensor.PlanSensor._unrecorded_attributes}
+
+    assert {"hours", "forecast"} <= sensor.PlanSensor._unrecorded_attributes
+    assert len(json.dumps(left, default=str)) < 16384 / 2

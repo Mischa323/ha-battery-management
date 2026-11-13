@@ -344,6 +344,22 @@ def pick_dearest(candidates: list[Slot], hours: float) -> list[Slot]:
     return sorted(ranked[:wanted], key=lambda slot: slot.start)
 
 
+def dear_slots(window: list[Slot], hours: float, window_hours: float = 24.0) -> list[Slot]:
+    """The dearest `hours` of a whole window - and in proportion of a shorter one.
+
+    "The dearest four hours" is said of a day. Before tomorrow's prices are
+    published the window is what is left of today, and four hours of a
+    fourteen-hour window is more than a quarter of it: on 12 November at
+    10:13 that made 11:00 at EUR 0.391 a peak on a day whose real one came at
+    17:15, and the minimum was bought at 0.36-0.415 to be ready for it while
+    13:00-15:15 cost 0.31-0.34. Of a shorter window, proportionally fewer.
+    """
+    if hours <= 0 or not window or window_hours <= 0:
+        return []
+    seen = sum((slot.end - slot.start).total_seconds() for slot in window) / 3600.0
+    return pick_dearest(window, hours * min(1.0, seen / window_hours))
+
+
 def slots_between(slots: list[Slot], start: datetime, end: datetime) -> list[Slot]:
     """The slots that begin inside one calendar day."""
     return sorted(
@@ -486,7 +502,7 @@ def next_dear_start(
     """
     if expensive_hours <= 0:
         return None
-    dear = pick_dearest(slots_in_window(slots, now, window_hours), expensive_hours)
+    dear = dear_slots(slots_in_window(slots, now, window_hours), expensive_hours, window_hours)
     ahead = [slot.start for slot in dear if slot.start > now]
     return min(ahead) if ahead else None
 

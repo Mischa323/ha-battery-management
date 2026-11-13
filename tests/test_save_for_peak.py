@@ -310,3 +310,15 @@ async def test_the_tick_still_buys_nothing_in_the_peak(in_the_peak):
 
     assert co.active_policy != POLICY_DYNAMIC_CHARGE
     assert co.setpoint > 0
+
+
+# -- not kept when it comes back cheaper (13 November) ---------------------------
+
+
+def test_nothing_is_kept_before_a_slot_that_buys_it_back_cheaper(house):
+    """16:00 at 0.20 puts a kWh back for 0.26: the 0.40 hours before it give
+    the house the packs. 17:00, after it, has no such slot and is kept."""
+    day = dict(AFTERNOON_AT_040, overrides={13: 0.40, 14: 0.40, 15: 0.40, 16: 0.20})
+    kept = hours_of(holds(house(soc=10.0, **day)))
+
+    assert not {13, 14, 15} & set(kept)

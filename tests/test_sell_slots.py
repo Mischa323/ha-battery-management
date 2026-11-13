@@ -207,12 +207,13 @@ def test_the_same_evening_sells_when_tomorrow_is_cheap(evening):
 def test_the_house_evening_keeps_what_it_is_worth_more_to(evening):
     """"Is het dan niet handiger dat hij het vasthoudt zodat we hem langzaam
     door de avond leeg trekken?" 18:00 sells at 0.60 - 0.57 back under
-    saldering - and 19:00-22:00 cost the house 0.58. Those hours draw 12 kWh;
-    the 7 under the sell line do not cover them, so 5 of the 14 above it stay
-    for the house, and the sale is the one best hour, not two."""
+    saldering - and 19:00-22:00 cost the house 0.58. Those four hours draw
+    14 kWh at 3.5 kW; the 7 under the sell line cover half, so 7 of the 14
+    above it stay for the house, and what is left is the one best hour of
+    selling (the house in it included), not two."""
     peaks = {NOW: 0.60, **{NOW + timedelta(hours=h): 0.58 for h in (1, 2, 3, 4)}}
     system = evening(peaks)
-    system.coordinator.draw_profile = {hour: 3000.0 for hour in range(24)}
+    system.coordinator.draw_profile = {hour: 3500.0 for hour in range(24)}
 
     assert planned(system) == {key(NOW)}
 
@@ -239,3 +240,17 @@ def test_what_is_under_the_line_covers_the_house_first(evening):
     system.coordinator.draw_profile = {hour: 1000.0 for hour in range(24)}
 
     assert planned(system) == {key(NOW), key(NOW + timedelta(hours=2))}
+
+
+def test_the_house_in_a_sale_slot_is_inside_the_sale(evening):
+    """Found on 13 November: the house's draw in a slot that is sold in was
+    counted beside the sale's kWh, though full power covers the house first.
+    Two hours at 0.60, a house of 3.5 kW, two more hours at 0.58: the 14 kWh
+    above the line are the two sales (the house in them included), the 7
+    under it the two hours after. Both hours are sold in."""
+    peaks = {NOW: 0.60, NOW + timedelta(hours=1): 0.60,
+             NOW + timedelta(hours=2): 0.58, NOW + timedelta(hours=3): 0.58}
+    system = evening(peaks)
+    system.coordinator.draw_profile = {hour: 3500.0 for hour in range(24)}
+
+    assert planned(system) == {key(NOW), key(NOW + timedelta(hours=1))}

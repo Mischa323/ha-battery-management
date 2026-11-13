@@ -114,7 +114,7 @@ const soc = Array.from({ length: 24 }, (_, i) => ({ start: at(14 + i).replace("1
 }
 
 // -- the parts the pointer drives -------------------------------------------
-const helpers = new Function(src + ";return {socHistory, socZoom, socPan, socSpan, socAt, socBounds, socTicks, socVersus, socMoreInfo, socSvg};")();
+const helpers = new Function(src + ";return {socHistory, socZoom, socPan, socSpan, socAt, socBounds, socTicks, socVersus, socMoreInfo, socSvg, socAhead, holdSays};")();
 const H = 3600e3;
 const t0 = Date.parse("2026-11-03T00:00:00+01:00");
 {
@@ -205,6 +205,22 @@ const t0 = Date.parse("2026-11-03T00:00:00+01:00");
   const older = render({ forecast: { soc, hold_hours: [] } });
   check("from an older integration: no button, no comparison",
     !older.chart.includes("data-more") && (nodes.get("fcvs") || {}).textContent === "", older.chart.length);
+}
+
+// --- at the moment the figure is for (13 November) ---------------------------
+{
+  // the walk's charge is where the packs stand when a slot ends; drawn at its
+  // start the line ran a quarter early
+  const rows = [{ start: "2026-11-13T02:15:00+01:00", at: "2026-11-13T02:30:00+01:00", soc: 10 }];
+  check("drawn where the slot ends",
+    helpers.socAhead({ soc: rows })[0].t === Date.parse("2026-11-13T02:30:00+01:00"),
+    helpers.socAhead({ soc: rows }));
+  check("an older integration's rows where they always were",
+    helpers.socAhead({ soc: [{ start: rows[0].start, soc: 10 }] })[0].t === Date.parse(rows[0].start), "");
+  check("the low point is said for when it is reached",
+    helpers.holdSays({ lowest: { start: rows[0].start, at: rows[0].at, soc: 10 }, hold_hours: [] })
+      .includes("om 02:30"),
+    helpers.holdSays({ lowest: { start: rows[0].start, at: rows[0].at, soc: 10 }, hold_hours: [] }));
 }
 
 // --- its own class names (10 November) ---------------------------------------

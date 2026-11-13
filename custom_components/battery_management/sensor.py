@@ -353,6 +353,10 @@ class PlanSensor(_BaseSensor):
 
     _attr_translation_key = "plan"
     _attr_icon = "mdi:calendar-clock"
+    #: Two days of quarters is some 50 kB of attributes, and the recorder
+    #: refuses anything over 16: it stored none of them and said so in the
+    #: log. The cards read the live state; history has no use for the series.
+    _unrecorded_attributes = frozenset({"hours", "forecast", "cheap_hours", "dear_hours"})
 
     def __init__(self, coordinator, entry) -> None:
         super().__init__(coordinator, entry)

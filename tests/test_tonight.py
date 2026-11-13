@@ -132,3 +132,37 @@ def test_a_slot_it_buys_in_is_not_also_kept(house):
 
     assert bought
     assert not bought & kept
+
+
+# -- not kept when it comes back cheaper (13 November) --------------------------
+
+
+async def test_the_minimum_is_not_kept_when_it_comes_back_cheaper_before_the_peak(house):
+    """12 November, 18:00: the minimum was kept at EUR 0.414 with the night
+    ahead at 0.295. Here 15:00 at 0.20 puts a kWh back for 0.26, against the
+    0.40 it spares the house now: it goes out, and comes back at 15:00."""
+    day = dict(AFTERNOON_AT_040, overrides={**AFTERNOON_AT_040["overrides"], 15: 0.20})
+    system = house(soc=24.0, draw=100.0, **day)
+    co = system.coordinator
+    co.buy_ceiling_min = 25.0
+    system.hass.states.set(GRID_SENSOR, 600)
+
+    await co._async_tick(None)
+
+    assert co.active_policy != POLICY_MINIMUM_HOLD
+    assert co.setpoint > 0
+
+
+async def test_empty_packs_are_not_said_to_keep_the_minimum(house):
+    """At their floor there is nothing to keep (12 November, 21:23)."""
+    system = house(soc=5.0, draw=100.0)
+    co = system.coordinator
+    co.buy_ceiling_min = 25.0
+    system.hass.states.set(GRID_SENSOR, 600)
+
+    online = {cfg.name: co._unit_snapshot(cfg) for cfg in co._units}
+
+    assert co._minimum_holds(online) is False
+    await co._async_tick(None)
+    assert co.active_policy != POLICY_MINIMUM_HOLD
+    assert "houdt het minimum" not in co.tick_log[-1]["doing"]

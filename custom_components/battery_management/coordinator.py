@@ -58,6 +58,7 @@ from .prices import (
     dearest_slots,
     next_dear_start,
     pick_cheapest,
+    dear_slots,
     pick_dearest,
     parse_forecast,
     slot_at,
@@ -206,6 +207,7 @@ from .const import (
     EXPECTED_KEEP_HOURS,
     EXPECTED_LEAD_HOURS,
     GOAL_DONE_KWH,
+    SETTLE_TICKS,
     PACK_DRAIN_MIN_KWH,
     ALERT_NO_GRID_S,
     ALERT_OFFLINE_S,
@@ -817,6 +819,8 @@ class BatteryCoordinator:
         #: the one in which it reached its line and is not restarted
         self._selling_slot: str | None = None
         self._sold_out_slot: str | None = None
+        #: ticks still to wait at nought after a purchase or sale (SETTLE_TICKS)
+        self._settle_ticks: int = 0
         #: this tick's selling, real and shadow, for the trace and the counters
         self.trade_selling: bool = False
         self.trade_would_sell: bool = False
@@ -3399,10 +3403,33 @@ class BatteryCoordinator:
         end = self._next_peak_start(slots, now)
         if end is None:
             return []
+        # Never in a slot at peak level. 12 November, 07:24: under the minimum
+        # inside the morning peak, with the next one at 10:00 and one cheaper
+        # quarter between them, it bought the rest in the peak it was in - at
+        # EUR 0.418, to give it back to the house the same hour. The minimum
+        # is there to go out in a peak; what the slots outside one cannot
+        # reach is left unbought.
+        line = self._peak_level(slots, now)
+        if line is not None:
+            slots = [s for s in slots if s.price < line]
         return slots_to_buy(
             slots, now, max(self._cheap_hours, needed), PRICE_WINDOW_HOURS, 0.0,
             needed, until=end,
         )
+
+    def _dear(self, slots, now) -> list:
+        """The dear slots of the window ahead - see `dear_slots`."""
+        if self._expensive_hours <= 0 or not slots:
+            return []
+        return dear_slots(
+            slots_in_window(slots, now, PRICE_WINDOW_HOURS), self._expensive_hours,
+            PRICE_WINDOW_HOURS,
+        )
+
+    def _peak_level(self, slots, now) -> float | None:
+        """The price from which a slot is peak, or None when nothing is dear."""
+        dear = self._dear(slots, now)
+        return self._dear_line(dear) if dear else None
 
     def _dear_line(self, dear) -> float:
         """From what price a slot counts as part of a peak.
@@ -3420,7 +3447,7 @@ class BatteryCoordinator:
         current = slot_at(slots, now)
         if current is None or self._expensive_hours <= 0:
             return False
-        dear = pick_dearest(slots_in_window(slots, now, PRICE_WINDOW_HOURS), self._expensive_hours)
+        dear = self._dear(slots, now)
         return bool(dear) and current.price >= self._dear_line(dear)
 
     def _minimum_holds(self, online: dict) -> bool:
@@ -3440,13 +3467,43 @@ class BatteryCoordinator:
         if not slots:
             return False
         now = dt_util.utcnow()
-        if self._in_peak(slots, now) or self._next_peak_start(slots, now) is None:
+        peak = self._next_peak_start(slots, now)
+        if self._in_peak(slots, now) or peak is None:
             return False
         held = [(s.soc, s.unit_max) for s in online.values() if s.soc is not None]
         if not held:
             return False
+        # packs at their floor have nothing to keep: "leeg" says it better
+        # than "houdt het minimum vast" at 5 % (12 November, 21:23)
+        if all(s.soc <= self._discharge_floor(s) for s in online.values() if s.soc is not None):
+            return False
         level = sum(soc * size for soc, size in held) / sum(size for _, size in held)
-        return level <= self.buy_ceiling_min
+        if level > self.buy_ceiling_min:
+            return False
+        # and not when it comes back cheaper before that peak (see there)
+        current = slot_at(slots, now)
+        return current is None or not self._cheaper_refill_before(current, peak, slots)
+
+    def _cheaper_refill_before(self, slot, until, slots) -> bool:
+        """Can a kWh given out in `slot` be bought back for less before `until`?
+
+        Keeping the charge pays when there is nothing better to do with it
+        until the peak. When a slot still to come before that peak puts the
+        kWh back for less than this one costs the house - the round trip, the
+        wear and the price margin counted - giving it out now and buying it
+        back then is the better trade. On 12 November at 18:00 the minimum
+        was kept at EUR 0.414 with the night ahead at 0.295, which is 0.40
+        back out of the packs; on 9 November it was kept from 21:00 at
+        0.47-0.55 before a night at 0.40. The minimum is bought back in the
+        cheapest slots before the peak whatever the margin says; above it,
+        such a slot clears the margin against the peak by the same sum.
+        """
+        cost = self._buy_cost() or (lambda price: price / self.round_trip())
+        return any(
+            slot.start < other.start < until
+            and cost(other.price) + self._price_margin <= slot.price
+            for other in slots
+        )
 
     def _next_peak_start(self, slots, now):
         """When the next dear stretch begins - not the one we are in.
@@ -3460,7 +3517,7 @@ class BatteryCoordinator:
         if self._expensive_hours <= 0:
             return None
         window = slots_in_window(slots, now, PRICE_WINDOW_HOURS)
-        dear = pick_dearest(window, self._expensive_hours)
+        dear = self._dear(slots, now)
         if not dear:
             return None
         keys = {_slot_key(s) for s in dear}
@@ -3490,11 +3547,28 @@ class BatteryCoordinator:
         peak = self._peak_run(slots, now)
         empty = next((r for r in rows if r["short"] > GOAL_DONE_KWH), None)
         low = min(rows, key=lambda r: r["soc"]) if rows else None
+        # A row's charge is where the walk stands when its slot ends, so
+        # that is the moment it is `at`. Drawn and compared at the slot's
+        # start it ran a quarter early - six points of charge during a
+        # purchase or a sale at full power (found on 13 November).
+        step = (rows[0]["slot"].end - rows[0]["slot"].start) if rows else timedelta(minutes=15)
+        ends = {_slot_key(s): s.end for s in slots}
         return {
-            "soc": [{"start": r["slot"].start.isoformat(), "soc": r["soc"]} for r in rows],
+            "soc": [
+                {
+                    "start": r["slot"].start.isoformat(),
+                    "at": r["slot"].end.isoformat(),
+                    "soc": r["soc"],
+                }
+                for r in rows
+            ],
             "empty_at": empty["slot"].start.isoformat() if empty else None,
             "short_kwh": round(sum(r["short"] for r in rows), 2),
-            "lowest": {"start": low["slot"].start.isoformat(), "soc": low["soc"]} if low else None,
+            "lowest": {
+                "start": low["slot"].start.isoformat(),
+                "at": low["slot"].end.isoformat(),
+                "soc": low["soc"],
+            } if low else None,
             "peak": {
                 "start": peak[0].start.isoformat(),
                 "end": peak[-1].end.isoformat(),
@@ -3517,7 +3591,11 @@ class BatteryCoordinator:
             # what was expected for the hours gone by, EXPECTED_LEAD_HOURS
             # before each, and the charge now beside what was expected for it
             "expected": [
-                {"start": key, "soc": soc}
+                {
+                    "start": key,
+                    "at": (ends.get(key) or datetime.fromisoformat(key) + step).isoformat(),
+                    "soc": soc,
+                }
                 for key, soc in sorted(self.expected_log.items())
                 if key <= _slot_key(slot_at(slots, now) or rows[0]["slot"])
             ],
@@ -3546,11 +3624,28 @@ class BatteryCoordinator:
             del self.expected_log[key]
 
     def expected_now(self, slots=None, now=None) -> float | None:
-        """The charge expected for the slot we are in, EXPECTED_LEAD_HOURS before."""
+        """The charge expected for this moment, EXPECTED_LEAD_HOURS before.
+
+        What is taken down per slot is the charge at its end; now lies
+        between the end of the slot before and the end of this one, so it is
+        read off between those two. Without the one before - the first slot
+        after an install - this slot's own stands in.
+        """
         slots = slots if slots is not None else self._price_forecast()
         now = now or dt_util.utcnow()
         current = slot_at(slots, now) if slots else None
-        return None if current is None else self.expected_log.get(_slot_key(current))
+        if current is None:
+            return None
+        at_end = self.expected_log.get(_slot_key(current))
+        if at_end is None:
+            return None
+        before = slot_at(slots, current.start - timedelta(seconds=1))
+        at_start = self.expected_log.get(_slot_key(before)) if before is not None else None
+        if at_start is None:
+            return at_end
+        length = (current.end - current.start).total_seconds()
+        part = min(max((now - current.start).total_seconds() / length, 0.0), 1.0) if length else 1.0
+        return round(at_start + (at_end - at_start) * part, 1)
 
     def actual_soc(self) -> float | None:
         """The packs' charge now, weighted by their size."""
@@ -3568,8 +3663,7 @@ class BatteryCoordinator:
         start = self._next_peak_start(slots, now)
         if start is None:
             return []
-        window = slots_in_window(slots, now, PRICE_WINDOW_HOURS)
-        line = self._dear_line(pick_dearest(window, self._expensive_hours))
+        line = self._dear_line(self._dear(slots, now))
         run, edge = [], start
         for slot in sorted(slots, key=lambda s: s.start):
             if slot.start < start:
@@ -3672,9 +3766,7 @@ class BatteryCoordinator:
         if solar is not None:
             ceiling = min(ceiling, solar)
         need = self.hours_of_charge_needed(ceiling=max(ceiling, self.buy_ceiling_min))
-        line = self._dear_line(
-            pick_dearest(slots_in_window(slots, now, PRICE_WINDOW_HOURS), self._expensive_hours)
-        )
+        line = self._dear_line(self._dear(slots, now))
         return [
             s for s in slots_to_buy(
                 slots, now, self._cheap_hours, PRICE_WINDOW_HOURS, self._price_margin,
@@ -3709,10 +3801,18 @@ class BatteryCoordinator:
             return frozenset()
         price = sum(s.price for s in peak) / len(peak)
         start = peak[0].start
+        # A slot at peak level is the peak, not a slot to keep the charge in
+        # for a later one: on 12 November at 07:00, EUR 0.401, it said
+        # "bewaart voor de piek van 10:00" - a quarter at 0.415 - with the
+        # morning peak starting at 07:15.
+        level = self._peak_level(slots, now)
         candidates = sorted(
             (
                 r["slot"] for r in forecast["slots"]
                 if r["slot"].start < start and r["slot"].price <= price - self._price_margin
+                and (level is None or r["slot"].price < level)
+                # nor one whose kWh comes back cheaper before the peak
+                and not self._cheaper_refill_before(r["slot"], start, slots)
                 # a slot it buys in gives the house nothing from the packs anyway
                 and _slot_key(r["slot"]) not in flows[0]
             ),
@@ -3878,17 +3978,33 @@ class BatteryCoordinator:
         above = needed * power
         below = self._energy_under_sell_line()
         chosen = {}
-        for value, house, _start, kwh, slot in sorted(offers, key=lambda o: (-o[0], o[1], o[2])):
+        taken: dict = {}    # what the house's own claim on a slot took, by start
+        owed = 0.0          # of those, what came from above the line
+        for value, house, start, kwh, slot in sorted(offers, key=lambda o: (-o[0], o[1], o[2])):
             if above <= 1e-6:
                 break
             if house:
                 from_below = min(kwh, below)
                 below -= from_below
                 above -= kwh - from_below
+                owed += kwh - from_below
+                taken[start] = (from_below, kwh - from_below)
                 continue
             key = _slot_key(slot)
             chosen[key] = margins[key]
-            above -= kwh
+            # A sale at full power covers the house in its own slot first and
+            # sends out the rest: the house's claim on that slot is inside
+            # the sale's kWh, not beside them (found on 13 November). What
+            # that frees under the line goes to the hours that had to reach
+            # above it.
+            back_below, back_above = taken.pop(slot.start, (0.0, 0.0))
+            below += back_below
+            above += back_above - kwh
+            owed -= back_above
+            moved = min(below, owed)
+            below -= moved
+            above += moved
+            owed -= moved
         return chosen
 
     def _house_claims(self, slots, now, until, exclude) -> list:
@@ -6583,8 +6699,7 @@ class BatteryCoordinator:
         if current is None:
             return
         if self.active_policy == POLICY_DYNAMIC_CHARGE:
-            window = slots_in_window(slots, moment, PRICE_WINDOW_HOURS)
-            dear = pick_dearest(window, self._expensive_hours) if self._expensive_hours > 0 else []
+            dear = self._dear(slots, moment)
             if dear and current.price >= self._dear_line(dear):
                 why = {
                     "minimum": "om het minimum te halen",
@@ -6910,12 +7025,18 @@ class BatteryCoordinator:
             sp_before, gain_used, sp_reason = self.setpoint, None, "integrate"
             if dynamic_charge:
                 sp, sp_reason = -maxchg, "dynamic_buy"
+                self._settle_ticks = SETTLE_TICKS
             elif self.trade_selling:
                 # everything the packs and the fuse allow; the clamp still holds
                 sp, sp_reason = upper, "trade_sell"
+                self._settle_ticks = SETTLE_TICKS
             elif external_sp is not None:
                 # the plan proposes; the clamp below still disposes
                 sp, sp_reason = external_sp, "external_plan"
+            elif self._settle_ticks > 0:
+                # the meter still reads the packs' own full power (SETTLE_TICKS)
+                self._settle_ticks -= 1
+                sp, sp_reason = 0.0, "settle"
             elif abs(error) < self._deadband:
                 sp, sp_reason = self.setpoint, "deadband"
             else:
