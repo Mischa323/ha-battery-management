@@ -803,7 +803,7 @@ acts in Dynamic tariff — see [Selling to the grid](#selling-to-the-grid).
 | Number | What it does |
 | --- | --- |
 | **SoC reserve** | Charge held back, in every mode. Raises each pack's *own* discharge floor rather than clamping the pair, so the split tapers towards it and a fuller pack carries the load alone. 0 = off. |
-| **Minimum charge** (*Minimaal laden*) | A level. Below it, the packs are bought up to it in the cheapest hours before the coming peak, whether or not the margin says it pays. It is also the floor under the computed charge ceiling. 0 = off. |
+| **Minimum charge** (*Minimaal laden*) | A level. Below it, the packs are bought up to it in the cheapest hours before the coming peak, whether or not the margin says it pays — but never in a slot at peak level. It is also the floor under the computed charge ceiling. 0 = off. |
 | **Day goal** (*Dagdoel*) | An amount in kWh to put into the packs each day, sun included. It is bought only in the day's cheapest hours, and only when tomorrow is not cheaper. Whatever does not fit is let go. 0 = off. |
 | **Buy up to: at most** | Cap on the computed charge ceiling. Use it when the forecast under-reads, which would otherwise let it buy more than needed. |
 | **Sell down to: at least** | How far selling to the grid may empty a pack. The reserve still applies underneath; the higher of the two wins. |
@@ -1105,6 +1105,25 @@ counts the purchases the night after it will make: the same cheap slots and
 margin, up to the next peak, as full as buying may go. On 8 November, without
 them, it saw the packs empty in the next morning's peak. It kept charge back
 in the evening at EUR 0.50, which the night then bought anyway at 0.39.
+
+**What counts as a peak, on a flat day.** A peak is the dearest *Expensive
+hours* of the 24 hours ahead, with every slot within the price margin of the
+cheapest of them. Three rules keep that honest. They come from 12 November, a
+day between EUR 0.30 and 0.44:
+
+- **Fewer when less is visible:** before tomorrow's prices are published,
+  only the rest of today is known. Of that shorter window proportionally
+  fewer slots are dear: four hours of a day is two of twelve hours. At 10:13
+  the old count made 11:00 at 0.391 a peak. The minimum was bought at
+  0.36–0.415 to be ready for it, with 13:00–15:15 at 0.31–0.34 still to come
+  before the real peak at 17:15.
+- **Nothing is kept in a slot at peak level:** such a slot is the peak, not
+  a slot to hold the charge in for a later one. At 07:00, at 0.401, it had
+  said "bewaart voor de piek van 10:00". That was one quarter at 0.415,
+  while the morning peak began at 07:15.
+- **The minimum is never bought at peak level:** at 07:24, under the minimum
+  and inside the peak, it bought at 0.418 and gave it back to the house the
+  same hour. What the slots outside a peak cannot reach is left unbought.
 
 The walk leaves out sun beyond the usual, so on a bright day the packs end up
 fuller than it says. The *Verwachting* card draws the walk beside the

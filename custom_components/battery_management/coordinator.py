@@ -58,6 +58,7 @@ from .prices import (
     dearest_slots,
     next_dear_start,
     pick_cheapest,
+    dear_slots,
     pick_dearest,
     parse_forecast,
     slot_at,
@@ -3399,10 +3400,33 @@ class BatteryCoordinator:
         end = self._next_peak_start(slots, now)
         if end is None:
             return []
+        # Never in a slot at peak level. 12 November, 07:24: under the minimum
+        # inside the morning peak, with the next one at 10:00 and one cheaper
+        # quarter between them, it bought the rest in the peak it was in - at
+        # EUR 0.418, to give it back to the house the same hour. The minimum
+        # is there to go out in a peak; what the slots outside one cannot
+        # reach is left unbought.
+        line = self._peak_level(slots, now)
+        if line is not None:
+            slots = [s for s in slots if s.price < line]
         return slots_to_buy(
             slots, now, max(self._cheap_hours, needed), PRICE_WINDOW_HOURS, 0.0,
             needed, until=end,
         )
+
+    def _dear(self, slots, now) -> list:
+        """The dear slots of the window ahead - see `dear_slots`."""
+        if self._expensive_hours <= 0 or not slots:
+            return []
+        return dear_slots(
+            slots_in_window(slots, now, PRICE_WINDOW_HOURS), self._expensive_hours,
+            PRICE_WINDOW_HOURS,
+        )
+
+    def _peak_level(self, slots, now) -> float | None:
+        """The price from which a slot is peak, or None when nothing is dear."""
+        dear = self._dear(slots, now)
+        return self._dear_line(dear) if dear else None
 
     def _dear_line(self, dear) -> float:
         """From what price a slot counts as part of a peak.
@@ -3420,7 +3444,7 @@ class BatteryCoordinator:
         current = slot_at(slots, now)
         if current is None or self._expensive_hours <= 0:
             return False
-        dear = pick_dearest(slots_in_window(slots, now, PRICE_WINDOW_HOURS), self._expensive_hours)
+        dear = self._dear(slots, now)
         return bool(dear) and current.price >= self._dear_line(dear)
 
     def _minimum_holds(self, online: dict) -> bool:
@@ -3460,7 +3484,7 @@ class BatteryCoordinator:
         if self._expensive_hours <= 0:
             return None
         window = slots_in_window(slots, now, PRICE_WINDOW_HOURS)
-        dear = pick_dearest(window, self._expensive_hours)
+        dear = self._dear(slots, now)
         if not dear:
             return None
         keys = {_slot_key(s) for s in dear}
@@ -3568,8 +3592,7 @@ class BatteryCoordinator:
         start = self._next_peak_start(slots, now)
         if start is None:
             return []
-        window = slots_in_window(slots, now, PRICE_WINDOW_HOURS)
-        line = self._dear_line(pick_dearest(window, self._expensive_hours))
+        line = self._dear_line(self._dear(slots, now))
         run, edge = [], start
         for slot in sorted(slots, key=lambda s: s.start):
             if slot.start < start:
@@ -3672,9 +3695,7 @@ class BatteryCoordinator:
         if solar is not None:
             ceiling = min(ceiling, solar)
         need = self.hours_of_charge_needed(ceiling=max(ceiling, self.buy_ceiling_min))
-        line = self._dear_line(
-            pick_dearest(slots_in_window(slots, now, PRICE_WINDOW_HOURS), self._expensive_hours)
-        )
+        line = self._dear_line(self._dear(slots, now))
         return [
             s for s in slots_to_buy(
                 slots, now, self._cheap_hours, PRICE_WINDOW_HOURS, self._price_margin,
@@ -3709,10 +3730,16 @@ class BatteryCoordinator:
             return frozenset()
         price = sum(s.price for s in peak) / len(peak)
         start = peak[0].start
+        # A slot at peak level is the peak, not a slot to keep the charge in
+        # for a later one: on 12 November at 07:00, EUR 0.401, it said
+        # "bewaart voor de piek van 10:00" - a quarter at 0.415 - with the
+        # morning peak starting at 07:15.
+        level = self._peak_level(slots, now)
         candidates = sorted(
             (
                 r["slot"] for r in forecast["slots"]
                 if r["slot"].start < start and r["slot"].price <= price - self._price_margin
+                and (level is None or r["slot"].price < level)
                 # a slot it buys in gives the house nothing from the packs anyway
                 and _slot_key(r["slot"]) not in flows[0]
             ),
@@ -6583,8 +6610,7 @@ class BatteryCoordinator:
         if current is None:
             return
         if self.active_policy == POLICY_DYNAMIC_CHARGE:
-            window = slots_in_window(slots, moment, PRICE_WINDOW_HOURS)
-            dear = pick_dearest(window, self._expensive_hours) if self._expensive_hours > 0 else []
+            dear = self._dear(slots, moment)
             if dear and current.price >= self._dear_line(dear):
                 why = {
                     "minimum": "om het minimum te halen",
