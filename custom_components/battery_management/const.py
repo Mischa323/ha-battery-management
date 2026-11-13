@@ -656,6 +656,14 @@ SINGLE_PACK_BELOW_W = 1500
 #: the meter's last few watt-hours are not worth a purchase of their own
 GOAL_DONE_KWH = 0.05
 
+#: After a purchase or a sale at full power, how many ticks grid-zero waits at
+#: nought before it follows the meter again. The meter still shows the packs'
+#: 7 kW for a reading or two, and integrating from there took them through
+#: half power in the old direction and then past the house the other way:
+#: over 8-13 November, 24 times, 0.32 kWh charged outside a buying slot and
+#: 0.18 kWh sent to the grid at night.
+SETTLE_TICKS = 2
+
 #: How far ahead an expectation is taken down to compare with what came: each
 #: slot's charge as the forecast saw it this many hours before (10 November:
 #: "zodat we kunnen zien of het onder of boven de verwachting zit"), and how

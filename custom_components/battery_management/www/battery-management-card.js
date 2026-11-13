@@ -164,6 +164,31 @@ function slotLabel(bar) {
 }
 
 /** Chart styles, shared by both cards. */
+/**
+ * Every rule of `css` under `scope`, so a card styles only itself.
+ *
+ * The cards are drawn in the page's light DOM: a style element in one reaches
+ * every other card on the dashboard. That is how the main card's `.bar` - a
+ * 10 px progress bar - cut the forecast card's buttons in half (10 November),
+ * and on a dashboard with several of them the plan card's `.split` moved the
+ * main card's charge bar. Each card now puts its own root class in front of
+ * every selector it writes. Plain rules only: no at-rules are used here.
+ */
+function scopeCss(css, scope) {
+  return css
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/([^{}]+)\{/g, (whole, selectors) => {
+      const scoped = selectors
+        .split(",")
+        .map((part) => part.trim())
+        .filter(Boolean)
+        .map((part) => (part === scope || part.startsWith(scope + " ") || part.startsWith(scope + ".")
+          ? part
+          : scope + " " + part));
+      return scoped.length ? "\n" + scoped.join(", ") + " {" : whole;
+    });
+}
+
 const PRICE_CSS = `
           .phead { display:flex; justify-content:space-between; align-items:baseline;
                    font-size:.92em; margin-bottom:8px; }
@@ -1318,7 +1343,7 @@ class BatteryManagementCard extends HTMLElement {
     const c = this._config;
     this.innerHTML = `
       <ha-card header="${esc(c.title || "Battery Management")}">
-        <style>
+        <style>${scopeCss(`
           .sbc { padding: 8px 16px 16px; }
           .row { display:flex; align-items:center; justify-content:space-between; padding:8px 0; }
           .row.top { border-bottom:1px solid var(--divider-color); }
@@ -1359,7 +1384,7 @@ class BatteryManagementCard extends HTMLElement {
                     background: var(--secondary-background-color); }
 ${PRICE_CSS}
           .plan { margin-top:12px; padding:10px; border-radius:10px; background: var(--secondary-background-color); font-size:.92em; }
-        </style>
+        `, ".sbc")}</style>
         <div class="sbc">
           <div class="row top">
             <span>Status</span><span class="status" id="status">—</span>
@@ -1769,14 +1794,14 @@ class BatteryManagementPricesCard extends HTMLElement {
     const c = this._config;
     this.innerHTML = `
       <ha-card header="${esc(c.title || "Stroomprijs")}">
-        <style>
+        <style>${scopeCss(`
           .pc { padding: 4px 16px 16px; }
           .big { font-size:2em; font-weight:600; line-height:1.15; }
           .sub { color: var(--secondary-text-color); font-size:.85em; margin-bottom:14px; }
           .ends { display:flex; gap:20px; margin-top:10px; font-size:.85em; }
           .muted { color: var(--secondary-text-color); }
 ${PRICE_CSS}
-        </style>
+        `, ".pc")}</style>
         <div class="pc">
           <div class="big" id="pnow">—</div>
           <div class="sub" id="psub"></div>
@@ -2267,7 +2292,7 @@ function holdSays(forecast) {
   }
   return forecast.lowest
     ? "Raakt de komende 24 uur niet leeg; laagste stand " + Math.round(forecast.lowest.soc) +
-      " % om " + hhmm(forecast.lowest.start) + "."
+      " % om " + hhmm(forecast.lowest.at || forecast.lowest.start) + "."
     : "";
 }
 
@@ -2308,7 +2333,7 @@ class BatteryManagementPlanCard extends HTMLElement {
     const c = this._config;
     this.innerHTML =
       '<ha-card header="' + esc(c.title || "Plan van vandaag") + '">' +
-      `<style>
+      `<style>${scopeCss(`
           .plc { padding: 4px 16px 16px; }
           .plc .muted { color: var(--secondary-text-color); }
           .plc .row { display:flex; justify-content:space-between; gap:12px;
@@ -2337,7 +2362,7 @@ class BatteryManagementPlanCard extends HTMLElement {
           .tag.later { border:1px solid var(--info-color,#039be5);
                        color:var(--info-color,#039be5); }
           .note { font-size:.86em; margin:4px 0 0; }
-        </style>
+        `, ".plc")}</style>
         <div class="plc">
           <div class="row"><b id="plnow">—</b><span class="muted" id="plmode"></span></div>
           <div class="next" id="plnext"></div>
@@ -2516,10 +2541,14 @@ function socHistory(answer, entities, from, to) {
   return out;
 }
 
-/** The forecast as points in time. */
+/**
+ * The forecast as points in time. A row's charge is where the packs stand
+ * when its slot ends, which the integration gives as `at`; an older one has
+ * only `start`, and is drawn there as it always was.
+ */
 function socAhead(forecast) {
   return ((forecast && forecast.soc) || [])
-    .map((r) => ({ t: Date.parse(r.start), soc: Number(r.soc) }))
+    .map((r) => ({ t: Date.parse(r.at || r.start), soc: Number(r.soc) }))
     .filter((p) => !isNaN(p.t) && !isNaN(p.soc));
 }
 
@@ -2821,6 +2850,10 @@ function socChartState(card, plan, now = Date.now()) {
   chart.card = card;
   chart.more = forecast.expected_entity || null;
   chart.ahead = socAhead(forecast);
+  // the expected line starts where the packs are now
+  if (forecast.actual_soc != null && chart.ahead.length && chart.ahead[0].t > now) {
+    chart.ahead.unshift({ t: now, soc: Number(forecast.actual_soc) });
+  }
   chart.extras = {
     peak: forecast.peak, holds: forecast.hold_hours || [],
     minimum: Number(plan.buy_ceiling_min) || 0, empty: forecast.empty_at,
@@ -2904,7 +2937,7 @@ class BatteryManagementForecastCard extends HTMLElement {
     const c = this._config;
     this.innerHTML =
       '<ha-card header="' + esc(c.title || "Verwacht accuniveau") + '">' +
-      `<style>
+      `<style>${scopeCss(`
           .fcc { padding: 4px 16px 16px; }
           .fcc .muted { color: var(--secondary-text-color); }
           .fcc .now { display:flex; justify-content:space-between; align-items:baseline; }
@@ -2914,7 +2947,7 @@ class BatteryManagementForecastCard extends HTMLElement {
           .fcc .fclegend { display:block; font-size:.75em; margin-top:4px; }
           .fcc .vs { font-size:.85em; }
           .fcc .big.link { cursor:pointer; }
-        </style>
+        `, ".fcc")}</style>
         <div class="fcc">
           <div class="now"><span class="big" id="fcnow">—</span>
             <span class="muted" id="fclow"></span></div>
@@ -2967,7 +3000,8 @@ class BatteryManagementForecastCard extends HTMLElement {
         (forecast.expected_lead_hours || 3) + " uur eerder): " + versus + "."
       : "";
     el("fclow").textContent = forecast.lowest
-      ? "laagste " + Math.round(forecast.lowest.soc) + " % om " + hhmm(forecast.lowest.start)
+      ? "laagste " + Math.round(forecast.lowest.soc) + " % om " +
+        hhmm(forecast.lowest.at || forecast.lowest.start)
       : "";
     const minimum = Number(plan.buy_ceiling_min) || 0;
     mountSocChart(this, el("fcchart"), plan, Number(this._config.height) || 160);

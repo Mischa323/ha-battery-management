@@ -835,7 +835,7 @@ capped — that would be throwing sun away.
 | **Standby load** | What the house draws while everyone sleeps, in W: last night's lowest five minutes between 01:00 and 05:00, meter plus packs. The attributes add when that was (`lowest_at`), the `night_average_w`, the `average_7_nights_w`, what it comes to in a year (`per_year_kwh`), `tonight_lowest_w` while the night is being measured, and the last 30 nights in `history`. See [Standby load](#standby-load-sluipverbruik). | never (unknown until the first night) |
 | **Smart trading status** | `selling`, `would_sell` (shadow), `waiting`, `off` or `not_dynamic`. The attributes carry the three prices it weighed — `export_value_eur_kwh`, `refill_eur_kwh`, `wear_eur_kwh` — the `margin_eur_kwh` they come to, and `why` it is not selling. | never |
 | **Expected charge** | The charge the forecast expected for now, three hours before — its history is the expected line, to set beside the packs' own charge. Attributes: `actual_soc`, `deviation` (points above or below), `lead_hours`. | nothing taken down for now yet (unknown) |
-| **Plan** | Today's cheap and dear hours with their prices, plus the numbers the ceiling was computed from, all in attributes. Its `hours` attribute is the whole series, each slot carrying the `role` it belongs to — `cheap`, `dear` or `normal` — which is what the card's chart is drawn from. | never |
+| **Plan** | Today's cheap and dear hours with their prices, plus the numbers the ceiling was computed from, all in attributes. The series (`hours`, `forecast`, `cheap_hours`, `dear_hours`) are kept out of the recorder: two days of quarters is some 50 kB, and it takes 16. Its `hours` attribute is the whole series, each slot carrying the `role` it belongs to — `cheap`, `dear` or `normal` — which is what the card's chart is drawn from. | never |
 | **Fuse headroom** | Amps still available on **the busiest single leg** — not a total, and not per leg. It is the one that would trip first; `tightest_phase` in the attributes says which. Measured against the usable limit (the fuse less your margin), so the margin is still there underneath. Per-leg detail — `amps` through the fuse, `amps_without_us`, headroom, and which packs sit on it — is in the attributes. | no per-phase sensors configured |
 | **Phase detection** | Whether it knows which pack is on which leg, and how it found out. The `probes` attribute holds the measurements behind each placement. | never |
 | **‹unit› phase** | Which leg that pack is on — `L1`, `L2` or `L3`. Its `source` attribute says whether that was measured or typed in. | no per-phase sensors configured |
@@ -1125,8 +1125,20 @@ day between EUR 0.30 and 0.44:
   and inside the peak, it bought at 0.418 and gave it back to the house the
   same hour. What the slots outside a peak cannot reach is left unbought.
 
+**Not kept when it comes back cheaper.** Keeping the charge pays when there
+is nothing better to do with it until the peak. When a slot still to come
+before that peak puts a kWh back for less than the present one costs the
+house, with the round trip, the wear and the price margin counted, the packs
+give it out now and buy it back then. This holds for the minimum too. On 12
+November at 18:00 the minimum was kept at EUR 0.414 with the night ahead at
+0.295, which is 0.40 back out of the packs. Packs at their floor are no
+longer said to keep a minimum either: they are empty.
+
 The walk leaves out sun beyond the usual, so on a bright day the packs end up
-fuller than it says. The *Verwachting* card draws the walk beside the
+fuller than it says. A row's charge is where the walk stands when its slot
+ends, and it is drawn and compared there (`at`, beside `start`). Drawn at the
+slot's start it ran a quarter early, which is six points of charge during a
+purchase or a sale at full power. The *Verwachting* card draws the walk beside the
 charge the recorder measured. The chart works like Home Assistant's own
 graphs: it zooms, drags, and gives a read-out under the pointer. The peak is
 shaded red and the kept hours orange. The plan card has no chart; it says in
@@ -1509,6 +1521,16 @@ that evening, and the evening has more than the sell line leaves it. Asked
 for on 10 November: "is het dan niet handiger dat hij het vasthoudt zodat we
 hem langzaam door de avond leeg trekken?". Without a learned draw profile
 the sale is chosen as before.
+
+In a slot that is sold in, the house's draw is inside the sale's kWh: full
+power covers the house first and sends out the rest.
+
+**After a purchase or a sale** grid-zero stands at nought for two ticks
+before it follows the meter again (`sp_reason` `settle` in the trace). The
+meter still reads the packs' own 7 kW for a reading or two. Integrating from
+there took them through half power in the old direction and then past the
+house the other way. That happened 24 times over 8–13 November: 0.32 kWh
+charged outside a buying slot and 0.18 kWh sent to the grid at night.
 
 The plan also no longer lists a sale the tick would not start. A sale only
 starts with more than two points above the line, so packs resting just above
