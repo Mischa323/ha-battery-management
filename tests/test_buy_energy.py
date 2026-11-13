@@ -192,3 +192,28 @@ async def test_the_profile_survives_a_restart(day):
     await fresh.coordinator._async_restore()
 
     assert fresh.coordinator.draw_profile == {18: 1800.0, 3: 420.0}
+
+
+# -- what the packs hold already goes first (13 November) -----------------------
+
+
+def test_what_is_held_already_covers_the_dear_hours_first(day):
+    """13 November, 11:15: at 47 % the packs covered the evening to 22:30,
+    and 12.2 kWh were bought at EUR 0.322 - 0.43 back out - as if they were
+    empty; the purchase went to the night after. Here the peak takes 4 kWh
+    and the packs hold 5.6 above their floor: nothing more is bought for it."""
+    assert bought(day(soc=25.0)) == []
+
+
+def test_half_covered_buys_the_other_half(day):
+    """At 12 % there are 2 kWh for a 4 kWh peak: less than from empty."""
+    empty, partly = bought(day()), bought(day(soc=12.0))
+
+    assert 1 <= len(partly) < len(empty)
+
+
+def test_the_tick_does_not_buy_what_is_covered(day):
+    co = day(soc=25.0).coordinator
+
+    assert co._deliverable_kwh() == pytest.approx(0.20 * 28.0 * 0.88 ** 0.5, rel=0.02)
+    assert co._buy_energy()["stored"] == co._deliverable_kwh()

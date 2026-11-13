@@ -216,6 +216,7 @@ def pick_cheapest(
     dear: list[Slot] | None = None,
     use=None,
     charge_kw: float | None = None,
+    stored: float = 0.0,
 ) -> list[Slot]:
     """The cheapest `cheap_hours` worth of an already-chosen candidate set.
 
@@ -295,7 +296,14 @@ def pick_cheapest(
                 key=lambda item: -item[0],
             )
             ordered = sorted(picked, key=lambda slot: (slot.price, slot.start))
-            kept, filled = [], 0.0
+            # What the packs hold already goes to the dearest of those kWh
+            # first; a purchase is for the kWh after them. Counted from
+            # nought, every tick weighed its buying as if the packs were
+            # empty: on 13 November at 11:15, at 47 %, it bought 12.2 kWh at
+            # EUR 0.322 - 0.43 back out of the packs - for an evening the
+            # charge it had already covered to 22:30, and the purchase went
+            # to the night after it.
+            kept, filled = [], max(stored, 0.0)
             for slot in ordered:
                 charge = charge_kw * (slot.end - slot.start).total_seconds() / 3600.0
                 value = _energy_mean(items, filled, filled + charge)
@@ -427,6 +435,7 @@ def cheapest_slots(
     cost=None,
     use=None,
     charge_kw: float | None = None,
+    stored: float = 0.0,
 ) -> list[Slot]:
     """Slots worth *buying* on in the window ahead.
 
@@ -473,7 +482,7 @@ def cheapest_slots(
             dear = whole
     return pick_cheapest(
         candidates, cheap_hours, min_margin, reference=reference, cost=cost,
-        dear=dear, use=use, charge_kw=charge_kw,
+        dear=dear, use=use, charge_kw=charge_kw, stored=stored,
     )
 
 
@@ -604,6 +613,7 @@ def slots_to_buy(
     cost=None,
     use=None,
     charge_kw: float | None = None,
+    stored: float = 0.0,
 ) -> list[Slot]:
     """Of the hours cheap enough to buy on, the cheapest few actually needed.
 
@@ -626,7 +636,7 @@ def slots_to_buy(
     """
     candidates = cheapest_slots(
         slots, now, cheap_hours, window_hours, min_margin, until, since, cost,
-        use, charge_kw,
+        use, charge_kw, stored,
     )
     if needed_hours is None or not candidates:
         return candidates
