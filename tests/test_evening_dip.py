@@ -1,14 +1,17 @@
-"""A quarter's dip inside a peak is not the gap before the next one.
+"""A quarter or two at peak level is not a peak to buy the minimum for.
 
 Reported on 17 November: "waarom wilt hij nou weer vanavond op een neutrale
 uur laden". The packs had bought for the minimum until 15:00 and stopped at
 22 %; the house then drew them down. With the next day cheap (EUR 0.21-0.39,
 0.30 on average), the 24 hours ahead made this afternoon and evening, at
-0.35-0.39, the peak - from 15:00 on. One quarter at 20:45 fell a tenth of a
-cent under the peak's line before 21:00 rose over it again, and the minimum,
-bought "before the next peak", took that quarter for the gap between two:
-at 0.347, a neutral hour, with 0.27-0.34 from 21:30 and a night at 0.21-0.24
-to come.
+0.35-0.39, the dear part. That stretch ended at 20:30; 20:45 fell a tenth of
+a cent under the peak's line, and 21:00 alone rose over it again. The
+minimum, bought "before the next peak", took that lone quarter for one and
+planned 20:45 at 0.347 - a neutral hour, with 0.27-0.34 from 21:30 and a
+night at 0.21-0.24 before the next real peak.
+
+The same price at 14:30 was a good purchase: the long stretch of the evening
+came after it. What decides is what follows the dip, not the dip.
 
 Prices: today's quarters from the trace to 17:45, the evening as read off the
 price card, tomorrow's hours off its own page (17-18 November, local time).
@@ -83,15 +86,16 @@ def chosen(system, moment):
     return [s.start.astimezone(LOCAL).strftime("%H:%M") for s in co._floor_slots(co._price_forecast(), moment)]
 
 
-def test_at_three_the_dip_at_2045_is_inside_tonight_s_peak(evening):
+def test_at_three_the_lone_quarter_at_nine_is_not_the_next_peak(evening):
     system = evening(at(15, 0), soc=22.0)
     co = system.coordinator
     slots = co._price_forecast()
-    dip = next(s for s in slots if s.start == at(20, 45))
+    lone = next(s for s in slots if s.start == at(21, 0))
     line = co._peak_level(slots, at(15, 0))
 
-    assert dip.price < line                       # under the line, by a hair
-    assert co._in_stretch(slots, dip, line)       # and still the peak
+    assert lone.price >= line                     # at peak level, alone
+    assert not co._peak_lasts(slots, lone, line)
+    assert co._next_peak_start(slots, at(15, 0)) != at(21, 0)
     assert "20:45" not in chosen(system, at(15, 0))
 
 
@@ -101,12 +105,12 @@ def test_and_at_six_neither(evening):
     assert "20:45" not in chosen(system, at(18, 0))
 
 
-def test_an_hour_under_the_line_still_ends_a_peak(evening):
-    """From 21:15 the evening stays under the line: that is the end of it."""
-    system = evening(at(15, 0), soc=22.0)
+def test_at_half_past_two_the_minimum_is_still_bought_before_the_evening(evening):
+    """The same 0.347 at 14:30, with the evening's long stretch to come from
+    16:15: that is what the minimum is for."""
+    system = evening(at(14, 30), soc=17.0)
     co = system.coordinator
     slots = co._price_forecast()
-    line = co._peak_level(slots, at(15, 0))
-    later = next(s for s in slots if s.start == at(21, 30))
 
-    assert not co._in_stretch(slots, later, line)
+    assert co._next_peak_start(slots, at(14, 30)) == at(16, 15)
+    assert {"14:30", "14:45"} & set(chosen(system, at(14, 30)))

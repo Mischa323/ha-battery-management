@@ -209,6 +209,7 @@ from .const import (
     EXPECTED_KEEP_HOURS,
     EXPECTED_LEAD_HOURS,
     GOAL_DONE_KWH,
+    PEAK_MIN_DURATION,
     SETTLE_TICKS,
     PACK_DRAIN_MIN_KWH,
     ALERT_NO_GRID_S,
@@ -3493,44 +3494,12 @@ class BatteryCoordinator:
         return min(s.price for s in dear) - self._price_margin
 
     def _in_peak(self, slots, now) -> bool:
-        """Is the slot we are in part of a peak (see `_in_stretch`)?"""
+        """Is the slot we are in at peak level (see `_dear_line`)?"""
         current = slot_at(slots, now)
         if current is None or self._expensive_hours <= 0:
             return False
         dear = self._dear(slots, now)
-        return bool(dear) and self._in_stretch(slots, current, self._dear_line(dear))
-
-    def _in_stretch(self, slots, slot, line) -> bool:
-        """Is `slot` part of a peak: at its level, or a short dip inside one?
-
-        A dip of less than an hour between two slots at peak level does not
-        end the peak. 17 November: with a cheap day ahead the whole afternoon
-        and evening at EUR 0.35-0.39 were tonight's peak; one quarter at 20:45
-        fell a tenth of a cent under the line before 21:00 rose over it again,
-        and the minimum - bought "before the next peak" - took that quarter for
-        the gap between two peaks: at 0.347, a neutral hour, with 0.27-0.34
-        from 21:30 and a cheaper night after. An hour or more under the line
-        is a gap between peaks, as on 8 November between 20:00 and 21:00.
-        """
-        if slot.price >= line:
-            return True
-        ordered = sorted(slots, key=lambda s: s.start)
-        index = next((i for i, s in enumerate(ordered) if s.start == slot.start), None)
-        if index is None:
-            return False
-        first = index
-        while first > 0 and ordered[first - 1].price < line and ordered[first - 1].end == ordered[first].start:
-            first -= 1
-        last = index
-        while (last + 1 < len(ordered) and ordered[last + 1].price < line
-               and ordered[last].end == ordered[last + 1].start):
-            last += 1
-        if first == 0 or last + 1 >= len(ordered):
-            return False
-        before, after = ordered[first - 1], ordered[last + 1]
-        if before.end != ordered[first].start or ordered[last].end != after.start:
-            return False
-        return (ordered[last].end - ordered[first].start) < timedelta(hours=1)
+        return bool(dear) and current.price >= self._dear_line(dear)
 
     def _minimum_holds(self, online: dict) -> bool:
         """At or under "minimaal laden" before the peak: keep it, do not spend it.
@@ -3605,19 +3574,41 @@ class BatteryCoordinator:
         keys = {_slot_key(s) for s in dear}
         line = self._dear_line(dear)
         current = slot_at(slots, now)
-        under_way = current is not None and self._in_stretch(slots, current, line)
-        edge = current.end if under_way else None
+        edge = current.end if current is not None and current.price >= line else None
         for slot in sorted(window, key=lambda s: s.start):
             if slot.start <= now:
                 continue
-            # still the stretch we are in, short dips included (`_in_stretch`)
-            if edge is not None and slot.start == edge and self._in_stretch(slots, slot, line):
-                edge = slot.end
+            if edge is not None and slot.start == edge and slot.price >= line:
+                edge = slot.end     # still the stretch we are in
                 continue
             edge = None
-            if _slot_key(slot) in keys:
+            if _slot_key(slot) in keys and self._peak_lasts(slots, slot, line):
                 return slot.start
         return None
+
+    def _peak_lasts(self, slots, slot, line) -> bool:
+        """Does the stretch at peak level from `slot` last an hour or more?
+
+        17 November: with a cheap day ahead, this afternoon and evening at EUR
+        0.35-0.39 were the dear part of the 24 hours ahead. The long stretch of
+        them ended at 20:30; 20:45 fell a tenth of a cent under the line and
+        21:00 alone rose over it again. The minimum, bought "before the next
+        peak", took that lone quarter for one, and planned 20:45 at 0.347 - a
+        neutral hour, with 0.27-0.34 from 21:30 and a night at 0.21 before the
+        next real peak. A quarter or two at peak level is not a peak to buy
+        for; the next stretch that lasts is. A stretch that runs past the last
+        published price is taken to last.
+        """
+        ordered = sorted(slots, key=lambda s: s.start)
+        index = next((i for i, s in enumerate(ordered) if s.start == slot.start), None)
+        if index is None:
+            return True
+        start, end = ordered[index].start, ordered[index].end
+        for nxt in ordered[index + 1:]:
+            if nxt.start != end or nxt.price < line:
+                return end - start >= PEAK_MIN_DURATION
+            end = nxt.end
+        return True
 
     def _forecast_block(self, slots, now) -> dict | None:
         """The forecast as the plan publishes it: the line, the low point, the
@@ -3752,7 +3743,7 @@ class BatteryCoordinator:
         for slot in sorted(slots, key=lambda s: s.start):
             if slot.start < start:
                 continue
-            if slot.start != edge or not self._in_stretch(slots, slot, line):
+            if slot.start != edge or slot.price < line:
                 break
             run.append(slot)
             edge = slot.end

@@ -1,6 +1,8 @@
 """Constants for the Battery Management integration."""
 from __future__ import annotations
 
+from datetime import timedelta
+
 DOMAIN = "battery_management"
 
 # --- Config entry keys -------------------------------------------------------
@@ -669,6 +671,10 @@ GOAL_DONE_KWH = 0.05
 #: over 8-13 November, 24 times, 0.32 kWh charged outside a buying slot and
 #: 0.18 kWh sent to the grid at night.
 SETTLE_TICKS = 2
+
+#: A stretch at peak level shorter than this is not a peak to prepare for:
+#: on 17 November a lone quarter at 21:00 had the minimum bought at 20:45.
+PEAK_MIN_DURATION = timedelta(hours=1)
 
 #: How far ahead an expectation is taken down to compare with what came: each
 #: slot's charge as the forecast saw it this many hours before (10 November:

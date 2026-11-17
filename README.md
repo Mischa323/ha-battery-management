@@ -1124,13 +1124,15 @@ day between EUR 0.30 and 0.44:
   a slot to hold the charge in for a later one. At 07:00, at 0.401, it had
   said "bewaart voor de piek van 10:00". That was one quarter at 0.415,
   while the morning peak began at 07:15.
-- **A short dip is still the peak:** a dip of less than an hour between two
-  slots at peak level does not end the peak. On 17 November the next day was
-  cheap, so the afternoon and evening at 0.35–0.39 were the peak. One quarter
-  at 20:45 fell a tenth of a cent under the line before 21:00 rose over it
-  again. The minimum took that quarter for the gap between two peaks and
-  planned it at 0.347, with 0.27–0.34 from 21:30 and a night at 0.21 to come.
-  An hour or more under the line is still a gap between peaks.
+- **A peak lasts an hour or more:** a quarter or two at peak level is not
+  a peak to buy the minimum for. On 17 November the next day was cheap, so
+  the afternoon and evening at 0.35–0.39 were the dear part. That stretch
+  ended at 20:30; 20:45 fell a tenth of a cent under the line, and 21:00
+  alone rose over it again. The minimum took that lone quarter for the next
+  peak and planned 20:45 at 0.347. Yet 0.27–0.34 came from 21:30, and a night
+  at 0.21 came before the next real peak. The same price at 14:30 was a good
+  purchase, because the long stretch of the evening came after it. A
+  stretch that runs past the last published price is taken to last.
 - **The minimum is never bought at peak level:** at 07:24, under the minimum
   and inside the peak, it bought at 0.418 and gave it back to the house the
   same hour. What the slots outside a peak cannot reach is left unbought.
