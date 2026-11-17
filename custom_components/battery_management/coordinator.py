@@ -3493,12 +3493,44 @@ class BatteryCoordinator:
         return min(s.price for s in dear) - self._price_margin
 
     def _in_peak(self, slots, now) -> bool:
-        """Is the slot we are in at peak level (see `_dear_line`)?"""
+        """Is the slot we are in part of a peak (see `_in_stretch`)?"""
         current = slot_at(slots, now)
         if current is None or self._expensive_hours <= 0:
             return False
         dear = self._dear(slots, now)
-        return bool(dear) and current.price >= self._dear_line(dear)
+        return bool(dear) and self._in_stretch(slots, current, self._dear_line(dear))
+
+    def _in_stretch(self, slots, slot, line) -> bool:
+        """Is `slot` part of a peak: at its level, or a short dip inside one?
+
+        A dip of less than an hour between two slots at peak level does not
+        end the peak. 17 November: with a cheap day ahead the whole afternoon
+        and evening at EUR 0.35-0.39 were tonight's peak; one quarter at 20:45
+        fell a tenth of a cent under the line before 21:00 rose over it again,
+        and the minimum - bought "before the next peak" - took that quarter for
+        the gap between two peaks: at 0.347, a neutral hour, with 0.27-0.34
+        from 21:30 and a cheaper night after. An hour or more under the line
+        is a gap between peaks, as on 8 November between 20:00 and 21:00.
+        """
+        if slot.price >= line:
+            return True
+        ordered = sorted(slots, key=lambda s: s.start)
+        index = next((i for i, s in enumerate(ordered) if s.start == slot.start), None)
+        if index is None:
+            return False
+        first = index
+        while first > 0 and ordered[first - 1].price < line and ordered[first - 1].end == ordered[first].start:
+            first -= 1
+        last = index
+        while (last + 1 < len(ordered) and ordered[last + 1].price < line
+               and ordered[last].end == ordered[last + 1].start):
+            last += 1
+        if first == 0 or last + 1 >= len(ordered):
+            return False
+        before, after = ordered[first - 1], ordered[last + 1]
+        if before.end != ordered[first].start or ordered[last].end != after.start:
+            return False
+        return (ordered[last].end - ordered[first].start) < timedelta(hours=1)
 
     def _minimum_holds(self, online: dict) -> bool:
         """At or under "minimaal laden" before the peak: keep it, do not spend it.
@@ -3573,12 +3605,14 @@ class BatteryCoordinator:
         keys = {_slot_key(s) for s in dear}
         line = self._dear_line(dear)
         current = slot_at(slots, now)
-        edge = current.end if current is not None and current.price >= line else None
+        under_way = current is not None and self._in_stretch(slots, current, line)
+        edge = current.end if under_way else None
         for slot in sorted(window, key=lambda s: s.start):
             if slot.start <= now:
                 continue
-            if edge is not None and slot.start == edge and slot.price >= line:
-                edge = slot.end     # still the stretch we are in
+            # still the stretch we are in, short dips included (`_in_stretch`)
+            if edge is not None and slot.start == edge and self._in_stretch(slots, slot, line):
+                edge = slot.end
                 continue
             edge = None
             if _slot_key(slot) in keys:
@@ -3718,7 +3752,7 @@ class BatteryCoordinator:
         for slot in sorted(slots, key=lambda s: s.start):
             if slot.start < start:
                 continue
-            if slot.start != edge or slot.price < line:
+            if slot.start != edge or not self._in_stretch(slots, slot, line):
                 break
             run.append(slot)
             edge = slot.end

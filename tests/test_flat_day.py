@@ -146,11 +146,22 @@ async def test_and_the_tick_does_not_buy_there(flat_day):
 # -- keeping the charge -----------------------------------------------------------
 
 
-def test_at_seven_the_peak_it_keeps_for_is_the_one_about_to_begin(flat_day):
+def test_at_seven_the_morning_peak_is_under_way_not_one_at_ten(flat_day):
+    """06:45 at 0.407 is at peak level and 07:15 rises again: 07:00 at 0.401
+    is a quarter's dip inside the morning peak (17 November), not the gap
+    before a "peak of 10:00". Nothing is kept for it; the next peak is the
+    evening's."""
     co = flat_day(at(7, 0)).coordinator
+    slots = co._price_forecast()
     block = co.plan()["forecast"]
 
-    assert local(datetime.fromisoformat(block["peak"]["start"])) == "07:15"
+    assert co._in_peak(slots, at(7, 0))
+    assert local(datetime.fromisoformat(block["peak"]["start"])) == "17:45"
+    assert not co.peak_holds(slots, at(7, 0)) & {coordinator_module._slot_key(slot_at_local(slots, 7, 0))}
+
+
+def slot_at_local(slots, hour, minute):
+    return next(s for s in slots if s.start == at(hour, minute))
 
 
 def test_nothing_is_kept_in_a_slot_at_peak_level(flat_day):
