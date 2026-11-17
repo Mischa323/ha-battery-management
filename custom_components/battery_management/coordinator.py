@@ -209,6 +209,7 @@ from .const import (
     EXPECTED_KEEP_HOURS,
     EXPECTED_LEAD_HOURS,
     GOAL_DONE_KWH,
+    PEAK_MIN_DURATION,
     SETTLE_TICKS,
     PACK_DRAIN_MIN_KWH,
     ALERT_NO_GRID_S,
@@ -3581,9 +3582,33 @@ class BatteryCoordinator:
                 edge = slot.end     # still the stretch we are in
                 continue
             edge = None
-            if _slot_key(slot) in keys:
+            if _slot_key(slot) in keys and self._peak_lasts(slots, slot, line):
                 return slot.start
         return None
+
+    def _peak_lasts(self, slots, slot, line) -> bool:
+        """Does the stretch at peak level from `slot` last an hour or more?
+
+        17 November: with a cheap day ahead, this afternoon and evening at EUR
+        0.35-0.39 were the dear part of the 24 hours ahead. The long stretch of
+        them ended at 20:30; 20:45 fell a tenth of a cent under the line and
+        21:00 alone rose over it again. The minimum, bought "before the next
+        peak", took that lone quarter for one, and planned 20:45 at 0.347 - a
+        neutral hour, with 0.27-0.34 from 21:30 and a night at 0.21 before the
+        next real peak. A quarter or two at peak level is not a peak to buy
+        for; the next stretch that lasts is. A stretch that runs past the last
+        published price is taken to last.
+        """
+        ordered = sorted(slots, key=lambda s: s.start)
+        index = next((i for i, s in enumerate(ordered) if s.start == slot.start), None)
+        if index is None:
+            return True
+        start, end = ordered[index].start, ordered[index].end
+        for nxt in ordered[index + 1:]:
+            if nxt.start != end or nxt.price < line:
+                return end - start >= PEAK_MIN_DURATION
+            end = nxt.end
+        return True
 
     def _forecast_block(self, slots, now) -> dict | None:
         """The forecast as the plan publishes it: the line, the low point, the
