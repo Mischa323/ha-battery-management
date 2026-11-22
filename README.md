@@ -463,6 +463,14 @@ with an error rather than an empty day — so asking for both in one GraphQL
 document would lose today along with it, every morning. Two requests let the
 missing day fail on its own.
 
+Each answer is **laid over the one before**, slot by slot, rather than
+replacing it. An answer can carry one day without the other — on 19, 20 and
+22 November the request that brought tomorrow, at 13:16, came back without
+today, and until the hourly refresh at 14:10 the packs had no price for the
+quarter they were in and ran on bare grid-zero. A published price does not
+change, so what was known stays known, a fresh price wins for its own slot,
+and what was known from before today is let go.
+
 Prices are re-fetched hourly, which is about noticing that tomorrow has been
 published rather than tracking anything. From 13:00, while tomorrow is still
 missing, the supplier is asked every five minutes instead. On the hourly
@@ -1101,7 +1109,12 @@ before it are left to the grid until what they keep covers the peak. Only
 slots at least the price margin below the peak's average qualify. In such a
 slot the packs give the house nothing, and surplus sun still goes in. The
 charge is not lost: it goes out in the peak instead. The status is *Keeping
-the charge for the coming peak*.
+the charge for the coming peak*, and the trace's sentence names the peak's
+day when it is not today, and its average price: "bewaart voor de piek van
+morgen 16:00, gem. €0.49". On 22 November at 19:00, in the dearest quarter
+of the day at 0.417, it had said only "bewaart voor de piek van 15:45".
+That was tomorrow's peak, at about 0.49 against 0.42 tonight. Read as
+today's, long gone, it looked like holding for nothing.
 
 Inside a peak the plan buys nothing until the peak is over. So the walk
 counts the purchases the night after it will make: the same cheap slots and
