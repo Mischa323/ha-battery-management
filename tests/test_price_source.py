@@ -27,6 +27,7 @@ from custom_components.battery_management.const import (
     MODE_DYNAMIC,
     RESOLUTION_HOURLY,
 )
+from custom_components.battery_management.prices import slot_at
 from custom_components.battery_management.suppliers import (
     SOURCE_ENTITY,
     SOURCE_NONE,
@@ -562,3 +563,66 @@ async def test_a_price_sensor_of_another_integration_is_not_chased(build_system,
     await system.coordinator.async_chase_tomorrow()
 
     assert session.calls == []
+
+
+# -- an answer with one day in it (22 November) --------------------------------
+
+
+def priced_now(system) -> bool:
+    slots = system.coordinator._price_forecast() or []
+    return slot_at(slots, coordinator_module.dt_util.utcnow()) is not None
+
+
+async def test_an_answer_without_today_does_not_take_today_away(build_system, monkeypatch):
+    """19, 20 and 22 November, 13:16-14:10: the request that brought tomorrow
+    came back without today. The answer replaced the one before it, so the
+    quarter it was in had no price, and the packs ran on bare grid-zero -
+    discharging into the house in the middle of a hold - until the hourly
+    refresh brought today back."""
+    at_clock(monkeypatch, 13, 1)
+    system = with_frank(build_system, FakeSession(replies=[day_of("2026-09-01"), FRANK_UNPUBLISHED]))
+    await system.coordinator.async_refresh_prices()
+    assert priced_now(system)
+
+    at_clock(monkeypatch, 13, 16)
+    use(system, FakeSession(replies=[OSError("timeout"), day_of("2026-09-02", 0.20)]))
+    await system.coordinator.async_refresh_prices()
+
+    assert priced_now(system)
+    assert system.coordinator.tomorrow_published() is True
+
+
+async def test_an_answer_without_tomorrow_keeps_the_peak_it_was_saving_for(
+    build_system, monkeypatch
+):
+    """The same the other way round: an evening refresh that misses tomorrow
+    must not lose the peak the packs are being kept for."""
+    at_clock(monkeypatch, 18, 10)
+    system = with_frank(build_system, FakeSession(replies=[day_of("2026-09-01"), day_of("2026-09-02")]))
+    await system.coordinator.async_refresh_prices()
+
+    at_clock(monkeypatch, 19, 10)
+    use(system, FakeSession(replies=[day_of("2026-09-01"), FRANK_UNPUBLISHED]))
+    await system.coordinator.async_refresh_prices()
+
+    assert system.coordinator.tomorrow_published() is True
+    assert len(system.coordinator._price_attributes()["prices"]) == 48
+
+
+async def test_a_fresh_answer_wins_and_yesterday_is_let_go(build_system, monkeypatch):
+    """Kept slot by slot: the newest word on a slot is the one used, and what
+    was known before today is not carried along for ever."""
+    at_clock(monkeypatch, 14, 0)
+    system = with_frank(build_system, FakeSession(replies=[day_of("2026-09-01"), day_of("2026-09-02")]))
+    await system.coordinator.async_refresh_prices()
+
+    moment = datetime(2026, 9, 2, 0, 10, tzinfo=timezone.utc)
+    monkeypatch.setattr(coordinator_module.dt_util, "utcnow", lambda: moment)
+    monkeypatch.setattr(coordinator_module.dt_util, "now", lambda: moment)
+    use(system, FakeSession(replies=[day_of("2026-09-02", 0.30), FRANK_UNPUBLISHED]))
+    await system.coordinator.async_refresh_prices()
+
+    prices = system.coordinator._price_attributes()["prices"]
+    assert len(prices) == 24
+    assert all(row["from"].startswith("2026-09-02") for row in prices)
+    assert {row["price"] for row in prices} == {0.43}

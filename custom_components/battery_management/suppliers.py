@@ -16,7 +16,9 @@ below `parse_*` is pure and tested without touching the internet.
 """
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
+
+from .prices import _as_datetime
 
 #: key -> label, offered in the wizard. One entry today, but the seam is the
 #: point: adding EnergyZero later must not disturb anything already configured.
@@ -271,6 +273,47 @@ def _frank_gas_error(payloads: list) -> str:
             if isinstance(message, str) and "gas" in message.lower():
                 return message
     return "no gas prices in the response"
+
+
+def merge_answers(previous: dict | None, fresh: dict, since: datetime) -> dict:
+    """Lay a new answer over the last one, slot by slot, instead of swapping it.
+
+    Each day is asked for on its own so that one day failing cannot take the
+    other with it - but an answer that has only one of them then replaced
+    both. On 19, 20 and 22 November the request that brought tomorrow, at
+    13:16, came back without today: the current quarter had no price, and
+    until the hourly refresh at 14:10 the packs ran on bare grid-zero,
+    discharging into the house in the middle of a hold. The same goes the
+    other way round: a refresh in the evening that misses tomorrow would
+    lose a peak the plan is saving for.
+
+    A published price does not change, so what was known stays known; what
+    comes in fresh wins for its own slot. What was known from before `since`
+    is let go, so the list cannot grow without end; the fresh answer is kept
+    whole, it is what the supplier says today.
+    """
+    merged: dict = {}
+    for key in set(previous or {}) | set(fresh):
+        old = (previous or {}).get(key)
+        new = fresh.get(key)
+        if isinstance(old, list) or isinstance(new, list):
+            rows: dict = {}
+            for row in old if isinstance(old, list) else []:
+                start = _as_datetime(row.get("from")) if isinstance(row, dict) else None
+                if start is not None and start >= since:
+                    rows[start] = row
+            for row in new if isinstance(new, list) else []:
+                start = _as_datetime(row.get("from")) if isinstance(row, dict) else None
+                if start is not None:
+                    rows[start] = row
+            if rows:
+                merged[key] = [rows[start] for start in sorted(rows)]
+        elif key in fresh:
+            merged[key] = new
+    # "no gas" only says something while there is no gas price at all
+    if merged.get("gas_prices"):
+        merged.pop("gas_error", None)
+    return merged
 
 
 #: key -> (build the requests, read the answers). Plural on both sides: a

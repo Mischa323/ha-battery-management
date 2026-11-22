@@ -153,7 +153,22 @@ async def test_the_tick_does_not_discharge_in_a_held_slot(house):
 
     assert system.coordinator.active_policy == POLICY_SAVE_FOR_PEAK
     assert system.coordinator.setpoint <= 0
-    assert "bewaart voor de piek van 18:00" in system.coordinator.tick_log[-1]["doing"]
+    assert "bewaart voor de piek van 18:00, gem. €0.45" in system.coordinator.tick_log[-1]["doing"]
+
+
+async def test_a_peak_tomorrow_says_tomorrow(house):
+    """22 November, 19:00: in the dearest quarter of the day it said "bewaart
+    voor de piek van 15:45" - tomorrow's, at about 0.49 against 0.42 tonight.
+    Read as today's, it looked like holding for nothing. The sentence names
+    the day and the price, so the choice can be checked at a glance."""
+    day = dict(cheap=(), ordinary=0.40, peak=(18, 19, 20, 21), peak_at=0.42,
+               overrides={31: 0.50, 32: 0.50, 33: 0.50, 34: 0.50})
+    system = house(**day)
+
+    await system.coordinator._async_tick(None)
+
+    assert system.coordinator.active_policy == POLICY_SAVE_FOR_PEAK
+    assert "bewaart voor de piek van morgen 07:00, gem. €0.50" in system.coordinator.tick_log[-1]["doing"]
 
 
 async def test_without_a_hold_it_follows_the_meter(house):

@@ -36,7 +36,7 @@ from .phases import (
     room,
     unit_ceilings,
 )
-from .suppliers import FETCHERS, SOURCE_ENTITY, SOURCE_NONE
+from .suppliers import FETCHERS, SOURCE_ENTITY, SOURCE_NONE, merge_answers
 from .trace import Trace
 from .trading import (
     ROUND_TRIP,
@@ -1374,7 +1374,13 @@ class BatteryCoordinator:
                 self.prices_error,
             )
         else:
-            self._supplier_prices = parsed
+            # over what was known, not instead of it: an answer can hold one
+            # day without the other (see `merge_answers`)
+            self._supplier_prices = merge_answers(
+                self._supplier_prices,
+                parsed,
+                dt_util.start_of_local_day(dt_util.as_local(dt_util.utcnow())),
+            )
             self.prices_fetched_at = time.time()
             self.prices_error = None
             _LOGGER.debug(
@@ -6006,12 +6012,29 @@ class BatteryCoordinator:
         }
 
     def _saving_for(self) -> str:
-        """"bewaart voor de piek van 17:00", for the trace's sentence."""
+        """"bewaart voor de piek van morgen 16:00, gem. EUR 0.49", for the sentence.
+
+        22 November, 19:00, in the dearest quarter of the day at EUR 0.417:
+        "bewaart voor de piek van 15:45". It was tomorrow's, at about 0.49,
+        which the sentence did not say - read as today's, long gone, it looked
+        like holding for nothing, and ten minutes later the mode was set to
+        grid-zero. The day and what the peak costs make the choice legible.
+        """
         slots = self._price_forecast()
-        peak = self._peak_run(slots, dt_util.utcnow()) if slots else []
+        now = dt_util.utcnow()
+        peak = self._peak_run(slots, now) if slots else []
         if not peak:
             return "bewaart voor de piek"
-        return f"bewaart voor de piek van {dt_util.as_local(peak[0].start):%H:%M}"
+        start = dt_util.as_local(peak[0].start)
+        today = dt_util.as_local(now).date()
+        if start.date() == today:
+            day = ""
+        elif start.date() == today + timedelta(days=1):
+            day = "morgen "
+        else:
+            day = f"{start:%d-%m} "
+        price = sum(s.price for s in peak) / len(peak)
+        return f"bewaart voor de piek van {day}{start:%H:%M}, gem. €{price:.2f}"
 
     def _doing(self, commanded: float, verdict: dict | None) -> str:
         """One line, in the owner's language, of what this tick did and why.
