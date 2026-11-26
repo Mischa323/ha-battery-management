@@ -3962,17 +3962,35 @@ class BatteryCoordinator:
         return chosen
 
     def _sell_window_end(self, now):
-        """Selling looks ahead to the next midday, no further.
+        """Selling looks ahead to the next midday the sun refills by, no further.
 
         What is not sold by then is not held for a better evening: the house
         draws it overnight and the sun or the cheap hours refill after, so a
         dearer peak tomorrow night is not something tonight's charge can reach.
+
+        Today's midday only counts when the sun will put something back after
+        it. On 26 November, with 0.2 kWh of it to reach the packs, the window
+        closed at 12:00: what the night had bought for the sale went out at
+        10:15 at EUR 0.52, the evening peak at 0.59 was out of sight, and so
+        was everything the house would draw after noon. Asked for the same
+        morning: on a day without sun the morning's charge is still there in
+        the evening, so the window runs on to the next midday.
         """
         local = dt_util.as_local(now)
         noon = local.replace(hour=SOLAR_REFILL_NOON, minute=0, second=0, microsecond=0)
-        if local >= noon:
+        if local >= noon or not self._sun_refills_today():
             noon += timedelta(days=1)
         return noon
+
+    def _sun_refills_today(self) -> bool:
+        """Will the sun put back an hour's selling at full power today?
+
+        Unknown - no forecast - counts as yes, which is how it was before.
+        """
+        expected = self.solar_expected()
+        if expected is None:
+            return True
+        return expected >= self._charge_kw()
 
     def _sale_underway(self, slots) -> bool:
         """Is a sale running, in this slot or on from the one before it?
