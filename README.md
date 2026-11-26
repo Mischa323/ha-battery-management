@@ -79,6 +79,20 @@ The regulating defaults:
 | Min output | 150 W | below this a unit is idled (avoids micro-cycling) |
 | Max per unit | 3500 W | hard ceiling per unit (under *The packs*) |
 
+**The packs' size comes from their rating, not from this minute's offer.**
+A pack's number entity carries the most it will take, and on the Anker packs
+that is for the way it is going and tapers near full. On 26 November, set to
+charge at 98–99 %, they offered 2.5–3.2 kW; set to discharge, 3.5 kW. The
+size is that power times *Minutes from empty to full*, so the packs counted
+as 20–23 kWh one tick and 28 the next. Seen small, the evening peak looked
+too big for them: the whole morning was kept while the house bought at
+EUR 0.53. At 10:15 the plan then flipped between selling and keeping on every
+tick, because every tick changed which way the packs went. The control still
+takes what a pack offers now. The size, and the power the plan counts on,
+take the most the pack has been seen to offer, capped by *Max per unit*.
+That figure is kept across restarts (`rated_w`), so a pack that comes back
+near full does not look small either.
+
 ### Why the two gains differ
 
 Going out on a command and coming back from one are not the same risk. Every

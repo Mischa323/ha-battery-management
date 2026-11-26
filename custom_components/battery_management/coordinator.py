@@ -444,6 +444,13 @@ class UnitState:
     charge_limit: float
     discharge_limit: float
     unit_max: float
+    # What the pack is rated for, rather than what it offers this minute: the
+    # size of the packs and the power the plan counts on (see `_unit_snapshot`)
+    rated: float = 0.0
+
+    def __post_init__(self) -> None:
+        if not self.rated:
+            self.rated = self.unit_max
 
 
 @dataclass
@@ -803,6 +810,8 @@ class BatteryCoordinator:
         }
         # packs that hit their floor and have not climbed back far enough yet
         self.recovering: dict[str, bool] = {u.name: False for u in self._units}
+        # the most each pack has been seen to offer, W (see `_unit_snapshot`)
+        self._rated_w: dict[str, float] = {}
         #: what each price slot was decided to be *while it was the current
         #: one*, keyed by its start. The ranking looks forward, so an hour that
         #: has gone cannot be re-ranked honestly - but it did have a verdict at
@@ -908,6 +917,7 @@ class BatteryCoordinator:
             "dry_run": self.dry_run,
             "mode": self.mode,
             "recovering": dict(self.recovering),
+            "rated_w": dict(self._rated_w),
             # without this every restart re-arms three more probes, and
             # with re-measure-on-restart that is guaranteed to happen
             "phase_attempts": dict(self.phase_attempts),
@@ -990,6 +1000,11 @@ class BatteryCoordinator:
         for name, count in (stored or {}).get("phase_attempts", {}).items():
             if name in self.phase_attempts:
                 self.phase_attempts[name] = int(count)
+        for name, value in (stored or {}).get("rated_w", {}).items():
+            try:
+                self._rated_w[name] = float(value)
+            except (TypeError, ValueError):
+                pass
         for name, value in (stored or {}).get("recovering", {}).items():
             # a restart at 6 % would otherwise resume dumping immediately,
             # which is the whole thing this exists to prevent
@@ -1183,7 +1198,20 @@ class BatteryCoordinator:
                 umax = min(float(attr_max), self._unit_ceiling)
             except (ValueError, TypeError):
                 pass
-        return UnitState(cfg, online, soc or 0.0, clim, dlim, umax)
+        # The maximum a pack offers is for the way it is going, and it tapers
+        # near full: on 26 November, at 98-99 % and set to charge, 2.5-3.2 kW;
+        # set to discharge, 3.5. Multiplied by the time to full that made the
+        # packs 20-23 kWh one tick and 28 the next. The plan kept the whole
+        # morning for a peak it thought too big for them, while the house
+        # bought at EUR 0.53, and at 10:15 it flipped between selling and
+        # keeping every 15 seconds. The control still takes what the pack
+        # offers now; its size and the plan's power take the most it has
+        # been seen to offer.
+        rated = max(self._rated_w.get(cfg.name, 0.0), umax)
+        self._rated_w[cfg.name] = rated
+        return UnitState(
+            cfg, online, soc or 0.0, clim, dlim, umax, min(rated, self._unit_ceiling)
+        )
 
     async def _svc_select(self, entity_id: str, option: str) -> None:
         if self.dry_run:
@@ -1488,7 +1516,7 @@ class BatteryCoordinator:
             watts = -status.target
             missing = max(unit.charge_limit - unit.soc, 0.0)
             at_full = missing / 100.0 * self._full_charge_minutes
-            longest = max(longest or 0.0, at_full * unit.unit_max / watts)
+            longest = max(longest or 0.0, at_full * unit.rated / watts)
         return int(round(longest)) if longest is not None else None
 
     def charge_ceiling(self) -> float | None:
@@ -1777,7 +1805,7 @@ class BatteryCoordinator:
         room_kwh = 0.0
         for unit in snapshots:
             # what this pack holds, from the time it takes to fill it
-            capacity = unit.unit_max * minutes / 60.0 / 1000.0
+            capacity = unit.rated * minutes / 60.0 / 1000.0
             # buying stops at the ceiling, and never above the pack's own limit
             target = min(ceiling, unit.charge_limit)
             grid_kwh += max(target - unit.soc, 0.0) / 100.0 * capacity
@@ -2023,7 +2051,7 @@ class BatteryCoordinator:
         if not expected.get("known"):
             return expected
         power_kw = sum(
-            snap.unit_max
+            snap.rated
             for cfg in self._units
             if (snap := self._unit_snapshot(cfg)).online
         ) / 1000.0
@@ -2074,7 +2102,7 @@ class BatteryCoordinator:
         for cfg in self._units:
             unit = self._unit_snapshot(cfg)
             if unit.online:
-                total += unit.unit_max * self._full_charge_minutes / 60.0 / 1000.0
+                total += unit.rated * self._full_charge_minutes / 60.0 / 1000.0
         return total or None
 
     def _tomorrow_sensors(self) -> list[str]:
@@ -2459,7 +2487,7 @@ class BatteryCoordinator:
             ahead = [s for s in slots if _slot_key(s) in keys and s.end > now]
             units = [self._unit_snapshot(cfg) for cfg in self._units]
             room = sum(
-                max(ceiling - u.soc, 0.0) / 100.0 * u.unit_max * self._full_charge_minutes / 60000.0
+                max(ceiling - u.soc, 0.0) / 100.0 * u.rated * self._full_charge_minutes / 60000.0
                 for u in units if u.online and u.soc is not None
             )
             if ahead and room > GOAL_DONE_KWH:
@@ -2542,18 +2570,18 @@ class BatteryCoordinator:
         if wear is None or not slots or peak is None:
             return None, set()
         units = [self._unit_snapshot(cfg) for cfg in self._units]
-        units = [u for u in units if u.online and u.soc is not None and u.unit_max > 0]
+        units = [u for u in units if u.online and u.soc is not None and u.rated > 0]
         if not units:
             return None, set()
         hours = self._full_charge_minutes / 60.0
-        capacity = sum(u.unit_max * hours / 1000.0 for u in units)
-        power_kw = sum(u.unit_max for u in units) / 1000.0
+        capacity = sum(u.rated * hours / 1000.0 for u in units)
+        power_kw = sum(u.rated for u in units) / 1000.0
         target = self.buy_ceiling_max
         solar = self._solar_headroom_ceiling()
         if solar is not None:
             target = min(target, solar)
         room = sum(
-            max(min(target, u.charge_limit) - u.soc, 0.0) / 100.0 * u.unit_max * hours / 1000.0
+            max(min(target, u.charge_limit) - u.soc, 0.0) / 100.0 * u.rated * hours / 1000.0
             for u in units
         )
         if room <= 0:
@@ -2627,7 +2655,7 @@ class BatteryCoordinator:
                 buy_kwh.pop(0)
         if filled <= 0:
             return None, set()
-        mean_soc = sum(u.soc * u.unit_max for u in units) / sum(u.unit_max for u in units)
+        mean_soc = sum(u.soc * u.rated for u in units) / sum(u.rated for u in units)
         return round(min(target, mean_soc + filled / capacity * 100.0), 1), used
 
     def later_same_day_step(self, hours: float | None = None) -> float | None:
@@ -2707,7 +2735,7 @@ class BatteryCoordinator:
             unit = self._unit_snapshot(cfg)
             if not unit.online or unit.soc is None:
                 continue
-            pack_kwh = unit.unit_max * self._full_charge_minutes / 60.0 / 1000.0
+            pack_kwh = unit.rated * self._full_charge_minutes / 60.0 / 1000.0
             available += max(unit.soc - self._discharge_floor(unit), 0.0) / 100.0 * pack_kwh
         return available >= wanted
 
@@ -3007,7 +3035,7 @@ class BatteryCoordinator:
         if self._buy_cost() is None or (self._house_draw_w is None and not self.draw_profile):
             return {}
         power = sum(
-            snap.unit_max
+            snap.rated
             for cfg in self._units
             if (snap := self._unit_snapshot(cfg)).online
         )
@@ -3030,7 +3058,7 @@ class BatteryCoordinator:
             unit = self._unit_snapshot(cfg)
             if not unit.online or unit.soc is None:
                 continue
-            capacity = unit.unit_max * self._full_charge_minutes / 60000.0
+            capacity = unit.rated * self._full_charge_minutes / 60000.0
             held += max(unit.soc - self._discharge_floor(unit), 0.0) / 100.0 * capacity
         return held * math.sqrt(self.round_trip())
 
@@ -3059,7 +3087,7 @@ class BatteryCoordinator:
             unit = self._unit_snapshot(cfg)
             if not unit.online or unit.soc is None:
                 return None
-            total += unit.soc / 100.0 * unit.unit_max * self._full_charge_minutes / 60000.0
+            total += unit.soc / 100.0 * unit.rated * self._full_charge_minutes / 60000.0
         return total
 
     def _track_round_trip(self, day: str, elapsed: float) -> None:
@@ -3164,7 +3192,7 @@ class BatteryCoordinator:
         ]
         units = [u for u in units if u.online and u.soc is not None]
         per_pack = (
-            [u.unit_max * self._full_charge_minutes / 60.0 / 1000.0 for u in units]
+            [u.rated * self._full_charge_minutes / 60.0 / 1000.0 for u in units]
             if self._full_charge_minutes > 0 else []
         )
         room = sum(
@@ -3391,13 +3419,13 @@ class BatteryCoordinator:
             if not unit.online or unit.soc is None:
                 continue
             top = min(unit.charge_limit, self.buy_ceiling_max)
-            room += max(top - unit.soc, 0.0) / 100.0 * unit.unit_max * self._full_charge_minutes / 60000.0
+            room += max(top - unit.soc, 0.0) / 100.0 * unit.rated * self._full_charge_minutes / 60000.0
         return max(min(self.day_goal_kwh - self.goal_done_kwh(), room), 0.0)
 
     def _charge_kw(self) -> float:
         """What the packs that are online take at full power, in kW."""
         return sum(
-            snap.unit_max for cfg in self._units if (snap := self._unit_snapshot(cfg)).online
+            snap.rated for cfg in self._units if (snap := self._unit_snapshot(cfg)).online
         ) / 1000.0
 
     def _goal_slots(self, slots, now) -> list:
@@ -3527,7 +3555,7 @@ class BatteryCoordinator:
         peak = self._next_peak_start(slots, now)
         if self._in_peak(slots, now) or peak is None:
             return False
-        held = [(s.soc, s.unit_max) for s in online.values() if s.soc is not None]
+        held = [(s.soc, s.rated) for s in online.values() if s.soc is not None]
         if not held:
             return False
         # packs at their floor have nothing to keep: "leeg" says it better
@@ -3664,7 +3692,7 @@ class BatteryCoordinator:
             "soc_entities": [
                 {
                     "entity": cfg.soc_sensor,
-                    "kwh": round(snap.unit_max * self._full_charge_minutes / 60000.0, 2),
+                    "kwh": round(snap.rated * self._full_charge_minutes / 60000.0, 2),
                 }
                 for cfg in self._units
                 if (snap := self._unit_snapshot(cfg)).online and cfg.soc_sensor
@@ -3731,9 +3759,9 @@ class BatteryCoordinator:
     def actual_soc(self) -> float | None:
         """The packs' charge now, weighted by their size."""
         held = [
-            (snap.soc, snap.unit_max) for cfg in self._units
+            (snap.soc, snap.rated) for cfg in self._units
             if (snap := self._unit_snapshot(cfg)).online and snap.soc is not None
-            and snap.unit_max > 0
+            and snap.rated > 0
         ]
         if not held:
             return None
@@ -3777,7 +3805,7 @@ class BatteryCoordinator:
         units = [u for u in units if u.online]
         if not units:
             return None
-        caps = [u.unit_max * self._full_charge_minutes / 60000.0 for u in units]
+        caps = [u.rated * self._full_charge_minutes / 60000.0 for u in units]
         total = sum(caps)
         floor = sum(c * self._discharge_floor(u) / 100.0 for u, c in zip(units, caps))
         energy = sum(
@@ -3981,9 +4009,9 @@ class BatteryCoordinator:
         hours = None
         for cfg in self._units:
             unit = self._unit_snapshot(cfg)
-            if not unit.online or unit.soc is None or unit.unit_max <= 0:
+            if not unit.online or unit.soc is None or unit.rated <= 0:
                 continue
-            pack_kwh = unit.unit_max * self._full_charge_minutes / 60.0 / 1000.0
+            pack_kwh = unit.rated * self._full_charge_minutes / 60.0 / 1000.0
             points = unit.soc - drawn - self._sell_line(unit)
             # The tick only starts a sale with more than the band above the
             # line; listing one it will not start is how the plan came to show
@@ -3991,7 +4019,7 @@ class BatteryCoordinator:
             if points <= BUY_CEILING_BAND and not (slots and self._sale_underway(slots)):
                 return 0.0
             room = max(points, 0.0) / 100.0 * pack_kwh
-            left = room / (unit.unit_max / 1000.0)
+            left = room / (unit.rated / 1000.0)
             hours = left if hours is None else min(hours, left)
         return hours
 
@@ -4120,7 +4148,7 @@ class BatteryCoordinator:
             unit = self._unit_snapshot(cfg)
             if not unit.online or unit.soc is None:
                 continue
-            capacity = unit.unit_max * self._full_charge_minutes / 60000.0
+            capacity = unit.rated * self._full_charge_minutes / 60000.0
             top = min(unit.soc, self._sell_line(unit))
             total += max(top - self._discharge_floor(unit), 0.0) / 100.0 * capacity
         return total
@@ -4136,7 +4164,7 @@ class BatteryCoordinator:
             if not unit.online or unit.soc is None:
                 continue
             seen = True
-            capacity = unit.unit_max * self._full_charge_minutes / 60.0 / 1000.0
+            capacity = unit.rated * self._full_charge_minutes / 60.0 / 1000.0
             total += max(unit.soc - self._sell_line(unit), 0.0) / 100.0 * capacity
         return round(total, 2) if seen else None
 
@@ -5462,7 +5490,7 @@ class BatteryCoordinator:
         for name, (unit, power) in readings.items():
             drain["start"].setdefault(name, unit.soc)
             drain["end"][name] = unit.soc
-            drain["kwh"][name] = unit.unit_max * self._full_charge_minutes / 60000.0
+            drain["kwh"][name] = unit.rated * self._full_charge_minutes / 60000.0
             drain["delivered_wh"] += max(power, 0.0) * elapsed / 3600.0
         mode = "one_pack" if self.single_pack else "both"
         if mode not in drain["modes"]:
