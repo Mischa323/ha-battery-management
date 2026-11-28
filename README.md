@@ -64,6 +64,7 @@ only a map of where to look:
 | **Solar** | The forecast sensors, and the fallback kWh limit. This is what the buy ceiling leaves room for. |
 | **Fuse protection per phase** | The per-leg sensors and the limit under them. |
 | **Battery unit entities** | Correcting a mis-picked entity on a pack, without deleting the entry. |
+| **Remove a pack** | Taking one pack out while another is left, keeping every setting and everything measured and learned. Shown only with two packs or more. For two packs joined into one home in the Anker app, which then shows them as one device: remove the second, raise **Max per unit** to their combined power (7000 W for two Max AC), and check the first points at the combined entities. |
 | **Logging and safety nets** | The trace file, and the two staleness timeouts. |
 | **Shadow running** | Only relevant while *Dry run* is on. |
 

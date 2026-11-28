@@ -191,9 +191,45 @@ async def test_options_menu_offers_every_section(hass: HomeAssistant):
         "trading",
         "phases",
         "units",
+        "remove_unit",
         "logging",
         "shadow",
     }
+
+
+async def test_with_one_pack_there_is_none_to_remove(hass: HomeAssistant):
+    entry = await _create_entry(hass, unit_count=1)
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+
+    assert "remove_unit" not in result["menu_options"]
+
+
+async def test_removing_a_pack_keeps_the_other_and_every_setting(hass: HomeAssistant):
+    """28 November: two packs joined into one home in the Anker app. The
+    second unit goes; the first, and every option, stay as they were."""
+    entry = await _create_entry(hass)
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {"next_step_id": "control"}
+    )
+    await hass.config_entries.options.async_configure(result["flow_id"], {CONF_KP: 0.4})
+    await hass.async_block_till_done()
+    first = dict(entry.data[CONF_UNITS][0])
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {"next_step_id": "remove_unit"}
+    )
+    assert result["step_id"] == "remove_unit"
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {"unit": "Batterij 2"}
+    )
+    await hass.async_block_till_done()
+
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert entry.data[CONF_UNITS] == [first]
+    assert entry.options[CONF_KP] == 0.4
 
 
 async def test_options_dynamic_stores_a_price_sensor(hass: HomeAssistant):

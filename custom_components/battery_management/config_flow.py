@@ -706,15 +706,21 @@ class BatteryManagementOptionsFlow(OptionsFlow):
         return self.async_show_menu(
             step_id="init",
             menu_options=[
-                "control",
-                "battery",
-                "dynamic",
-                "solar",
-                "trading",
-                "phases",
-                "units",
-                "logging",
-                "shadow",
+                option
+                for option in [
+                    "control",
+                    "battery",
+                    "dynamic",
+                    "solar",
+                    "trading",
+                    "phases",
+                    "units",
+                    "remove_unit",
+                    "logging",
+                    "shadow",
+                ]
+                # taking one out only makes sense while another is left to steer
+                if option != "remove_unit" or len(self._units) > 1
             ],
         )
 
@@ -871,6 +877,44 @@ class BatteryManagementOptionsFlow(OptionsFlow):
 
         return self.async_show_form(
             step_id="shadow", data_schema=_shadow_schema(defaults), errors=errors
+        )
+
+    async def async_step_remove_unit(
+        self, user_input: dict | None = None
+    ) -> ConfigFlowResult:
+        """Take one pack out, and keep everything else that was set and learned.
+
+        28 November: the two packs were joined into one home in the Anker
+        app, which then reports them as one device of 28 kWh, and the second
+        unit was left pointing at entities that no longer answer. Removing
+        the entry and setting it up again would have thrown away what it had
+        measured - the round trip, the house's hours, the savings - for the
+        sake of one pack too many.
+        """
+        names = [u.get(CONF_UNIT_NAME, "") for u in self._units]
+        if len(self._units) <= 1:
+            return self.async_abort(reason="last_unit")
+
+        if user_input is not None:
+            gone = user_input["unit"]
+            self._units = [u for u in self._units if u.get(CONF_UNIT_NAME, "") != gone]
+            # the entities live in entry.data, not in the options
+            self.hass.config_entries.async_update_entry(
+                self._entry, data={**self._entry.data, CONF_UNITS: self._units}
+            )
+            return self.async_create_entry(title="", data=dict(self._entry.options))
+
+        return self.async_show_form(
+            step_id="remove_unit",
+            data_schema=vol.Schema(
+                {
+                    vol.Required("unit"): selector.SelectSelector(
+                        selector.SelectSelectorConfig(
+                            options=names, mode=selector.SelectSelectorMode.DROPDOWN
+                        )
+                    )
+                }
+            ),
         )
 
     async def async_step_units(self, user_input: dict | None = None) -> ConfigFlowResult:
