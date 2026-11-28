@@ -64,6 +64,7 @@ only a map of where to look:
 | **Solar** | The forecast sensors, and the fallback kWh limit. This is what the buy ceiling leaves room for. |
 | **Fuse protection per phase** | The per-leg sensors and the limit under them. |
 | **Battery unit entities** | Correcting a mis-picked entity on a pack, without deleting the entry. |
+| **Remove a pack** | Taking one pack out while another is left, keeping every setting and everything measured and learned. Shown only with two packs or more. For two packs joined into one home in the Anker app, which then shows them as one device: remove the second, raise **Max per unit** to their combined power (7000 W for two Max AC), and check the first points at the combined entities. |
 | **Logging and safety nets** | The trace file, and the two staleness timeouts. |
 | **Shadow running** | Only relevant while *Dry run* is on. |
 
@@ -1520,6 +1521,17 @@ the threshold; while it waits for a better one the card says so. It starts
 only with every pack more than two points above its sell line. It then carries on to the line and does not restart in that
 slot. It never sells in an hour it is buying in, and only in Dynamic tariff.
 
+**The next midday the sun refills by.** The window ends at midday because
+the sun refills the packs after it: what is sold in the morning comes back
+that afternoon. That only holds when the sun will put back at least an
+hour's selling at full power. On 26 November, with 0.2 kWh of sun to reach
+the packs, the window still closed at 12:00. What the night had bought for
+the sale went out at 10:15 at EUR 0.52, while the evening peak was at 0.59.
+The house's own draw after noon was out of sight too. On such a day the
+morning's charge is still there in the evening, so the window runs on to the
+next midday. The evening peak and the house's evening then compete for the
+same kWh. Without a solar forecast it closes at midday, as before.
+
 **Filling up to sell.** Buying for the house alone stops where the house
 needs it to: on a day before a cheaper one only at **Minimum charge**.
 If that is also the sell line, the evening has nothing to sell. Reported on
@@ -1550,8 +1562,8 @@ to, with today's purchase in place of tomorrow's refill:
   weighed each kWh against the refill after it, 0.47, and sold nothing. A kWh
   bought for a sale needs no refill after it, because the purchase was the
   refill. So until those kWh are sold, a sale weighs them against what they
-  cost, the same test that bought them. This holds until noon, when the sale
-  window closes, and for no more kWh than are still above the sell line. What
+  cost, the same test that bought them. This holds until the sale window
+  closes, and for no more kWh than are still above the sell line. What
   the fill still means to buy counts the same way, so the plan shows the sale
   the purchase is for. The trace's `refill_eur_kwh` then shows the purchase
   price.

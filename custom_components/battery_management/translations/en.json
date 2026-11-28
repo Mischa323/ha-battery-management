@@ -96,6 +96,7 @@
           "trading": "Smart trading",
           "phases": "Fuse protection per phase",
           "units": "Battery unit entities",
+          "remove_unit": "Remove a pack",
           "logging": "Logging and safety nets",
           "shadow": "Shadow running"
         }
@@ -299,6 +300,16 @@
         "data_description": {
           "price_sensor": "Its attributes must hold a list of upcoming prices - most integrations publish one under `prices`, `raw_today` or similar. A shape that is not recognised gives an empty forecast, which disables buying rather than guessing at a price. Exchange prices are fine: tax and markup shift every hour equally, so the cheap-to-expensive order does not change."
         }
+      },
+      "remove_unit": {
+        "title": "Remove a pack",
+        "description": "Takes one pack out of the coordination, for instance when two packs have been joined into one home in the Anker app and show up as a single device. Everything else - settings, what it has measured and learned, the history - stays. If the remaining pack now stands for both, raise **Max per unit** under *The packs* to their combined power (e.g. 7000 W), and check under *Battery unit entities* that it points at the combined entities.",
+        "data": {
+          "unit": "Pack to remove"
+        },
+        "data_description": {
+          "unit": "The pack that no longer stands on its own. Its entities are dropped from the coordination; the device itself is not touched."
+        }
       }
     },
     "error": {
@@ -309,6 +320,9 @@
       "missing_options": "This select does not offer the options the coordinator needs (self_consumption / third_party_control, or charge / discharge). Check the entity, or adjust the option strings in const.py if your firmware renamed them.",
       "battery_power_is_grid": "That is the grid meter, not the batteries. The reconstruction adds the two together, so using the meter here counts it twice and the comparison becomes worthless. Leave this empty unless you have a sensor for the packs' own combined power - empty reads it back from the target entities, which is what you want.",
       "phase_sensor_is_grid": "That is the whole-house meter, not one phase. A total cannot show a single leg sitting at 25 A, which is the only thing this protects against - and one sensor means “single-phase supply”, so a 25 A limit would land on your whole connection. Pick the per-phase sensors instead, usually named ..._phase_1, ..._phase_2, ..._phase_3."
+    },
+    "abort": {
+      "last_unit": "At least one pack has to stay."
     }
   },
   "entity": {
